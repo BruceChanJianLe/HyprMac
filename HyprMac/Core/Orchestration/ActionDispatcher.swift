@@ -29,6 +29,13 @@ import Cocoa
 ///
 /// Threading: main-thread only.
 final class ActionDispatcher {
+    static func admissionExclusions(
+        floatingWindowIDs: Set<CGWindowID>,
+        hiddenWindowIDs _: Set<CGWindowID>
+    ) -> Set<CGWindowID> {
+        floatingWindowIDs
+    }
+
     static func newWindowIDsForAdmission(
         _ windowIDs: [CGWindowID],
         workspaceFor: (CGWindowID) -> Int?
@@ -284,7 +291,10 @@ final class ActionDispatcher {
                 workspaceManager.regularWorkspaceWindowIDs(),
                 fullyForgottenIDs: fullyForgottenIDs
             ),
-            excludedWindowIDs: stateCache.floatingWindowIDs.union(stateCache.hiddenWindowIDs),
+            excludedWindowIDs: Self.admissionExclusions(
+                floatingWindowIDs: stateCache.floatingWindowIDs,
+                hiddenWindowIDs: stateCache.hiddenWindowIDs
+            ),
             capacityForWorkspace: { [self] workspace in
                 guard let home = workspaceManager.homeScreenForWorkspace(workspace) else { return 0 }
                 return RetileAllPlanner.workspaceCapacity(maxDepth: tilingEngine.maxDepth(for: home))

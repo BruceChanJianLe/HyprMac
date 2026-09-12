@@ -436,6 +436,23 @@ class TilingEngine {
                                       generation: UInt64,
                                       originalFrames suppliedOriginalFrames: [CGWindowID: CGRect]? = nil,
                                       restorationUsableFrame suppliedRestorationFrame: CGRect? = nil) -> LayoutApplicationOutcome {
+        let outcome = applyVerifiedLayoutAttempt(tree, in: rect, generation: generation,
+                                                  originalFrames: suppliedOriginalFrames,
+                                                  restorationUsableFrame: suppliedRestorationFrame)
+        switch outcome {
+        case .accepted: break
+        case let .rejectedRestored(reason, frames):
+            hyprLog(.notice, .tiling, "verified layout rejected and restored: reason=\(reason) actual=\(frames)")
+        case let .degraded(candidateReason, restorationReason, frames):
+            hyprLog(.notice, .tiling,
+                    "verified layout degraded: candidate=\(candidateReason) restoration=\(String(describing: restorationReason)) actual=\(frames)")
+        }
+        return outcome
+    }
+
+    private func applyVerifiedLayoutAttempt(_ tree: BSPTree, in rect: CGRect, generation: UInt64,
+                                            originalFrames suppliedOriginalFrames: [CGWindowID: CGRect]?,
+                                            restorationUsableFrame suppliedRestorationFrame: CGRect?) -> LayoutApplicationOutcome {
         let windows = tree.allWindows
         let restorationFrame = suppliedRestorationFrame ?? rect
         let originalFrames: [CGWindowID: CGRect]
@@ -462,8 +479,8 @@ class TilingEngine {
             originalFrames = captured.actualFrames
         }
 
-        let ratioSnapshot = tree.snapshot()
-        let firstLayouts = tree.layout(in: rect, gap: gapSize, padding: outerPadding)
+        let candidate = tree.deepClone()
+        let firstLayouts = candidate.layout(in: rect, gap: gapSize, padding: outerPadding)
         let first = applyLayout(firstLayouts, usableFrame: rect, generation: generation)
         if case .accepted = first.verdict {
             return .accepted(actualFrames: first.actualFrames)
@@ -473,10 +490,11 @@ class TilingEngine {
         if case .rejected = first.verdict, !first.conflicts.isEmpty,
            layoutGeneration == generation {
             let conflicts = first.conflicts.map { (window: $0.window, actual: $0.actual) }
-            tree.adjustForMinSizes(conflicts, in: rect, gap: gapSize, padding: outerPadding)
-            let adjusted = tree.layout(in: rect, gap: gapSize, padding: outerPadding)
+            candidate.adjustForMinSizes(conflicts, in: rect, gap: gapSize, padding: outerPadding)
+            let adjusted = candidate.layout(in: rect, gap: gapSize, padding: outerPadding)
             terminal = applyLayoutFinal(adjusted, usableFrame: rect, generation: generation)
             if case .accepted = terminal.verdict {
+                copyVerifiedRatios(from: candidate.root, to: tree.root)
                 return .accepted(actualFrames: terminal.actualFrames)
             }
         }
@@ -485,7 +503,6 @@ class TilingEngine {
             return .degraded(candidateReason: .superseded, restorationReason: nil,
                              actualFrames: terminal.actualFrames)
         }
-        tree.restore(ratioSnapshot)
         let reason = terminal.verdict.failure ?? .attemptsExhausted
         if let invalidOriginalID = originalFrames.keys.sorted().first(where: { windowID in
             originalFrames[windowID].map { !restorationFrame.contains($0) } ?? true
@@ -497,14 +514,24 @@ class TilingEngine {
         let originals = windows.compactMap { window in
             originalFrames[window.windowID].map { (window, $0) }
         }
-        let restored = applyLayoutFinal(originals, usableFrame: restorationFrame,
-                                        generation: generation)
+        let restored = readbackPoller.applyRestoration(originals, usableFrame: restorationFrame,
+                                                        gap: gapSize, generation: generation)
         if case .accepted = restored.verdict {
             return .rejectedRestored(reason: reason, actualFrames: restored.actualFrames)
         }
         return .degraded(candidateReason: reason,
                          restorationReason: restored.verdict.failure,
                          actualFrames: restored.actualFrames)
+    }
+
+    private func copyVerifiedRatios(from source: BSPNode, to destination: BSPNode) {
+        destination.splitRatio = source.splitRatio
+        if let sourceLeft = source.left, let destinationLeft = destination.left {
+            copyVerifiedRatios(from: sourceLeft, to: destinationLeft)
+        }
+        if let sourceRight = source.right, let destinationRight = destination.right {
+            copyVerifiedRatios(from: sourceRight, to: destinationRight)
+        }
     }
 
     // delegate to FrameReadbackPoller and reconcile its result against our
@@ -632,10 +659,10 @@ class TilingEngine {
     // pure with respect to AX — only mutates the tree and engine state.
     private func updateTreeMembership(_ windows: [HyprWindow],
                                       onWorkspace workspace: Int,
-                                      screen: NSScreen) -> TileMembershipResult {
+                                      screen: NSScreen, candidate: BSPTree? = nil) -> TileMembershipResult {
         primeMinimumSizes(windows)
         let key = TilingKey(workspace: workspace, screen: screen)
-        let t = tree(for: key)
+        let t = candidate ?? tree(for: key)
         let rect = displayManager.cgRect(for: screen)
 
         let tileWindows = windows.filter { !$0.isFloating }
@@ -696,23 +723,22 @@ class TilingEngine {
     /// during a workspace switch. Two-pass: pass 1 lays out and reads
     /// back actual frames; pass 2 (when conflicts are detected)
     /// adjusts split ratios via `MinSizeMemory` and re-applies. If
-    /// pass-2 still overflows and inserted windows are present, the
-    /// engine auto-floats the overflowing windows; otherwise it
-    /// preserves the recorded mins and falls back to pass-1 frames.
+    /// the adjusted pass fails, restoration is verified and the prior
+    /// topology remains live. Only accepted candidates publish membership.
     func tileWindows(_ windows: [HyprWindow], onWorkspace workspace: Int, screen: NSScreen) {
         let generation = beginLayoutGeneration()
         pendingSwapRevert = nil
-        let m = updateTreeMembership(windows, onWorkspace: workspace, screen: screen)
+        let live = trees[TilingKey(workspace: workspace, screen: screen)]
+        let candidate = live?.deepClone() ?? BSPTree()
+        let m = updateTreeMembership(windows, onWorkspace: workspace, screen: screen, candidate: candidate)
         let key = m.key
         let t = m.tree
         let rect = m.rect
 
         _ = consumePendingInserted(for: key, in: t)
         let outcome = applyVerifiedLayout(t, in: rect, generation: generation)
-        if case let .degraded(candidateReason, restorationReason, _) = outcome {
-            let restoration = String(describing: restorationReason)
-            hyprLog(.notice, .tiling,
-                    "verified layout degraded: candidate=\(candidateReason) restoration=\(restoration)")
+        if case .accepted = outcome, layoutGeneration == generation {
+            if let live { live.root = candidate.root } else { trees[key] = candidate }
         }
 
         // clean up empty trees for this workspace on other screens
@@ -741,14 +767,8 @@ class TilingEngine {
         pendingSwapRevert = nil
         primeMinimumSizes(windows)
         let key = TilingKey(workspace: Self.scratchpadWorkspace, screen: screen)
-        let t = tree(for: key)
-
-        // the layer migrated monitors: drop any other (0, *) trees. their
-        // windows re-enter here via the membership diff, since the caller
-        // passes every AX-present tiled member.
-        for other in trees.keys where other.workspace == Self.scratchpadWorkspace && other != key {
-            trees.removeValue(forKey: other)
-        }
+        let live = trees[key]
+        let t = live?.deepClone() ?? BSPTree()
 
         let currentIDs = Set(windows.map { $0.windowID })
         let treeWindows = t.allWindows
@@ -770,8 +790,15 @@ class TilingEngine {
         t.root.resetSplitRatios()
         t.root.applySavedRatios()
 
-        _ = applyVerifiedLayout(t, in: rect, generation: generation,
+        let outcome = applyVerifiedLayout(t, in: rect, generation: generation,
                                 restorationUsableFrame: displayManager.cgRect(for: screen))
+        if case .accepted = outcome, layoutGeneration == generation {
+            if let live { live.root = t.root } else { trees[key] = t }
+            // discard the old monitor's tree only after the destination accepts
+            for other in trees.keys where other.workspace == Self.scratchpadWorkspace && other != key {
+                trees.removeValue(forKey: other)
+            }
+        }
         return rejects
     }
 
@@ -850,23 +877,9 @@ class TilingEngine {
     /// for floating windows.
     func addWindow(_ window: HyprWindow, toWorkspace workspace: Int, on screen: NSScreen) {
         guard !window.isFloating else { return }
-        primeMinimumSizes([window])
-        let key = TilingKey(workspace: workspace, screen: screen)
-        let t = tree(for: key)
-        let rect = displayManager.cgRect(for: screen)
-        var inserted: [HyprWindow] = []
-        let generation = invalidatePendingLayout()
-        if !t.contains(window) {
-            // judge fit against post-reset geometry, not stale pass-2 ratios
-            t.root.resetSplitRatios()
-            if !smartInsertFitting(window, into: t, maxDepth: maxDepth(for: screen), rect: rect) {
-                hyprLog(.debug, .lifecycle, "no fitting tile slot — auto-floating '\(window.title ?? "?")'")
-                onAutoFloat?(window)
-                return
-            }
-            inserted.append(window)
-        }
-        _ = retile(key: key, screen: screen, inserted: inserted, generation: generation)
+        let current = trees[TilingKey(workspace: workspace, screen: screen)]?.allWindows ?? []
+        let windows = current.contains(where: { $0.windowID == window.windowID }) ? current : current + [window]
+        tileWindows(windows, onWorkspace: workspace, screen: screen)
     }
 
     /// Remove `window` from its workspace's tree on whichever screen
@@ -1194,6 +1207,22 @@ class TilingEngine {
                            in: t,
                            maxDepth: maxDepth(for: screen),
                            rect: rect) != nil
+    }
+
+    func canFitWindows(_ windows: [HyprWindow], onWorkspace workspace: Int, screen: NSScreen) -> Bool {
+        let ids = Set(windows.map(\.windowID))
+        guard ids.count == windows.count else { return false }
+        let key = TilingKey(workspace: workspace, screen: screen)
+        let candidate = trees[key]?.deepClone() ?? BSPTree()
+        for window in candidate.allWindows where !ids.contains(window.windowID) { candidate.remove(window) }
+        candidate.root.pruneEmptyNodes()
+        candidate.root.resetSplitRatios()
+        primeMinimumSizes(windows)
+        let rect = displayManager.cgRect(for: screen)
+        for window in windows where !candidate.contains(window) {
+            guard smartInsertFitting(window, into: candidate, maxDepth: maxDepth(for: screen), rect: rect) else { return false }
+        }
+        return true
     }
 
     /// Force `window` into the `(workspace, screen)` tree, evicting

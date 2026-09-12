@@ -70,6 +70,24 @@ struct TiledDragCompletion {
     let outcome: TiledDragDropOutcome
 }
 
+enum TiledDragFeedback: Equatable {
+    case rejected
+    case degraded
+}
+
+struct TiledDragFeedbackPolicy {
+    static func feedback(for outcome: TiledDragDropOutcome) -> TiledDragFeedback? {
+        switch outcome {
+        case .rejectedRestored:
+            return .rejected
+        case .degraded:
+            return .degraded
+        case .committed, .ignored, .superseded:
+            return nil
+        }
+    }
+}
+
 final class TiledDragSessionCoordinator {
     typealias Capture = (CGPoint) -> TiledDragCaptureResult
     typealias Apply = (TiledDragSnapshot, TiledDragMode?) -> TiledDragDropOutcome

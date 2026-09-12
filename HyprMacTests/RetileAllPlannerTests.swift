@@ -32,7 +32,7 @@ final class RetileAllPlannerTests: XCTestCase {
         XCTAssertEqual(parked.map { [$0.0, CGWindowID($0.1)] }, [[5, 2]])
     }
 
-    func testAdmissionPreservesParkedAssignmentsAndSkipsExcludedOccupancy() {
+    func testAdmissionPreservesParkedAssignmentsAndSkipsFloatingOccupancy() {
         let existing: [Int: Set<CGWindowID>] = [
             1: [10, 11, 12, 13],
             2: [20, 21, 22],
@@ -48,8 +48,26 @@ final class RetileAllPlannerTests: XCTestCase {
         )
 
         XCTAssertEqual(existing[4], [40], "planner must not rewrite parked regular workspaces")
-        XCTAssertEqual(result.assignments[2], [100, 101], "excluded minimized/floating ids do not consume tile capacity")
+        XCTAssertEqual(result.assignments[2], [100, 101], "floating ids do not consume tile capacity")
         XCTAssertTrue(result.overflow.isEmpty)
+    }
+
+    func testAssignedHiddenWindowsStillConsumeWorkspaceCapacity() {
+        let exclusions = ActionDispatcher.admissionExclusions(
+            floatingWindowIDs: [],
+            hiddenWindowIDs: [10, 11, 12, 13]
+        )
+        let result = RetileAllPlanner.admit(
+            windowIDs: [100, 101],
+            preferredWorkspace: 1,
+            eligibleWorkspaces: [1, 2],
+            existingAssignments: [1: [10, 11, 12, 13]],
+            excludedWindowIDs: exclusions,
+            capacityForWorkspace: { _ in 4 }
+        )
+
+        XCTAssertNil(result.assignments[1])
+        XCTAssertEqual(result.assignments[2], [100, 101])
     }
 
     func testAdmissionCyclesFromPreferredAndStaysOnEligibleMonitorHomes() {
@@ -213,6 +231,78 @@ final class RetileAllPlannerTests: XCTestCase {
             RetileAllPlanner.pack(windowIDs: first, workspaceCount: 9, capacityForWorkspace: { _ in 1 }).assignments,
             RetileAllPlanner.pack(windowIDs: afterSwitchAndFocusChange, workspaceCount: 9, capacityForWorkspace: { _ in 1 }).assignments
         )
+    }
+
+    func testStartupWorkspaceOrderPlacesVisibleWorkspacesFirst() {
+        XCTAssertEqual(
+            RetileAllPlanner.startupWorkspaceOrder(
+                visibleWorkspaces: [5, 2],
+                eligibleWorkspaces: [1, 2, 3, 4, 5]
+            ),
+            [5, 2, 1, 3, 4]
+        )
+    }
+
+    func testStartupPackingReservesCapacityForAssignedHiddenWindows() {
+        let assignments: [Int: Set<CGWindowID>] = [1: [10, 11], 2: []]
+        let hidden: Set<CGWindowID> = [10, 11]
+        let result = RetileAllPlanner.pack(
+            windowIDs: [100, 101, 102],
+            workspaceOrder: [1, 2]
+        ) { workspace in
+            RetileAllPlanner.availableStartupCapacity(
+                capacity: 4,
+                assignedWindowIDs: assignments[workspace, default: []],
+                hiddenWindowIDs: hidden,
+                floatingWindowIDs: []
+            )
+        }
+
+        XCTAssertEqual(result.assignments[1], [100, 101])
+        XCTAssertEqual(result.assignments[2], [102])
+        XCTAssertTrue(result.overflow.isEmpty)
+    }
+
+    func testStartupWindowOrderUsesFrameOrderWithFocusedWindowFirst() {
+        let result = RetileAllPlanner.startupWindowOrder(
+            windowIDs: [40, 10, 30, 20],
+            framesByID: [
+                10: CGRect(x: 900, y: 20, width: 100, height: 100),
+                20: CGRect(x: 100, y: 80, width: 100, height: 100),
+                30: CGRect(x: 100, y: 20, width: 100, height: 100)
+            ],
+            focusedWindowID: 10
+        )
+
+        XCTAssertEqual(result, [10, 30, 20, 40])
+    }
+
+    func testNextFittingHomeCyclesAfterSourceAndSkipsRejectedHomes() {
+        var probed: [Int] = []
+        let result = RetileAllPlanner.nextFittingHome(
+            after: 3,
+            eligibleWorkspaces: [1, 3, 5, 7]
+        ) { workspace in
+            probed.append(workspace)
+            return workspace == 1
+        }
+
+        XCTAssertEqual(result, 1)
+        XCTAssertEqual(probed, [5, 7, 1])
+    }
+
+    func testNextFittingHomeExcludesSourceAndDuplicateHomes() {
+        var probed: [Int] = []
+        let result = RetileAllPlanner.nextFittingHome(
+            after: 3,
+            eligibleWorkspaces: [3, 5, 5, 3]
+        ) { workspace in
+            probed.append(workspace)
+            return false
+        }
+
+        XCTAssertNil(result)
+        XCTAssertEqual(probed, [5])
     }
 
     func testNineWorkspaceCapacityAndOverflow() {

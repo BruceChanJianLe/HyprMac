@@ -65,6 +65,7 @@ struct FrameSizingConfiguration {
     var maximumAttempts: Int = 12
     var positionTolerance: CGFloat = 1
     var sizeTolerance: CGFloat = 1
+    var sizeUndershootTolerance: CGFloat = 8
     var stableTolerance: CGFloat = 0.01
     var requiredStableSamples: Int = 2
     var minimumMismatchSettle: TimeInterval = 0.24
@@ -402,8 +403,13 @@ struct FrameSizingAttempt {
     private func matches(_ actual: CGRect, _ target: CGRect) -> Bool {
         abs(actual.minX - target.minX) <= configuration.positionTolerance
             && abs(actual.minY - target.minY) <= configuration.positionTolerance
-            && abs(actual.width - target.width) <= configuration.sizeTolerance
-            && abs(actual.height - target.height) <= configuration.sizeTolerance
+            && matchesSize(actual.width, target.width)
+            && matchesSize(actual.height, target.height)
+    }
+
+    private func matchesSize(_ actual: CGFloat, _ target: CGFloat) -> Bool {
+        actual - target <= configuration.sizeTolerance
+            && target - actual <= configuration.sizeUndershootTolerance
     }
 
     func validateFrames(targets: [Target], actualFrames: [CGWindowID: CGRect],
@@ -454,7 +460,10 @@ struct FrameSizingTransaction {
                  gap: CGFloat, generation: UInt64) -> FrameSizingAttempt.Result {
         let targets = originalFrames.map { FrameSizingAttempt.Target(windowID: $0.key, frame: $0.value) }
             .sorted { $0.windowID < $1.windowID }
-        return attempt.apply(targets: targets, usableFrame: usableFrame, gap: gap, generation: generation)
+        var strictAttempt = attempt
+        strictAttempt.configuration.sizeUndershootTolerance = strictAttempt.configuration.sizeTolerance
+        return strictAttempt.apply(targets: targets, usableFrame: usableFrame,
+                                   gap: gap, generation: generation)
     }
 
     func apply(targets: [FrameSizingAttempt.Target], originalFrames: [CGWindowID: CGRect],

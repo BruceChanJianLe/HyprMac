@@ -36,6 +36,21 @@ struct FrameReadbackPoller {
 
     func applyLayout(_ layouts: [(HyprWindow, CGRect)], usableFrame: CGRect,
                      gap: CGFloat, generation requestedGeneration: UInt64) -> Result {
+        applyLayout(layouts, usableFrame: usableFrame, gap: gap,
+                    generation: requestedGeneration, configuration: configuration)
+    }
+
+    func applyRestoration(_ layouts: [(HyprWindow, CGRect)], usableFrame: CGRect,
+                          gap: CGFloat, generation requestedGeneration: UInt64) -> Result {
+        var strictConfiguration = configuration
+        strictConfiguration.sizeUndershootTolerance = strictConfiguration.sizeTolerance
+        return applyLayout(layouts, usableFrame: usableFrame, gap: gap,
+                           generation: requestedGeneration, configuration: strictConfiguration)
+    }
+
+    private func applyLayout(_ layouts: [(HyprWindow, CGRect)], usableFrame: CGRect,
+                             gap: CGFloat, generation requestedGeneration: UInt64,
+                             configuration: FrameSizingConfiguration) -> Result {
         guard generation() == requestedGeneration else {
             return Result(verdict: .unknown(.superseded), actualFrames: [:],
                           conflicts: [], observations: [], accepted: [])

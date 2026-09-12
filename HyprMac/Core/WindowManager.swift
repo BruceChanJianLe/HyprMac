@@ -349,6 +349,7 @@ class WindowManager {
         // disabled-monitor floats do NOT route here — they stay plain floating.
         tilingEngine.onAutoFloat = { [weak self] window in
             guard let self = self else { return }
+            if self.routeUnfittedWindow(window) { return }
             self.scratchpad.adopt(window, preferredFrame: self.stateCache.originalFrames[window.windowID])
         }
 
@@ -392,6 +393,7 @@ class WindowManager {
     func start() {
         guard !isRunning else { return }
         isRunning = true
+        lastDisplayFingerprint = displayFingerprint()
 
         // route AX notifications into the coalescing scheduler. these are the
         // primary discovery triggers; the scheduler's timer is a safety net.
@@ -431,9 +433,6 @@ class WindowManager {
             guard let self, self.isRunning else { return }
             self.spaceManager.setup()
             self.workspaceManager.initializeMonitors()
-            // seed the fingerprint so the first (often spurious)
-            // screen-parameters notification after launch is a no-op.
-            self.lastDisplayFingerprint = self.displayFingerprint()
             let initialWindows = self.snapshotAndTile()
             // attach AX observers after the initial tile so their events feed
             // the same coalescing scheduler. this covers the app-level
@@ -1403,6 +1402,7 @@ class WindowManager {
                     stateCache.originalFrames[w.windowID] = frame
                 }
             }
+            stateCache.cachedWindows[w.windowID] = w
             stateCache.knownWindowIDs.insert(w.windowID)
             stateCache.windowOwners[w.windowID] = w.ownerPID
 
@@ -1581,14 +1581,7 @@ class WindowManager {
 
         guard !tilingWids.isEmpty else { return }
 
-        let plan = RetileAllPlanner.pack(
-            windowIDs: tilingWids,
-            workspaceCount: workspaceManager.workspaceCount,
-            capacityForWorkspace: { [self] workspace in
-                guard let screen = workspaceManager.homeScreenForWorkspace(workspace) else { return 0 }
-                return RetileAllPlanner.workspaceCapacity(maxDepth: tilingEngine.maxDepth(for: screen))
-            }
-        )
+        let plan = startupPlacement(windowIDs: tilingWids, windows: allWindows, screens: screens)
         for workspace in plan.assignments.keys.sorted() {
             for windowID in plan.assignments[workspace] ?? [] {
                 workspaceManager.assignWindow(windowID, toWorkspace: workspace)
@@ -2476,6 +2469,15 @@ private extension WindowManager {
     private func completeTiledDrag(_ completion: TiledDragCompletion) {
         let affected = completion.snapshot.context.memberIDs
         switch completion.outcome {
+        case let .rejectedRestored(reason, frames):
+            hyprLog(.notice, .tiling, "tiled drag rejected and restored: reason=\(reason) actual=\(frames)")
+        case let .degraded(candidateReason, restorationReason, frames):
+            let candidate = String(describing: candidateReason)
+            let restoration = String(describing: restorationReason)
+            hyprLog(.notice, .tiling, "tiled drag degraded: candidate=\(candidate) restoration=\(restoration) actual=\(frames)")
+        case .committed, .superseded, .ignored: break
+        }
+        switch completion.outcome {
         case let .committed(_, frames), let .rejectedRestored(_, frames):
             for id in affected {
                 stateCache.cachedWindows[id]?.cachedFrame = frames[id]
@@ -2488,27 +2490,33 @@ private extension WindowManager {
                 focusBrackets.updatePosition(frame)
             }
             refreshDimming(tiledRectsOverride: stateCache.tiledPositions)
-            if case let .rejectedRestored(reason, _) = completion.outcome,
-               reason != .preflight(.noTarget) {
-                let frame = completion.snapshot.originalFrames[completion.snapshot.draggedID]
-                    ?? completion.snapshot.context.usableFrame
-                focusBorder.flashError(around: frame, windowID: completion.snapshot.draggedID,
-                                       window: nil,
-                                       message: "Arrangement rejected; previous positions restored")
-            }
         case .degraded:
             for id in affected { stateCache.cachedWindows[id]?.cachedFrame = nil }
             if let id = focusBorder.trackedWindowID, affected.contains(id) { focusBorder.hide() }
             if let id = focusBrackets.trackedWindowID, affected.contains(id) { focusBrackets.hide() }
             dimmingOverlay.hideAll()
-            reportTiledDragFailure(completion)
         case .superseded, .ignored:
+            return
+        }
+        switch TiledDragFeedbackPolicy.feedback(for: completion.outcome) {
+        case .rejected:
+            NSSound.beep()
+            let frame = completion.snapshot.originalFrames[completion.snapshot.draggedID]
+                ?? completion.snapshot.context.usableFrame
+            focusBorder.flashError(around: frame, windowID: completion.snapshot.draggedID, window: nil,
+                                   message: "Arrangement rejected; previous positions restored")
+        case .degraded:
+            NSSound.beep()
+            reportTiledDragFailure(completion)
+        case nil:
             break
         }
     }
 
     private func reportTiledDragCaptureFailure(_ result: TiledDragCaptureResult) {
-        guard case .unknown = result, let point = mouseDownPointCG else { return }
+        guard case let .unknown(reason) = result, let point = mouseDownPointCG else { return }
+        hyprLog(.notice, .tiling, "tiled drag capture failed: reason=\(reason)")
+        NSSound.beep()
         focusBorder.flashError(around: CGRect(x: point.x - 1, y: point.y - 1, width: 2, height: 2),
                                windowID: 0, window: nil, message: "Could not verify window positions")
     }
@@ -2519,4 +2527,63 @@ private extension WindowManager {
         focusBorder.flashError(around: frame, windowID: completion.snapshot.draggedID,
                                window: nil, message: "Could not restore the tiled layout")
     }
+}
+
+private extension WindowManager {
+    private func startupPlacement(windowIDs: [CGWindowID], windows: [HyprWindow], screens: [NSScreen]) -> RetileAllPlan {
+        let byID = Dictionary(windows.map { ($0.windowID, $0) }, uniquingKeysWith: { first, _ in first })
+        let frames = Dictionary(uniqueKeysWithValues: windows.compactMap { window in
+            window.frame.map { (window.windowID, $0) }
+        })
+        let focusedID = accessibility.getFocusedWindow()?.windowID
+        var assignments: [Int: [CGWindowID]] = [:]
+        var overflow: [CGWindowID] = []
+        for screen in screens {
+            let localIDs = windowIDs.filter { id in
+                let assignedHome = workspaceManager.workspaceFor(id).flatMap(workspaceManager.homeScreenForWorkspace)
+                let home = assignedHome ?? byID[id].flatMap(displayManager.screen(for:)) ?? screens[0]
+                return home == screen
+            }
+            let orderedIDs = RetileAllPlanner.startupWindowOrder(
+                windowIDs: localIDs, framesByID: frames, focusedWindowID: focusedID)
+            let homes = RetileAllPlanner.startupWorkspaceOrder(
+                visibleWorkspaces: [workspaceManager.workspaceForScreen(screen)],
+                eligibleWorkspaces: workspaceManager.workspacesAnchoredTo(screen))
+            let plan = RetileAllPlanner.pack(windowIDs: orderedIDs, workspaceOrder: homes,
+                                            capacityForWorkspace: { [self] workspace in
+                RetileAllPlanner.availableStartupCapacity(
+                    capacity: RetileAllPlanner.workspaceCapacity(maxDepth: tilingEngine.maxDepth(for: screen)),
+                    assignedWindowIDs: workspaceManager.windowIDs(onWorkspace: workspace),
+                    hiddenWindowIDs: stateCache.hiddenWindowIDs,
+                    floatingWindowIDs: stateCache.floatingWindowIDs)
+            })
+            assignments.merge(plan.assignments, uniquingKeysWith: +)
+            overflow.append(contentsOf: plan.overflow)
+        }
+        return RetileAllPlan(assignments: assignments, overflow: overflow)
+    }
+
+    private func routeUnfittedWindow(_ window: HyprWindow) -> Bool {
+        guard let source = workspaceManager.workspaceFor(window.windowID), source > 0,
+              !scratchpad.contains(window.windowID), !stateCache.floatingWindowIDs.contains(window.windowID),
+              let screen = workspaceManager.homeScreenForWorkspace(source) else { return false }
+        let destination = RetileAllPlanner.nextFittingHome(
+            after: source, eligibleWorkspaces: workspaceManager.workspacesAnchoredTo(screen)
+        ) { [self] workspace in
+            let ids = workspaceManager.windowIDs(onWorkspace: workspace)
+                .subtracting(stateCache.floatingWindowIDs).union([window.windowID])
+            guard ids.count <= RetileAllPlanner.workspaceCapacity(maxDepth: tilingEngine.maxDepth(for: screen)) else { return false }
+            let tenants = ids.sorted().compactMap { id in
+                id == window.windowID ? window : stateCache.cachedWindows[id]
+            }
+            guard tenants.count == ids.count else { return false }
+            return tilingEngine.canFitWindows(tenants, onWorkspace: workspace, screen: screen)
+        }
+        guard let destination else { return false }
+        workspaceManager.assignWindow(window.windowID, toWorkspace: destination)
+        workspaceManager.hideInCorner(window, on: screen)
+        hyprLog(.notice, .tiling, "tile fit rejection routed window \(window.windowID) from ws\(source) to ws\(destination)")
+        return true
+    }
+
 }

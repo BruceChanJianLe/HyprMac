@@ -11,6 +11,10 @@ final class FocusStateControllerTests: XCTestCase {
         FocusStateController(focusBorder: FocusBorder())
     }
 
+    func testDisabledBorderAllowsOneShotErrorFeedback() {
+        XCTAssertTrue(FocusBorder.errorFeedbackCanRender(isEnabled: false))
+    }
+
     // MARK: - initial state
 
     func testInitialLastFocusedIsZero() {
@@ -69,7 +73,7 @@ final class FocusBorderCornerRadiusTests: XCTestCase {
         }
     }
 
-    func testDisabledBorderRejectsEveryPublicRenderPath() {
+    func testDisabledBorderRejectsPersistentAndInformationalRenderPaths() {
         let border = FocusBorder()
         border.primaryScreenHeight = 1080
         border.isEnabled = false
@@ -78,10 +82,22 @@ final class FocusBorderCornerRadiusTests: XCTestCase {
         border.show(around: frame, windowID: 41)
         border.updateFloatingBorders([42: frame], color: NSColor.systemPink.cgColor)
         border.flashInfo(message: "→ scratchpad", around: frame, windowID: 43)
-        border.flashError(around: frame, windowID: 44)
 
         XCTAssertNil(border.trackedWindowID)
         XCTAssertEqual(border.visibleOwnedPanelCount, 0)
+    }
+
+    func testDisabledBorderStillRendersOneShotErrorFeedback() {
+        let border = FocusBorder()
+        border.primaryScreenHeight = 1080
+        border.isEnabled = false
+
+        border.flashError(around: CGRect(x: 100, y: 100, width: 400, height: 300),
+                          windowID: 44)
+
+        XCTAssertEqual(border.trackedWindowID, 44)
+        XCTAssertEqual(border.visibleOwnedPanelCount, 1)
+        border.hide()
     }
 
     func testDisablingOrdersOutFocusedPanelSynchronously() {

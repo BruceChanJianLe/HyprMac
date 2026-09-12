@@ -3,6 +3,38 @@ import XCTest
 @testable import HyprMac
 
 final class TilingEngineVerifiedLayoutTests: XCTestCase {
+    func testCellQuantizedWindowTilesWithoutRestoringSiblings() {
+        let first = makeWindow(id: 501)
+        let second = makeWindow(id: 502)
+        let tree = BSPTree()
+        XCTAssertTrue(tree.insert(first, maxDepth: 3))
+        XCTAssertTrue(tree.insert(second, maxDepth: 3))
+
+        let usable = CGRect(x: 0, y: 0, width: 1000, height: 700)
+        let originals: [CGWindowID: CGRect] = [
+            501: CGRect(x: 40, y: 40, width: 440, height: 620),
+            502: CGRect(x: 520, y: 40, width: 440, height: 620)
+        ]
+        let trace = QuantizingSizingTrace(frames: originals, quantizedWindowID: 501)
+        let engine = TilingEngine(
+            displayManager: DisplayManager(),
+            frameSizingIOFactory: { _, generation in trace.io(generation: generation) }
+        )
+
+        let generation = engine.beginLayoutGeneration()
+        let outcome = engine.applyVerifiedLayout(tree, in: usable, generation: generation)
+
+        guard case let .accepted(actualFrames) = outcome else {
+            return XCTFail("expected accepted quantized layout, got \(outcome)")
+        }
+        let targets = Dictionary(uniqueKeysWithValues: tree.layout(
+            in: usable, gap: engine.gapSize, padding: engine.outerPadding
+        ).map { ($0.0.windowID, $0.1) })
+        XCTAssertEqual(actualFrames[501]?.width, targets[501].map { $0.width - 6 })
+        XCTAssertEqual(actualFrames[502], targets[502])
+        XCTAssertEqual(trace.restorationStarts, 0)
+    }
+
     func testAdjustedPassFailureRestoresOriginalFramesAndRatiosOnce() {
         let first = makeWindow(id: 1)
         let second = makeWindow(id: 2)
@@ -479,6 +511,49 @@ private final class SizingTrace {
                 if sizeWrites == 4, id == 1 { size.width += 100 }
                 return (.success, size)
             },
+            now: { [self] in now },
+            sleep: { [self] interval in now += interval },
+            currentGeneration: generation
+        )
+    }
+}
+
+private final class QuantizingSizingTrace {
+    var frames: [CGWindowID: CGRect]
+    var restorationStarts = 0
+    private var now: TimeInterval = 0
+    private var hasWritten = false
+    private var candidateWasRead = false
+    private let quantizedWindowID: CGWindowID
+
+    init(frames: [CGWindowID: CGRect], quantizedWindowID: CGWindowID) {
+        self.frames = frames
+        self.quantizedWindowID = quantizedWindowID
+    }
+
+    func io(generation: @escaping () -> UInt64) -> FrameSizingIO {
+        FrameSizingIO(
+            setMessagingTimeout: { _, _ in .success },
+            writeSize: { [self] id, size, _ in
+                if candidateWasRead { restorationStarts += 1 }
+                hasWritten = true
+                var frame = frames[id] ?? .zero
+                frame.size = size
+                if id == quantizedWindowID { frame.size.width -= 6 }
+                frames[id] = frame
+                return .success
+            },
+            writePosition: { [self] id, position, _ in
+                var frame = frames[id] ?? .zero
+                frame.origin = position
+                frames[id] = frame
+                return .success
+            },
+            readPosition: { [self] id, _ in
+                if hasWritten { candidateWasRead = true }
+                return (.success, frames[id]?.origin)
+            },
+            readSize: { [self] id, _ in (.success, frames[id]?.size) },
             now: { [self] in now },
             sleep: { [self] interval in now += interval },
             currentGeneration: generation

@@ -476,3 +476,100 @@ acceptance. The original running app did not log the precise candidate
 verification failure, so the investigation does not claim whether its trigger
 was readback delay, a write error, deadline, or geometry rejection. The new
 diagnostic preserves that distinction for subsequent authorized testing.
+
+
+## Independent regression review follow-up
+
+The installed `d2ac5c5` build remained unstable in live use. Zach reported
+scattered startup placement, terminals that would not tile, and missing red
+rejection feedback. An independent source review identified integration gaps
+that the earlier fake-IO tests did not exercise. This follow-up verifies those
+claims against source and adds regression cases before changing behavior.
+
+Confirmed and corrected:
+
+- Small downward size rounding was rejected by symmetric one-point matching.
+  Candidate acceptance now allows at most eight points of undershoot per axis.
+  Position and overshoot remain limited to one point; containment, aggregate
+  overlap and configured gaps still validate actual frames. Eight points is a
+  deliberately bounded compatibility allowance tested with a six-by-four-point
+  rounding example, not a measured universal terminal cell size. Every rollback
+  uses the original one-point size tolerance, including drag preflight rollback.
+- Ordinary membership changes and adjusted ratios could become live before AX
+  acceptance. Normal tiling now applies a private candidate and publishes it
+  only after acceptance. Failed attempts keep the prior tree. Unknown/degraded
+  geometry remains a failure; keeping the prior tree does not prove that an app
+  restored its original frame. No candidate geometry is invented as readback.
+- Event-driven discovery could run before the initial snapshot. The scheduler
+  retains one coalesced request until startup completes. The display fingerprint
+  is seeded before notification observers are registered.
+- Hidden assigned windows were excluded from incremental occupancy. They now
+  reserve capacity, including during startup/Retile All packing. Startup packs
+  each monitor's visible workspace first and orders readable windows by frame,
+  with the focused window first. Missing-frame tracked IDs are retained.
+- Count capacity did not guarantee tree fit. Insert-time fit failures now probe
+  complete destination tenant sets on private trees, visiting other anchored
+  workspaces once before the existing scratchpad fallback. A successful probe
+  is only a coarse insertion check, not verified AX acceptance. Routing neither
+  activates another workspace nor recursively retiles it.
+- Rejection feedback was coupled to persistent focus borders and omitted common
+  no-target drops. A one-shot red overlay now reports every verified rejection,
+  with distinct degraded feedback. The shake moves only the overlay, never a
+  real window through unverified AX writes. Ignored/superseded gestures remain
+  silent. Failure logs retain typed reasons without window titles.
+
+Not adopted from the review: an unconditional 20-point size allowance, assuming
+that silent logs establish a particular live AX failure, treating the 500-point
+preferred child size as a hard fit limit (the second search pass relaxes it),
+or overriding resize classification whenever the pointer resolves to a tile.
+The cited six-by-four-point rounding cannot cross the existing greater-than-20
+resize threshold. Existing tests deliberately preserve genuine manual resizes.
+A center dead zone and preview would change interaction design; neither is
+needed to correct the demonstrated regressions in this pass.
+
+### Regression evidence
+
+Logs are under ignored `build/sizing/fable-followup/`.
+
+- `red-all-slices.log`: 491 tests, 19 visual skips, 16 assertions exposing
+  quantization, feedback, early polling, hidden occupancy, startup ordering,
+  and ordinary membership publication. Two sizing fixtures initially exhausted
+  their scripted samples; those were corrected before sizing production edits.
+- `red-quantization-routing.log`: 493 tests, 19 skips, nine expected assertions.
+  Persistent quantized samples rejected as geometry mismatches; bounded
+  next-workspace probing still returned no result before implementation.
+- `red-fit-green-slices.log`: 495 tests, 19 skips, 11 assertions. Three exposed
+  the whole-set fit probe's missing aggregate/duplicate checks. Eight existing
+  keyboard-resize assertions caught replacement of live node identities; the
+  correction copies only accepted adjusted ratios into existing nodes.
+- `green-integrated.log`: 495 tests, 19 skips, zero failures, before the
+  independent review's additional restoration/reservation checks.
+
+- `red-review-gaps.log`: 498 tests, 19 skips, four expected assertions covering
+  strict drag restoration, hidden startup reservations, and scratchpad
+  membership isolation. Independent review prompted the first two additions.
+- `green-review-gaps.log`: six older scratchpad assertions failed because those
+  fixtures used unavailable real AX yet expected membership to publish anyway.
+  They now inject the existing accepting fake AX factory. Their assertions were
+  retained; the new failure fixtures separately exercise unreadable candidates.
+- `red-first-publication.log`: 500 tests, 19 skips, three expected assertions
+  covering failed first tiling and failed scratchpad migration on a synthetic
+  second screen. Failed destinations no longer publish or delete source trees.
+- `final-tests.log`: **500 tests, 19 visual skips, zero failures**.
+- `final-stress.log`: **4,060 passing test executions**, 200 suite runs
+  (20 repetitions of ten affected suites), zero failures.
+- `final-debug.log` and `final-release.log`: both Sparkle-linked application
+  builds succeeded with arm64 and x86_64 binaries. No application was launched.
+- `lint-final.json`: **241 findings: 228 warnings and 13 errors**, matching the
+  archived `d2ac5c5` baseline counts and per-file/rule/severity counts. Existing
+  length warnings change their reported sizes; no baseline issue is suppressed.
+  Startup/routing helpers live in a same-file extension to avoid introducing a
+  new class-length error. A new test force-unwrap warning was removed.
+- Fresh-context independent review and follow-up review found no remaining
+  blocking findings. Shell syntax checks and `git diff --check` passed.
+
+These are deterministic code-path checks, not visual acceptance. The running
+MacBook build and settings have not been changed by this follow-up. SIP-enabled
+manual checks remain required for startup/wake, terminal size rounding, hidden
+window return, all insertion edges, rejection overlay timing, rollback refusal,
+and mixed-application layouts. The skipped AppKit panel tests remain unverified.

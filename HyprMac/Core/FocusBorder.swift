@@ -29,9 +29,8 @@ import Cocoa
 class FocusBorder {
     private(set) var trackedWindowID: CGWindowID?
 
-    /// Global chrome policy pushed from `UserConfig.showFocusBorder`.
-    /// One-shot feedback paths call the renderer directly, so the policy
-    /// must also be enforced at this boundary.
+    /// Global persistent-chrome policy pushed from `UserConfig.showFocusBorder`.
+    /// One-shot rejection feedback remains available when chrome is disabled.
     var isEnabled = true {
         didSet {
             guard !isEnabled else { return }
@@ -54,6 +53,7 @@ class FocusBorder {
     var onShakeRestore: () -> Void = {}
 
     var visibleOwnedPanelCount: Int { observedPanels.allObjects.filter(\.isVisible).count }
+    static func errorFeedbackCanRender(isEnabled _: Bool) -> Bool { true }
 
     // remembered CG frames — used by applyOcclusion to translate occluder
     // CG rects into glow-local NS coords. kept in sync with panel positions.
@@ -353,19 +353,19 @@ class FocusBorder {
         fadeOutAndOrderOut(p, layer: glowLayer, duration: fadeDurationSec)
     }
 
-    /// Flash a red border around `rect` and shake the window
+    /// Flash a red border around `rect` and shake the overlay
     /// horizontally to signal a rejected operation (e.g. swap that
     /// would violate min-size constraints, move to a full workspace).
     /// The border auto-hides after the shake completes.
     ///
-    /// - Parameter window: when supplied, the actual window oscillates
-    ///   along with the overlay panel; without it, only the overlay
-    ///   shakes.
+    /// - Parameter window: retained for source compatibility. Error feedback
+    ///   never moves the actual window because verified geometry must remain
+    ///   unchanged after a rejection or restoration.
     /// - Parameter message: short reason shown as a pill centered in the
     ///   flashed window — e.g. "Not enough room to swap".
-    func flashError(around rect: CGRect, windowID: CGWindowID, window: HyprWindow? = nil, message: String? = nil) {
+    func flashError(around rect: CGRect, windowID: CGWindowID, window _: HyprWindow? = nil, message: String? = nil) {
+        guard Self.errorFeedbackCanRender(isEnabled: isEnabled) else { return }
         mainThreadOnly()
-        guard isEnabled else { return }
         renderGeneration += 1
         let generation = renderGeneration
         settleWork?.cancel()
@@ -415,13 +415,10 @@ class FocusBorder {
             messageBanner = banner
         }
 
-        // shake: oscillate both the overlay panel and the actual window
+        // shake only the overlay; moving the AX window would invalidate the
+        // verified frame that the rejected transaction just restored.
         let panelBaseX = nsRect.origin.x
-        let windowBaseX = rect.origin.x
-        restoreShakenWindow = { [weak window, weak self] in
-            window?.position = CGPoint(x: windowBaseX, y: rect.origin.y)
-            self?.onShakeRestore()
-        }
+        restoreShakenWindow = { [weak self] in self?.onShakeRestore() }
         let offsets = Tuning.shakeOffsets
         let stepDuration = Tuning.shakeStepDurationSec
         var step = 0
@@ -437,7 +434,6 @@ class FocusBorder {
                 var frame = p.frame
                 frame.origin.x = panelBaseX + offset
                 p.setFrame(frame, display: false)
-                window?.position = CGPoint(x: windowBaseX + offset, y: rect.origin.y)
                 step += 1
             } else {
                 self.cancelActiveShake()

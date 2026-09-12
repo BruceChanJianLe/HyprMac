@@ -118,9 +118,11 @@ reveals an oversize, pass 2 redistributes the parent's split ratio.
 The engine first captures every affected window's actual position and
 size. `FrameSizingAttempt` applies each requested frame in resize–move–resize
 order, retains AX write errors, and reads the complete layout back. Two
-stable samples are required. Position and size may differ by at most one
-AX point, but usable-screen containment, positive-area overlap, and the
-configured gap are checked separately across every pair of windows.
+stable samples are required. Position and size overshoot may differ by at most
+one AX point. Candidate size undershoot may be at most eight points, allowing
+small downward size rounding while retaining observed frames. Restoration uses
+one point in both size directions. Usable-screen containment, positive-area
+overlap, and the configured gap are checked across every pair of windows.
 
 Each attempt has a 0.36-second monotonic deadline and a 12-sample limit.
 Time inside AX calls counts toward that deadline. Individual AX calls use
@@ -131,8 +133,10 @@ never become accepted geometry.
 
 Only a known, stable size conflict permits a second pass.
 `BSPTree.adjustForMinSizes` adjusts constrained ratios, and the final
-adjusted layout goes through the same complete verification. If that pass
-fails, the engine restores the prior ratio snapshot. It checks captured
+adjusted layout goes through the same complete verification. Membership and
+adjusted ratios are prepared privately and publish only after acceptance.
+Failed first tiles do not create a live tree; failed scratchpad migrations keep
+the source tree. The engine checks captured
 original frames against the usable screen before writing them back. Parked
 workspace frames are not valid restoration targets for a visible workspace;
 the result remains degraded without moving windows back offscreen. Valid
@@ -144,6 +148,11 @@ degraded state whose restoration could not be verified. Superseded work
 does not restore frames over a newer operation.
 
 Normal smart insertion can still auto-float a new window when no leaf fits.
+Before that existing scratchpad fallback, a rejected new window is offered to
+the next fitting workspace anchored to the same monitor. Each destination is
+probed once with its complete assigned tenant set on a private tree. This is a
+coarse fit check; actual AX acceptance is still required when that workspace is
+tiled. No destination is activated or recursively retiled during routing.
 Before insertion, discovery assigns new tiled windows within the physical
 monitor's regular workspaces. It fills the active workspace up to
 `2^maxDepth`, then visits the next anchored workspace in cyclic numeric order.
@@ -151,6 +160,10 @@ Only new IDs are assigned; existing workspace membership, floating windows,
 and scratchpad members are preserved. New windows assigned to a hidden
 workspace are parked there. Startup packing uses the same capacity. This
 count limit does not guarantee that every application's dimensions will fit.
+Hidden assigned nonfloating windows reserve capacity in admission and startup
+packing. Startup/Retile All groups by monitor, fills its visible workspace
+first, and places the focused window first followed by frame order. Discovery
+events wait until the initial snapshot completes.
 The old post-readback overflow auto-floating path remains disabled. Target
 insertion uses one candidate pass and one possible restoration, without
 ratio adjustment, eviction, or automatic floating.

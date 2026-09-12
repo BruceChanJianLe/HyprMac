@@ -2,6 +2,34 @@ import XCTest
 @testable import HyprMac
 
 final class DragSwapHandlerInsertionTests: XCTestCase {
+    func testFeedbackPolicyReportsEveryVerifiedRejectionExactlyOnce() {
+        let frames: [CGWindowID: CGRect] = [
+            1: CGRect(x: 10, y: 20, width: 300, height: 200)
+        ]
+
+        XCTAssertEqual(TiledDragFeedbackPolicy.feedback(for: .rejectedRestored(
+            reason: .preflight(.noTarget), actualFrames: frames)), .rejected)
+        XCTAssertEqual(TiledDragFeedbackPolicy.feedback(for: .rejectedRestored(
+            reason: .preflight(.maxDepthExceeded), actualFrames: frames)), .rejected)
+        XCTAssertEqual(TiledDragFeedbackPolicy.feedback(for: .rejectedRestored(
+            reason: .sizing(.attemptsExhausted), actualFrames: frames)), .rejected)
+    }
+
+    func testFeedbackPolicyDistinguishesDegradedRestoration() {
+        XCTAssertEqual(TiledDragFeedbackPolicy.feedback(for: .degraded(
+            candidateReason: .preflight(.noTarget),
+            restorationReason: .deadlineExceeded,
+            actualFrames: [:])), .degraded)
+    }
+
+    func testFeedbackPolicyStaysSilentForNonFailures() {
+        let tree = BSPTree()
+        XCTAssertNil(TiledDragFeedbackPolicy.feedback(for: .committed(
+            candidate: tree, actualFrames: [:])))
+        XCTAssertNil(TiledDragFeedbackPolicy.feedback(for: .ignored))
+        XCTAssertNil(TiledDragFeedbackPolicy.feedback(for: .superseded))
+    }
+
     func testMouseDragLifecycleStopResetClearsEverySuppressionState() {
         var state = MouseDragLifecycleState(buttonDown: true,
                                             sawDragEvent: true,

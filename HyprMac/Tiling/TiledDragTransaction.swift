@@ -327,13 +327,12 @@ struct TiledDragTransaction {
 
     private func restore(_ snapshot: TiledDragSnapshot, reason: TiledDragFailure,
                          attempt: FrameSizingAttempt) -> TiledDragDropOutcome {
-        let targets = snapshot.originalFrames.map {
-            FrameSizingAttempt.Target(windowID: $0.key, frame: $0.value)
-        }.sorted { $0.windowID < $1.windowID }
-        let result = attempt.apply(targets: targets,
-                                   usableFrame: snapshot.context.usableFrame,
-                                   gap: snapshot.context.gap,
-                                   generation: snapshot.generation)
+        let result = FrameSizingTransaction(attempt: attempt).restore(
+            originalFrames: snapshot.originalFrames,
+            usableFrame: snapshot.context.usableFrame,
+            gap: snapshot.context.gap,
+            generation: snapshot.generation
+        )
         switch result.verdict {
         case .accepted:
             return .rejectedRestored(reason: reason, actualFrames: result.actualFrames)

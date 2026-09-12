@@ -15,6 +15,7 @@ final class TiledDragTransactionTests: XCTestCase {
         var readErrors: [AXError] = []
         var onWrite: (() -> Void)?
         var forcedSizes: [CGSize] = []
+        var sizeUndershoot: CGFloat = 0
         var readDrift: CGFloat = 0
         var readNumber: CGFloat = 0
 
@@ -31,7 +32,9 @@ final class TiledDragTransactionTests: XCTestCase {
                         if error != .success { return error }
                     }
                     pendingSizes[id] = size
-                    frames[id]?.size = forcedSizes.isEmpty ? size : forcedSizes.removeFirst()
+                    frames[id]?.size = forcedSizes.isEmpty
+                        ? CGSize(width: size.width - sizeUndershoot, height: size.height)
+                        : forcedSizes.removeFirst()
                     writes.append((id, frames[id] ?? CGRect(origin: .zero, size: size)))
                     return .success
                 },
@@ -653,6 +656,28 @@ final class TiledDragTransactionTests: XCTestCase {
             return XCTFail("threshold-sized change must use ordinary drop")
         }
         XCTAssertEqual(fake.frames, originals)
+    }
+
+    func testNoTargetRestorationRejectsCellQuantizedUndershoot() throws {
+        let (tree, _, context) = fixture()
+        let originals = layoutFrames(tree, context)
+        let fake = FakeAX(frames: originals)
+        let transaction = TiledDragTransaction(ioFactory: fake.factory)
+        guard case let .captured(snapshot) = transaction.capture(
+            draggedID: 1, tree: tree, context: context, generation: 1,
+            currentContext: { context }) else { return XCTFail("capture failed") }
+        var moved = try XCTUnwrap(fake.frames[1])
+        moved.origin.x += 2
+        fake.frames[1] = moved
+        fake.sizeUndershoot = 6
+
+        guard case let .degraded(candidateReason, restorationReason, actualFrames) =
+                transaction.dropRelease(snapshot, mode: nil, currentContext: { context }) else {
+            return XCTFail("inexact restoration must be degraded")
+        }
+        XCTAssertEqual(candidateReason, .preflight(.noTarget))
+        XCTAssertEqual(restorationReason, .geometryMismatch(1))
+        XCTAssertEqual(actualFrames[1]?.width, originals[1].map { $0.width - 6 })
     }
 
     func testDropReleaseClassificationReadFailureRestoresOriginals() {

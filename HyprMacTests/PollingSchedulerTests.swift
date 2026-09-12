@@ -14,6 +14,7 @@ final class PollingSchedulerTests: XCTestCase {
         let scheduler = PollingScheduler { fireCount += 1 }
         let exp = expectation(description: "poll fired")
 
+        scheduler.start()
         scheduler.schedule(after: 0.05)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { exp.fulfill() }
         wait(for: [exp], timeout: 1.0)
@@ -27,6 +28,7 @@ final class PollingSchedulerTests: XCTestCase {
 
         // a burst of schedule() calls during the in-flight window must collapse —
         // notification storms (rapid app launches, etc.) shouldn't pile polls.
+        scheduler.start()
         scheduler.schedule(after: 0.05)
         scheduler.schedule(after: 0.05)
         scheduler.schedule(after: 0.05)
@@ -44,6 +46,7 @@ final class PollingSchedulerTests: XCTestCase {
         let firstFired = expectation(description: "first poll fired")
         let secondFired = expectation(description: "second poll fired")
 
+        scheduler.start()
         // first poll, wait for it to land, then schedule a second.
         // the in-flight token must clear on fire so a new schedule takes effect.
         scheduler.schedule(after: 0.05)
@@ -62,6 +65,7 @@ final class PollingSchedulerTests: XCTestCase {
         let exp = expectation(description: "poll fired")
         let scheduledAt = Date()
 
+        scheduler.start()
         scheduler.schedule(after: 0.10)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { exp.fulfill() }
         wait(for: [exp], timeout: 1.0)
@@ -73,6 +77,28 @@ final class PollingSchedulerTests: XCTestCase {
     }
 
     // MARK: - reconcile timer
+
+    func testScheduleBeforeStartWaitsForStartupAndThenFires() {
+        var fireCount = 0
+        let scheduler = PollingScheduler(periodicInterval: 10) { fireCount += 1 }
+
+        scheduler.schedule(after: 0.02)
+        scheduler.schedule(after: 0.02)
+
+        let beforeStart = expectation(description: "pre-start request stays dormant")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+            XCTAssertEqual(fireCount, 0)
+            beforeStart.fulfill()
+        }
+        wait(for: [beforeStart], timeout: 1.0)
+
+        scheduler.start()
+        let afterStart = expectation(description: "coalesced request fires after start")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { afterStart.fulfill() }
+        wait(for: [afterStart], timeout: 1.0)
+        scheduler.stop()
+        XCTAssertEqual(fireCount, 1)
+    }
 
     // the production reconcile interval is a slow 10s safety net now that
     // AXObserver notifications drive discovery. these timer tests inject a
@@ -144,6 +170,7 @@ final class PollingSchedulerTests: XCTestCase {
         scheduler.schedule(after: 0.10)
         scheduler.stop()
         scheduler.schedule(after: 0.30)
+        scheduler.start()
 
         let oldDeadlinePassed = expectation(description: "old deadline passed")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
@@ -168,6 +195,7 @@ final class PollingSchedulerTests: XCTestCase {
         let scheduler = PollingScheduler { fireCount += 1 }
         scheduler.isSuppressed = { suppressed }
 
+        scheduler.start()
         // while suppressed the poll must not fire — but it must not be lost
         // either. with event-driven triggers there's no 1 Hz timer to catch a
         // dropped event (a windowCreated during a workspace transition would
@@ -192,6 +220,7 @@ final class PollingSchedulerTests: XCTestCase {
         let scheduler = PollingScheduler { fireCount += 1 }
         scheduler.isSuppressed = { suppressed }
 
+        scheduler.start()
         // schedule with no suppression, then suppress before the asyncAfter
         // resolves — the cross-swap path: a poll landing mid-critical-section
         // must hold off, then fire once the suppression clears.
