@@ -13,6 +13,9 @@ import AppKit
 final class DimmingOverlayTests: XCTestCase {
 
     override func setUpWithError() throws {
+        if ProcessInfo.processInfo.environment["HYPRMAC_HEADLESS_TESTS"] == "1" {
+            throw XCTSkip("hostless run excludes tests that create AppKit panels")
+        }
         guard !NSScreen.screens.isEmpty else {
             throw XCTSkip("no NSScreen available — dimming tests require a display")
         }

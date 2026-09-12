@@ -5,7 +5,7 @@
 import Foundation
 
 /// Direction in which a node's children divide its rect.
-enum SplitDirection {
+enum SplitDirection: Equatable {
     /// Left | right.
     case horizontal
     /// Top / bottom.
@@ -22,7 +22,7 @@ enum SplitDirection {
 ///   TilingConfig.maxRatio]` by the property setter — direct writes
 ///   cannot escape these bounds.
 class BSPNode {
-    var parent: BSPNode?
+    weak var parent: BSPNode?
 
     private var _splitRatio: CGFloat = TilingConfig.defaultRatio
 

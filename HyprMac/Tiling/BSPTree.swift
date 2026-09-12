@@ -5,6 +5,13 @@
 
 import Foundation
 
+enum BSPTargetEdge: CaseIterable, Equatable {
+    case left
+    case right
+    case top
+    case bottom
+}
+
 /// Owns a BSP tree's root node and exposes the structural and layout
 /// API the tiling engine drives.
 ///
@@ -15,7 +22,105 @@ import Foundation
 /// vertical displays). Long-form algorithm walkthroughs live in
 /// `docs/tiling-algorithm.md`.
 class BSPTree {
+    struct StructuralFingerprint: Equatable {
+        struct Node: Equatable {
+            let path: String
+            let windowID: CGWindowID?
+            let splitRatio: CGFloat
+            let userSetRatio: Bool
+            let splitOverride: SplitDirection?
+            let savedSplitRatio: CGFloat?
+            let savedChildWasLeft: Bool?
+            let savedSplitOverride: SplitDirection?
+            let pendingSplitRatio: CGFloat?
+            let pendingSplitOverride: SplitDirection?
+        }
+
+        let nodes: [Node]
+    }
+
     var root: BSPNode = BSPNode()
+
+    func structuralFingerprint() -> StructuralFingerprint {
+        var nodes: [StructuralFingerprint.Node] = []
+        func walk(_ node: BSPNode, path: String) {
+            nodes.append(StructuralFingerprint.Node(
+                path: path,
+                windowID: node.window?.windowID,
+                splitRatio: node.splitRatio,
+                userSetRatio: node.userSetRatio,
+                splitOverride: node.splitOverride,
+                savedSplitRatio: node.savedSplitRatio,
+                savedChildWasLeft: node.savedChildWasLeft,
+                savedSplitOverride: node.savedSplitOverride,
+                pendingSplitRatio: node.pendingSplitRatio,
+                pendingSplitOverride: node.pendingSplitOverride
+            ))
+            if let left = node.left { walk(left, path: path + "L") }
+            if let right = node.right { walk(right, path: path + "R") }
+        }
+        walk(root, path: "")
+        return StructuralFingerprint(nodes: nodes)
+    }
+
+    func deepClone() -> BSPTree {
+        func clone(_ source: BSPNode, parent: BSPNode?) -> BSPNode {
+            let copy = BSPNode(window: source.window)
+            copy.parent = parent
+            copy.splitRatio = source.splitRatio
+            copy.userSetRatio = source.userSetRatio
+            copy.splitOverride = source.splitOverride
+            copy.savedSplitRatio = source.savedSplitRatio
+            copy.savedChildWasLeft = source.savedChildWasLeft
+            copy.savedSplitOverride = source.savedSplitOverride
+            copy.pendingSplitRatio = source.pendingSplitRatio
+            copy.pendingSplitOverride = source.pendingSplitOverride
+            if let left = source.left { copy.left = clone(left, parent: copy) }
+            if let right = source.right { copy.right = clone(right, parent: copy) }
+            return copy
+        }
+        let tree = BSPTree()
+        tree.root = clone(root, parent: nil)
+        return tree
+    }
+
+    func candidateTree(draggedID: CGWindowID, targetID: CGWindowID,
+                       edge: BSPTargetEdge, maxDepth: Int) -> BSPTree? {
+        guard draggedID != targetID,
+              let dragged = allWindows.first(where: { $0.windowID == draggedID }),
+              allWindows.contains(where: { $0.windowID == targetID }) else { return nil }
+        let originalIDs = allWindows.map(\.windowID)
+        let candidate = deepClone()
+        candidate.remove(dragged)
+        guard let targetWindow = candidate.allWindows.first(where: { $0.windowID == targetID }),
+              let target = candidate.root.find(targetWindow), target.isLeaf,
+              target.depth < maxDepth else { return nil }
+
+        let existing = target.window
+        let draggedNode = BSPNode(window: dragged)
+        let targetNode = BSPNode(window: existing)
+        let draggedFirst = edge == .left || edge == .top
+        target.window = nil
+        target.left = draggedFirst ? draggedNode : targetNode
+        target.right = draggedFirst ? targetNode : draggedNode
+        target.left?.parent = target
+        target.right?.parent = target
+        target.splitRatio = TilingConfig.defaultRatio
+        target.userSetRatio = false
+        target.splitOverride = (edge == .left || edge == .right) ? .horizontal : .vertical
+        target.savedSplitRatio = nil
+        target.savedChildWasLeft = nil
+        target.savedSplitOverride = nil
+        target.pendingSplitRatio = nil
+        target.pendingSplitOverride = nil
+
+        let candidateIDs = candidate.allWindows.map(\.windowID)
+        guard candidate.root.allLeavesRightToLeft().allSatisfy({ $0.depth <= maxDepth }),
+              candidateIDs.count == originalIDs.count,
+              Set(candidateIDs) == Set(originalIDs),
+              candidateIDs.count == Set(candidateIDs).count else { return nil }
+        return candidate
+    }
 
     /// Insert a window via plain dwindle: split the deepest-right leaf.
     ///

@@ -10,7 +10,8 @@ final class ResizeDirectionTests: XCTestCase {
 
     override func setUpWithError() throws {
         displayManager = DisplayManager()
-        engine = TilingEngine(displayManager: displayManager)
+        engine = TilingEngine(displayManager: displayManager,
+                              frameSizingIOFactory: acceptingFrameSizingIOFactory())
         guard let main = NSScreen.main ?? NSScreen.screens.first else {
             throw XCTSkip("no NSScreen available — test requires a display")
         }

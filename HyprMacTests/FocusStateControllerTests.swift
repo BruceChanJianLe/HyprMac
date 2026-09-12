@@ -7,7 +7,6 @@ import Cocoa
 // invariants and the no-op-on-same-id contract.
 
 final class FocusStateControllerTests: XCTestCase {
-
     private func makeController() -> FocusStateController {
         FocusStateController(focusBorder: FocusBorder())
     }
@@ -64,6 +63,11 @@ final class FocusStateControllerTests: XCTestCase {
 }
 
 final class FocusBorderCornerRadiusTests: XCTestCase {
+    override func setUpWithError() throws {
+        if ProcessInfo.processInfo.environment["HYPRMAC_HEADLESS_TESTS"] == "1" {
+            throw XCTSkip("hostless run excludes tests that create AppKit panels")
+        }
+    }
 
     func testDisabledBorderRejectsEveryPublicRenderPath() {
         let border = FocusBorder()

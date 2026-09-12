@@ -38,11 +38,8 @@ final class PollingScheduler {
     private let onPoll: () -> Void
 
     /// Optional suppression check. When the closure returns `true`, both
-    /// timer ticks and scheduled fires are dropped. Used to hold polling
-    /// off during cross-monitor drag-swap, where `crossSwapWindows` runs
-    /// two back-to-back retile passes (≈ 720 ms of synchronous readback)
-    /// and a poll firing mid-flight would race the in-progress mutation.
-    /// Default returns `false`, so existing call sites are unaffected.
+    /// timer ticks and scheduled fires are dropped. Default returns `false`,
+    /// so existing call sites are unaffected.
     var isSuppressed: () -> Bool = { false }
 
     /// `periodicInterval` defaults to the 10s reconcile net; tests inject a

@@ -16,7 +16,7 @@ HyprMac/
 ├── App/                      lifecycle, settings shell, menu bar
 ├── Core/
 │   ├── Discovery/            window discovery service
-│   ├── Input/                drag-swap result application
+│   ├── Input/                verified tiled-drag sessions
 │   ├── Orchestration/        action dispatch, polling
 │   ├── State/                window state cache, focus, suppressions
 │   ├── Workspace/            workspace orchestration
@@ -46,11 +46,12 @@ singleton except `UserConfig.shared` and `MenuBarState.shared`.
 | `DisplayManager` | NSScreen tracking and CG ↔ NS coordinate conversion. |
 | `SpaceManager` | macOS native Spaces enumeration via private CGS APIs (read-only). |
 | `WorkspaceManager` | HyprMac's nine virtual workspaces, screen↔workspace mapping, home-screen affinity. |
-| `TilingEngine` | One BSP tree per `(workspace, screen)` plus smart insert, swap, two-pass min-size resolution. |
+| `TilingEngine` | One BSP tree per `(workspace, screen)`, verified sizing, smart insert, keyboard swap, and candidate drag commit. |
 | `FloatingWindowController` | Float / tile toggle, cycle, raise-behind, auto-float predicate. |
 | `MouseTrackingManager` | Focus-follows-mouse, refocus-under-cursor, menu-tracking suppression. |
-| `DragManager` | Classifies drag gestures into resize / swap / cross-monitor / snap-back. |
-| `DragSwapHandler` | Applies the classified drag (tree mutation, workspace reassignment, animation). |
+| `TiledDragHandler` | Owns captured press/release state, cancellation, and verified cache updates. |
+| `TiledDragTransaction` | Builds isolated insertion, swap, or resize candidates and verifies frames before commit. |
+| `FrameSizingAttempt` | Bounded AX writes and complete frame readback through an injected clock and IO surface. |
 | `FocusBorder` | Visual focus indicator. Persistent panels at `.floating` level with occlusion masking. |
 | `FocusBrackets` | Corner brackets shown around the focus target while the Hypr key is held. |
 | `DimmingOverlay` | Dim mask over non-focused tiled windows; one panel per display at `.floating - 1`. |
@@ -71,16 +72,16 @@ These types decompose what would otherwise be a monolithic
   passes through the focus-border tracked id.
 - **`SuppressionRegistry`** is a tiny date-gated key-value store for
   short-lived "don't react to X for Y seconds" flags
-  (`activation-switch`, `mouse-focus`, `cross-swap-in-flight`).
+  (`activation-switch`, `mouse-focus`, `workspace-transition`).
 - **`PollingScheduler`** owns a slow (10s) reconcile timer plus a
   coalescing token that funnels event-driven `schedule(after:)` requests
   down to a single in-flight call. The timer is a safety net — it catches
   apps that refuse AX observers, notifications the observer layer missed,
   and external moves nothing else reports; `AXNotificationService` events
-  are the primary trigger. Honors
-  `SuppressionRegistry["cross-swap-in-flight"]` so cross-monitor
-  drag-swap can hold polling off for the duration of its two
-  back-to-back retiles.
+  are the primary trigger. WindowManager suppresses polling while the mouse
+  is down, a tiled release is finishing, or a workspace transition is active.
+  The drag finishing flag lasts through the deferred settle and verified
+  transaction rather than expiring after a fixed timeout.
 - **`AXNotificationService`** owns one `AXObserver` per regular app and
   translates their AX notifications (window created / destroyed /
   miniaturized / deminiaturized, focused-window changed) into

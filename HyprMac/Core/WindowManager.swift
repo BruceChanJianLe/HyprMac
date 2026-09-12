@@ -62,8 +62,8 @@ class WindowManager {
     // floating-window lifecycle: float/tile toggle, cycle-focus, raise-behind, auto-float predicate.
     private(set) var floatingController: FloatingWindowController!
 
-    // drag-result application — DragManager classifies, this handler applies.
-    private var dragSwapHandler: DragSwapHandler!
+    // verified tiled drag capture and completion.
+    private var tiledDragHandler: TiledDragHandler!
 
     // Action → service routing. dispatch(_:) replaces the handleAction switch.
     private var actionDispatcher: ActionDispatcher!
@@ -82,9 +82,16 @@ class WindowManager {
     private var mouseDownMonitor: Any?
     private var mouseUpMonitor: Any?
     private var mouseDragMonitor: Any?
-    private var mouseButtonDown = false
-    private var mouseDraggedSinceDown = false
-    private var mouseDownTiledFrames: [CGWindowID: CGRect] = [:]
+    private var mouseDragLifecycle = MouseDragLifecycleState()
+    private var mouseButtonDown: Bool {
+        get { mouseDragLifecycle.buttonDown }
+        set { mouseDragLifecycle.buttonDown = newValue }
+    }
+    private var mouseDraggedSinceDown: Bool {
+        get { mouseDragLifecycle.sawDragEvent }
+        set { mouseDragLifecycle.sawDragEvent = newValue }
+    }
+    private var mouseDownPointCG: CGPoint?
     private var mouseDownFloatingWindowID: CGWindowID = 0
     // CG frame of that floater, read in the same mouse-down enumeration —
     // the dim-drag anchor must come from here, not a fresh AX read at arm
@@ -94,7 +101,10 @@ class WindowManager {
     // window whose focus border was hidden when a drag started — re-shown on mouseUp.
     // we hide rather than try to follow, because we'd need 60Hz AX polling per window
     // and that's prohibitively expensive.
-    private var preDragFocusedID: CGWindowID = 0
+    private var preDragFocusedID: CGWindowID {
+        get { mouseDragLifecycle.preDragFocusedID }
+        set { mouseDragLifecycle.preDragFocusedID = newValue }
+    }
 
     // armed when a drag starts on a visible floating window while dim is on
     // (normal mode). drives dimmingOverlay.setDragOverride so the bright carve
@@ -157,7 +167,7 @@ class WindowManager {
     /// Construction is in three layers:
     /// 1. Build sub-managers that take only static dependencies.
     /// 2. Build the orchestration layer (`floatingController`,
-    ///    `workspaceOrchestrator`, `pollingScheduler`, `dragSwapHandler`,
+    ///    `workspaceOrchestrator`, `pollingScheduler`, `tiledDragHandler`,
     ///    `actionDispatcher`) and attach the closure handles each one
     ///    needs from `WindowManager`-local helpers.
     /// 3. Subscribe to `UserConfig` `@Published` properties so runtime
@@ -236,8 +246,6 @@ class WindowManager {
         self.pollingScheduler = PollingScheduler { [weak self] in
             self?.pollWindowChanges()
         }
-        // hold polling off while a cross-monitor drag-swap is in flight (Phase 4 step 5).
-        // DragSwapHandler.applySwap registers the "cross-swap-in-flight" key for ~800ms;
         // workspace-transition is set by switchWorkspace and moveToWorkspace for 0.6s
         // so drift detection can't fire on stale-AX-read frames mid-transition.
         // mouseButtonDown lives here (not as a drop-guard in pollWindowChanges)
@@ -246,7 +254,7 @@ class WindowManager {
         pollingScheduler.isSuppressed = { [weak self] in
             guard let self else { return false }
             return self.mouseButtonDown
-                || self.suppressions.isSuppressed("cross-swap-in-flight")
+                || self.tiledDragHandler.isFinishingDrag
                 || self.suppressions.isSuppressed("workspace-transition")
         }
 
@@ -307,20 +315,7 @@ class WindowManager {
         floatingController.isScratchpadVisible = { [weak self] in self?.scratchpad.isVisible ?? false }
         floatingController.adoptIntoScratchpad = { [weak self] w, frame in self?.scratchpad.adopt(w, preferredFrame: frame) }
 
-        // drag-result handler
-        self.dragSwapHandler = DragSwapHandler(
-            stateCache: stateCache,
-            dragManager: dragManager,
-            accessibility: accessibility,
-            displayManager: displayManager,
-            workspaceManager: workspaceManager,
-            tilingEngine: tilingEngine,
-            config: config,
-            suppressions: suppressions
-        )
-        dragSwapHandler.updatePositionCache = { [weak self] windows in self?.updatePositionCache(windows: windows) }
-        dragSwapHandler.tileAllVisibleSpaces = { [weak self] windows in self?.tileAllVisibleSpaces(windows: windows) }
-        dragSwapHandler.isScratchpadVisible = { [weak self] in self?.scratchpad.isVisible ?? false }
+        self.tiledDragHandler = makeTiledDragHandler()
 
         // action dispatcher — owns the per-Action routing previously in handleAction.
         self.actionDispatcher = ActionDispatcher(
@@ -348,10 +343,6 @@ class WindowManager {
         actionDispatcher.isMenuTracking = { [weak self] in self?.mouseTracker.menuTracking ?? false }
         actionDispatcher.toggleScratchpad = { [weak self] in self?.scratchpad.toggle() }
         actionDispatcher.moveToScratchpad = { [weak self] in self?.scratchpad.sendFocusedWindow() }
-        // DragSwapHandler shares the dispatcher's swap-rejection flash so cross-monitor and
-        // direction swaps both surface the same red-border + beep feedback.
-        dragSwapHandler.rejectSwap = { [weak self] window, reason in self?.actionDispatcher.rejectSwap(window, reason: reason) }
-
         // tree-fit failures spill into the scratchpad as floating members
         // (overflow buffer) instead of floating in place. the pre-tile
         // original frame is the summon-back frame. excluded-bundle and
@@ -663,8 +654,10 @@ class WindowManager {
     /// the polling scheduler, removes mouse monitors, halts the hotkey tap,
     /// and hides every focus indicator. Safe to call when not running.
     func stop() {
-        restoreAllWindows()
         isRunning = false
+        tiledDragHandler.cancel()
+        _ = tilingEngine.beginLayoutGeneration()
+        restoreAllWindows()
         axNotifications.detachAll()
         pollingScheduler.stop()
         stopMouseTracking()
@@ -749,15 +742,20 @@ class WindowManager {
             guard let self else { return }
             self.mouseButtonDown = true
             self.mouseDraggedSinceDown = false
+            self.mouseDownFloatingWindowID = 0
+            self.mouseDownFloatingFrame = nil
             // the event carries the exact click location. sampling
             // NSEvent.mouseLocation inside the handler instead reads
             // wherever the cursor has moved to by the time the AX-heavy
             // capture below finishes — on a fast grab-and-flick that
             // mis-anchors the dim carve (permanent offset) and can make
             // the floater hit-test miss entirely.
-            let downNS = event.window.map { $0.convertPoint(toScreen: event.locationInWindow) }
-                ?? event.locationInWindow
-            self.captureMouseDownFrames(at: downNS)
+            let downCG = TiledDragEvent.point(event: event,
+                                              primaryHeight: self.displayManager.primaryScreenHeight)
+            let downNS = CGPoint(x: downCG.x,
+                                 y: self.displayManager.primaryScreenHeight - downCG.y)
+            self.mouseDownPointCG = downCG
+            self.tiledDragHandler.handleMouseDown(at: downCG)
             self.armDimDragIfFloating(downPointNS: downNS)
             // a menu open at the OS level eats clicks before we'd see them
             // here, so a global mouseDown reaching us is unambiguous proof
@@ -796,21 +794,24 @@ class WindowManager {
             self.preDragFocusedID = tid
             self.focusBorder.hide(); self.dimmingOverlay.hideAll()
         }
-        mouseUpMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { [weak self] _ in
+        mouseUpMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
             let shouldDetectDrag = self?.mouseDraggedSinceDown ?? false
-            let startFrames = self?.mouseDownTiledFrames ?? [:]
             let draggedFloatingID = self?.mouseDownFloatingWindowID ?? 0
+            if let self {
+                let release = TiledDragEvent.release(
+                    event: event,
+                    primaryHeight: self.displayManager.primaryScreenHeight,
+                    sawDragEvent: shouldDetectDrag)
+                self.tiledDragHandler.handleMouseUp(release)
+            }
             self?.mouseButtonDown = false
             self?.mouseDraggedSinceDown = false
-            self?.mouseDownTiledFrames.removeAll()
+            self?.mouseDownPointCG = nil
             self?.mouseDownFloatingWindowID = 0
             self?.mouseDownFloatingFrame = nil
             if self?.dimDrag != nil {
                 self?.dimDrag = nil
                 self?.dimmingOverlay.clearDragOverride()
-            }
-            if shouldDetectDrag {
-                self?.handleMouseUp(startFrames: startFrames)
             }
             if draggedFloatingID != 0 {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
@@ -840,6 +841,7 @@ class WindowManager {
     /// Remove every NSEvent monitor installed by `startMouseTracking()` and
     /// clear the drag scratchpad. Idempotent.
     private func stopMouseTracking() {
+        mouseDragLifecycle.resetForStop()
         if let m = mouseMoveMonitor { NSEvent.removeMonitor(m) }
         if let m = mouseDownMonitor { NSEvent.removeMonitor(m) }
         if let m = mouseDragMonitor { NSEvent.removeMonitor(m) }
@@ -848,7 +850,7 @@ class WindowManager {
         mouseDownMonitor = nil
         mouseDragMonitor = nil
         mouseUpMonitor = nil
-        mouseDownTiledFrames.removeAll()
+        mouseDownPointCG = nil
         mouseDownFloatingWindowID = 0
         mouseDownFloatingFrame = nil
         // teardown can land mid-drag — drop the overlay's override too or a
@@ -1016,7 +1018,8 @@ class WindowManager {
     ///
     /// - Parameter focusedID: Override for the "bright" window. Defaults to
     ///   `focusBorder.trackedWindowID`, then `focusController.lastFocusedID`.
-    private func refreshDimming(focusedID: CGWindowID? = nil) {
+    private func refreshDimming(focusedID: CGWindowID? = nil,
+                                tiledRectsOverride: [CGWindowID: CGRect]? = nil) {
         // scratchpad scrim: dim every monitor edge-to-edge at .normal level.
         // members are raised ABOVE it at show time (stack recency, not
         // carve-outs), so nothing is carved and member drags never touch the
@@ -1057,7 +1060,7 @@ class WindowManager {
         dimmingOverlay.primaryScreenHeight = displayManager.primaryScreenHeight
         dimmingOverlay.update(
             focusedID: fid,
-            tiledRects: currentTiledRects(),
+            tiledRects: tiledRectsOverride ?? currentTiledRects(),
             floatingRects: floatingFrames(from: Array(stateCache.cachedWindows.values), expandedBy: 2),
             screens: displayManager.screens
         )
@@ -1197,12 +1200,6 @@ class WindowManager {
             focusController.recordFocus(wid, reason: "ensureFocus-fallback")
             updateFocusBorder(for: w)
         }
-    }
-
-    /// Forward a mouse-up that followed a drag to `DragSwapHandler` for
-    /// classification and possible swap application.
-    private func handleMouseUp(startFrames: [CGWindowID: CGRect]) {
-        dragSwapHandler.handleMouseUp(startFrames: startFrames)
     }
 
     // MARK: - action dispatch
@@ -1694,44 +1691,32 @@ class WindowManager {
         return stateCache.floatingWindowIDs.contains(windowID) && workspaceManager.isWindowVisible(windowID)
     }
 
-    /// Snapshot tile frames at mouse-down so `DragSwapHandler` can compare
-    /// against post-drag rects to detect a swap target. Also notes the
-    /// floating window under the click (if any) — and its frame — so the
+    /// Accept the verified mouse-down frame batch. Also note the floating
+    /// window under the click (if any) — and its frame — so the
     /// drag monitor knows to hide that floater's border for the drag
     /// duration and the dim carve can anchor to a consistent pair.
-    /// `mouseNS` is the click location from the mouse-down event, not a
-    /// live cursor read — by the time this AX enumeration runs, a fast
-    /// drag has already moved the cursor off the click point.
-    private func captureMouseDownFrames(at mouseNS: NSPoint) {
-        mouseDownTiledFrames.removeAll()
+    private func acceptTiledDragCapture(_ frames: [CGWindowID: CGRect]) {
         mouseDownFloatingWindowID = 0
         mouseDownFloatingFrame = nil
+        guard let point = mouseDownPointCG else { return }
+        let hits = frames.filter {
+            stateCache.floatingWindowIDs.contains($0.key) && $0.value.contains(point)
+        }
+        guard hits.count == 1, let hit = hits.first else { return }
+        mouseDownFloatingWindowID = hit.key
+        mouseDownFloatingFrame = hit.value
+    }
 
-        let cgY = displayManager.primaryScreenHeight - mouseNS.y
-        let cgPoint = CGPoint(x: mouseNS.x, y: cgY)
-
-        // live frame reads over cached windows, not a full getAllWindows()
-        // enumeration — that walked every app on every physical click
-        // (~8-9 AX round-trips per window, main thread). the cache only
-        // misses windows created since the last poll (<1s), which aren't
-        // tracked as swap candidates yet anyway.
-        for (id, w) in stateCache.cachedWindows {
-            guard workspaceManager.isWindowVisible(id),
-                  let frame = w.frame ?? w.cachedFrame else { continue }
-            if stateCache.floatingWindowIDs.contains(id) {
-                if mouseDownFloatingWindowID == 0, frame.contains(cgPoint) {
-                    mouseDownFloatingWindowID = id
-                    mouseDownFloatingFrame = frame
-                }
-                continue
-            }
-            mouseDownTiledFrames[id] = frame
+    private func visibleFloatingWindows() -> [HyprWindow] {
+        stateCache.floatingWindowIDs.compactMap { id in
+            guard workspaceManager.isWindowVisible(id) else { return nil }
+            return stateCache.cachedWindows[id]
         }
     }
 
     /// Arm the live dim-carve override if the press landed on a visible
     /// ordinary floating window and dim is active (normal mode). Reuses the
-    /// hit AND the frame already read by captureMouseDownFrames — no new AX
+    /// hit AND the frame read by verified tiled-drag capture — no new AX
     /// queries. The anchor pair must be sampled consistently: the frame
     /// from the mouse-down enumeration with the event's click point. A
     /// fresh `w.frame` here still reports the pre-drag position (Tahoe AX
@@ -2098,9 +2083,7 @@ class WindowManager {
     /// Once `applyChanges` is called, the apply-loop runs unconditionally.
     ///
     /// Coalesced with notification-driven schedules by `PollingScheduler`,
-    /// which also honors the `cross-swap-in-flight` suppression so a
-    /// cross-monitor drag-swap completes without pollers stomping on its
-    /// in-flight tree mutations.
+    /// which stays suppressed until verified drag completion finishes.
     private func pollWindowChanges() {
         // mouse-down is handled by the scheduler's isSuppressed closure so
         // event polls defer instead of dropping; this guard only backstops
@@ -2419,5 +2402,121 @@ class WindowManager {
         hyprLog(.debug, .lifecycle, "retile all spaces requested")
         scratchpad.hide(reason: .workspaceAction)
         snapshotAndTile()
+    }
+}
+
+private extension WindowManager {
+    private func makeTiledDragHandler() -> TiledDragHandler {
+        TiledDragHandler(
+            capture: { [weak self] point, publish in
+                guard let self, self.isRunning, !self.scratchpad.isVisible,
+                      let screen = self.exactScreen(containing: point) else {
+                    return .ineligible(.noTarget)
+                }
+                let displayID = self.tiledDragDisplayID(screen)
+                return self.tilingEngine.captureTiledDrag(
+                    pointer: point,
+                    occludingWindows: self.visibleFloatingWindows(),
+                    currentLocation: { [weak self] in
+                        guard let self, self.isRunning else { return nil }
+                        let matches = self.displayManager.screens.filter {
+                            self.tiledDragDisplayID($0) == displayID
+                        }
+                        guard matches.count == 1, let screen = matches.first else { return nil }
+                        return (self.workspaceManager.workspaceForScreen(screen), screen,
+                                self.stateCache.floatingWindowIDs)
+                    },
+                    onCapturedFrames: publish)
+            },
+            drop: { [weak self] snapshot, mode in
+                guard let self, self.isRunning else { return .superseded }
+                return self.tilingEngine.dropTiledDrag(
+                    snapshot,
+                    mode: mode,
+                    currentLocation: { [weak self] in self?.tiledDragLocation(for: snapshot) })
+            },
+            resolveTarget: { pointer, snapshot in
+                guard snapshot.context.usableFrame.contains(pointer) else { return nil }
+                return TiledDragTargetResolver.resolve(pointer: pointer, snapshot: snapshot)
+            },
+            schedule: { delay, work in
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+            },
+            capturedFrames: { [weak self] frames in self?.acceptTiledDragCapture(frames) },
+            readCache: { [weak self] in self?.stateCache.tiledPositions ?? [:] },
+            writeCache: { [weak self] frames in self?.stateCache.tiledPositions = frames },
+            completion: { [weak self] completion in self?.completeTiledDrag(completion) },
+            captureFailure: { [weak self] result in self?.reportTiledDragCaptureFailure(result) })
+    }
+
+    private func exactScreen(containing point: CGPoint) -> NSScreen? {
+        let matches = displayManager.screens.filter { displayManager.cgRect(for: $0).contains(point) }
+        return matches.count == 1 ? matches[0] : nil
+    }
+
+    private func tiledDragLocation(for snapshot: TiledDragSnapshot)
+        -> (workspace: Int, screen: NSScreen, floatingIDs: Set<CGWindowID>)? {
+        guard isRunning else { return nil }
+        let screens = displayManager.screens.filter {
+            tiledDragDisplayID($0) == snapshot.context.physicalDisplayID
+        }
+        guard screens.count == 1, let screen = screens.first,
+              workspaceManager.workspaceForScreen(screen) == snapshot.context.workspace,
+              snapshot.context.memberIDs.allSatisfy({
+                  workspaceManager.workspaceFor($0) == snapshot.context.workspace
+              }) else { return nil }
+        return (snapshot.context.workspace, screen, stateCache.floatingWindowIDs)
+    }
+
+    private func tiledDragDisplayID(_ screen: NSScreen) -> CGDirectDisplayID {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?
+            .uint32Value ?? 0
+    }
+
+    private func completeTiledDrag(_ completion: TiledDragCompletion) {
+        let affected = completion.snapshot.context.memberIDs
+        switch completion.outcome {
+        case let .committed(_, frames), let .rejectedRestored(_, frames):
+            for id in affected {
+                stateCache.cachedWindows[id]?.cachedFrame = frames[id]
+            }
+            if let id = focusBorder.trackedWindowID, let frame = frames[id] {
+                focusBorder.updatePosition(frame)
+            }
+            if focusBrackets.isVisible, let id = focusBrackets.trackedWindowID,
+               let frame = frames[id] {
+                focusBrackets.updatePosition(frame)
+            }
+            refreshDimming(tiledRectsOverride: stateCache.tiledPositions)
+            if case let .rejectedRestored(reason, _) = completion.outcome,
+               reason != .preflight(.noTarget) {
+                let frame = completion.snapshot.originalFrames[completion.snapshot.draggedID]
+                    ?? completion.snapshot.context.usableFrame
+                focusBorder.flashError(around: frame, windowID: completion.snapshot.draggedID,
+                                       window: nil,
+                                       message: "Arrangement rejected; previous positions restored")
+            }
+        case .degraded:
+            for id in affected { stateCache.cachedWindows[id]?.cachedFrame = nil }
+            if let id = focusBorder.trackedWindowID, affected.contains(id) { focusBorder.hide() }
+            if let id = focusBrackets.trackedWindowID, affected.contains(id) { focusBrackets.hide() }
+            dimmingOverlay.hideAll()
+            reportTiledDragFailure(completion)
+        case .superseded, .ignored:
+            break
+        }
+    }
+
+    private func reportTiledDragCaptureFailure(_ result: TiledDragCaptureResult) {
+        guard case .unknown = result, let point = mouseDownPointCG else { return }
+        focusBorder.flashError(around: CGRect(x: point.x - 1, y: point.y - 1, width: 2, height: 2),
+                               windowID: 0, window: nil, message: "Could not verify window positions")
+    }
+
+    private func reportTiledDragFailure(_ completion: TiledDragCompletion) {
+        let frame = completion.snapshot.originalFrames[completion.snapshot.draggedID]
+            ?? completion.snapshot.context.usableFrame
+        focusBorder.flashError(around: frame, windowID: completion.snapshot.draggedID,
+                               window: nil, message: "Could not restore the tiled layout")
     }
 }

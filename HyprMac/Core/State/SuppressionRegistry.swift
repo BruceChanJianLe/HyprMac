@@ -12,11 +12,6 @@ import Foundation
 ///   `appDidActivate` after a programmatic focus or raise (≈ 0.5 s).
 /// - `"mouse-focus"` — gates focus-follows-mouse after a keyboard action,
 ///   workspace switch, drag, or floater raise (0.15–0.3 s).
-/// - `"cross-swap-in-flight"` — registered by `DragSwapHandler` for the
-///   ≈ 800 ms duration of a cross-monitor drag-swap; honored by
-///   `PollingScheduler` so timer and notification triggers do not race
-///   the swap's two synchronous retiles.
-///
 /// Reentrancy guards (e.g. `FloatingWindowController.isRaisingFloaters`)
 /// and in-flight scheduling tokens (e.g. `PollingScheduler`'s coalesce
 /// flag) intentionally do not live here — those are not time gates.

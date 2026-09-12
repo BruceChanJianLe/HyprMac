@@ -36,6 +36,7 @@ the cache and adds an unnecessary syscall on every conversion.
 | Source | Sink | Conversion |
 |---|---|---|
 | `NSEvent.mouseLocation` (NS) | hit-test against tile rects (CG) | `cg = primaryScreenHeight - ns_y` |
+| Drag event `cgEvent.location` (CG) | press and release target hit-test | use the event point directly; AppKit fallback converts once |
 | `HyprWindow.frame` (CG, from AX) | `NSPanel.setFrame` (NS) | `ns_y = primaryScreenHeight - cg_y - height` |
 | `screen.frame` (NS) | `DisplayManager.cgRect(for:)` (CG) | as above, applied to `visibleFrame` |
 | `CGWindowListCopyWindowInfo` bounds (CG) | overlap math against `screen.frame` (NS) | as above |
@@ -43,6 +44,11 @@ the cache and adds an unnecessary syscall on every conversion.
 `DisplayManager` owns the canonical `cgRect(for screen: NSScreen)`
 helper. New code that needs a CG-space rect for a screen should call
 it rather than re-deriving the math inline.
+
+Tiled insertion captures mouse-down and mouse-up event points before AX
+work or deferred scheduling. It does not sample the live cursor to choose
+the release target. Source matching requires exact screen containment and
+physical display identity; it does not use the nearest-screen fallback.
 
 ## Multi-monitor
 

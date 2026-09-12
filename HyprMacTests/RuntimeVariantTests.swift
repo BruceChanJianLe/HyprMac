@@ -4,11 +4,14 @@ import XCTest
 final class RuntimeVariantTests: XCTestCase {
     func testReleaseOnboardingPolicy() {
         XCTAssertEqual(RuntimeVariant.shouldShowWelcome(
-            hasSeenOnboarding: false, lastVersion: nil, currentVersion: "0.12.0"), .firstRun)
+            hasSeenOnboarding: false, lastVersion: nil, currentVersion: "0.12.0",
+            debugApp: false), .firstRun)
         XCTAssertEqual(RuntimeVariant.shouldShowWelcome(
-            hasSeenOnboarding: true, lastVersion: "0.11.0", currentVersion: "0.12.0"), .whatsNew)
+            hasSeenOnboarding: true, lastVersion: "0.11.0", currentVersion: "0.12.0",
+            debugApp: false), .whatsNew)
         XCTAssertNil(RuntimeVariant.shouldShowWelcome(
-            hasSeenOnboarding: true, lastVersion: "0.12.0", currentVersion: "0.12.0"))
+            hasSeenOnboarding: true, lastVersion: "0.12.0", currentVersion: "0.12.0",
+            debugApp: false))
     }
 
     func testReleaseDefaultsDoNotInheritAnotherDomain() throws {
@@ -17,7 +20,16 @@ final class RuntimeVariantTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         XCTAssertFalse(RuntimeVariant.inheritedBool(
             forKey: "iCloudSyncEnabled", standard: defaults,
-            releaseDomain: ["iCloudSyncEnabled": true]))
+            releaseDomain: ["iCloudSyncEnabled": true], debugApp: false))
+    }
+
+    func testDefaultPolicyMatchesCompiledVariant() throws {
+        let suite = "RuntimeVariantTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertEqual(RuntimeVariant.inheritedBool(
+            forKey: "iCloudSyncEnabled", standard: defaults,
+            releaseDomain: ["iCloudSyncEnabled": true]), RuntimeVariant.isDebugApp)
     }
 
     func testDebugDefaultsPreferLocalThenReadReleaseFallback() throws {

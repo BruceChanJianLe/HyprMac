@@ -3,23 +3,45 @@ set -euo pipefail
 
 # run the suite without starting the window manager or loading live settings
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-AUDIT_DIR="$ROOT/build/isolated-tests"
-mkdir -p "$AUDIT_DIR/home"
+AUDIT_DIR="$ROOT/build/sizing/isolated-tests"
+mkdir -p "$AUDIT_DIR/home" "$AUDIT_DIR/cache" "$AUDIT_DIR/tmp"
 
-if [[ $# -lt 1 ]]; then
-    echo "Usage: $0 /path/to/Sparkle.xcframework [XCTest selection]" >&2
+MODE=sparkle
+SPARKLE_FRAMEWORK=
+SELECTION=All
+if [[ "${1:-}" == "--debug-variant" ]]; then
+    MODE=without_sparkle
+    SELECTION="${2:-All}"
+elif [[ $# -ge 1 ]]; then
+    SPARKLE_FRAMEWORK=$(cd "$1" && pwd)
+    SELECTION="${2:-All}"
+else
+    echo "Usage: $0 --debug-variant [XCTest selection]" >&2
+    echo "       $0 /path/to/Sparkle.xcframework [XCTest selection]" >&2
     exit 2
 fi
-SPARKLE_FRAMEWORK=$(cd "$1" && pwd)
-export CFFIXED_USER_HOME="$AUDIT_DIR/home"
 
-python3 - "$ROOT" "$AUDIT_DIR" "$SPARKLE_FRAMEWORK" <<'PY'
+export CFFIXED_USER_HOME="$AUDIT_DIR/home"
+export XDG_CACHE_HOME="$AUDIT_DIR/cache"
+export CLANG_MODULE_CACHE_PATH="$AUDIT_DIR/cache/clang"
+export SWIFTPM_MODULECACHE_OVERRIDE="$AUDIT_DIR/cache/swiftpm"
+export TMPDIR="$AUDIT_DIR/tmp"
+export HYPRMAC_HEADLESS_TESTS=1
+
+python3 - "$ROOT" "$AUDIT_DIR" "$MODE" "$SPARKLE_FRAMEWORK" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-root, audit, sparkle = map(Path, sys.argv[1:])
+root = Path(sys.argv[1])
+audit = Path(sys.argv[2])
+mode = sys.argv[3]
+sparkle = Path(sys.argv[4]) if sys.argv[4] else None
 quoted = lambda path: json.dumps(str(path))
+dependencies = "" if mode == "without_sparkle" else f'''    dependencies:
+      - framework: {quoted(sparkle)}
+'''
+variant_settings = "        SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG HYPRMAC_DEBUG_VARIANT\n" if mode == "without_sparkle" else ""
 spec = f'''name: HyprMacIsolatedTests
 options:
   deploymentTarget:
@@ -37,13 +59,11 @@ targets:
     sources:
       - path: {quoted(root / "HyprMac")}
         excludes: ["App/HyprMacApp.swift", "Resources", "Info.plist", "*.entitlements"]
-    dependencies:
-      - framework: {quoted(sparkle)}
-    settings:
+{dependencies}    settings:
       base:
         PRODUCT_MODULE_NAME: HyprMac
         ENABLE_TESTABILITY: YES
-  HyprMacTests:
+{variant_settings}  HyprMacTests:
     type: bundle.unit-test
     platform: macOS
     sources:
@@ -75,4 +95,4 @@ xcodebuild build-for-testing \
 PRODUCTS="$AUDIT_DIR/derived/Build/Products/Debug"
 export DYLD_LIBRARY_PATH="$PRODUCTS"
 export DYLD_FRAMEWORK_PATH="$PRODUCTS"
-xcrun xctest -XCTest "${2:-All}" "$PRODUCTS/HyprMacTests.xctest"
+xcrun xctest -XCTest "$SELECTION" "$PRODUCTS/HyprMacTests.xctest"

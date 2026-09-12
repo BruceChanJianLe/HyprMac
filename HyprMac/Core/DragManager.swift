@@ -1,5 +1,5 @@
-// Heuristics for classifying mouse-driven drags on tiled windows. Pure
-// classification — `DragSwapHandler` applies whatever this returns.
+// Legacy pure classifier retained for focused regression tests. Production
+// tiled drags use the verified transaction path.
 
 import Cocoa
 
@@ -7,8 +7,7 @@ import Cocoa
 /// gestures on tiled windows.
 ///
 /// Compares mouse-down frames against post-mouse-up frames and decides
-/// what the user did. Output is one of `DetectionResult`'s cases; the
-/// caller (`DragSwapHandler`) applies the side effects.
+/// what the user did. Output is one of `DetectionResult`'s cases.
 class DragManager {
 
     /// Classification: window was resized in place. `newFrame` is the

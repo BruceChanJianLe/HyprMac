@@ -54,7 +54,8 @@ final class ToggleSplitFallthroughRegressionTests: XCTestCase {
         appLauncher = AppLauncherManager()
 
         workspaceManager = WorkspaceManager(displayManager: displayManager)
-        tilingEngine = TilingEngine(displayManager: displayManager)
+        tilingEngine = TilingEngine(displayManager: displayManager,
+                                    frameSizingIOFactory: acceptingFrameSizingIOFactory())
 
         workspaceOrchestrator = WorkspaceOrchestrator(
             workspaceManager: workspaceManager,

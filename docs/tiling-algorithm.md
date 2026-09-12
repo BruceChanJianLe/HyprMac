@@ -115,32 +115,33 @@ refuse to shrink past their floor. The first pass writes target
 frames and reads back what the OS actually accepted. When pass 1
 reveals an oversize, pass 2 redistributes the parent's split ratio.
 
-Pass 1:
-1. `BSPTree.layout` produces `[(window, frame)]` pairs from the
-   current ratios.
-2. `HyprWindow.setFrameWithReadback` applies each frame and reads
-   back the actual size.
-3. `FrameReadbackPoller` polls the actual frames until they settle
-   (consecutive matching reads within `readbackStableTolerancePx`)
-   or `readbackMaxWait` (0.36 s) elapses.
-4. Frames within `frameToleranceXPx` (20 px) of the target are
-   "accepted"; oversize readings that survive
-   `readbackMinConflictSettle` (0.24 s) become "conflicts".
-5. Per-axis oversize observations feed `MinSizeMemory` so future
-   layout decisions know about the constraint.
+The engine first captures every affected window's actual position and
+size. `FrameSizingAttempt` applies each requested frame in resize–move–resize
+order, retains AX write errors, and reads the complete layout back. Two
+stable samples are required. Position and size may differ by at most one
+AX point, but usable-screen containment, positive-area overlap, and the
+configured gap are checked separately across every pair of windows.
 
-Pass 2 (only when pass 1 reported conflicts):
-1. `BSPTree.adjustForMinSizes` walks each conflict and adjusts the
-   parent's `splitRatio` to give the constrained window more room.
-   Cascade is intentionally bounded to one parent — a multi-level
-   cascade would destabilize the layout.
-2. New ratios are clamped to `[minRatio, maxRatio]`.
-3. The layout is recomputed and re-applied.
-4. If pass 2 still overflows, the engine either auto-floats the
-   inserted window (when there is a clear "newly inserted" target)
-   or preserves recorded mins for the caller's post-retile fit
-   check (the swap path) or discards the min-size adjustment and
-   falls back to the pass-1 layout (the no-inserted-target path).
+Each attempt has a 0.36-second monotonic deadline and a 12-sample limit.
+Time inside AX calls counts toward that deadline. Individual AX calls use
+a 0.1-second messaging timeout; synchronous calls cannot be interrupted by
+the Swift deadline. Stable off-target frames wait at least 0.24 seconds
+before becoming a geometry rejection. Failed reads and superseded work
+never become accepted geometry.
+
+Only a known, stable size conflict permits a second pass.
+`BSPTree.adjustForMinSizes` adjusts constrained ratios, and the final
+adjusted layout goes through the same complete verification. If that pass
+fails, the engine restores the prior ratio snapshot and writes the captured
+original frames once, then verifies restoration. Results distinguish
+accepted geometry, rejected geometry with verified restoration, and a
+degraded state whose restoration could not be verified. Superseded work
+does not restore frames over a newer operation.
+
+Normal smart insertion can still auto-float a new window when no leaf fits.
+The old post-readback overflow auto-floating path remains disabled. Target
+insertion uses one candidate pass and one possible restoration, without
+ratio adjustment, eviction, or automatic floating.
 
 ## Min-size memory
 
@@ -167,7 +168,7 @@ consistent values.
 
 ## Swap
 
-Direction swap (`Hypr+Shift+Arrow`) and drag swap go through
+Direction swap (`Hypr+Shift+Arrow`) goes through
 `canSwapWindows` first. The check:
 
 1. Snapshot the tree.
@@ -178,56 +179,54 @@ Direction swap (`Hypr+Shift+Arrow`) and drag swap go through
    resulting layout fits every recorded min size.
 5. Restore the snapshot and return the answer.
 
-When `canSwapWindows` accepts but the post-swap pass-1 readback
-reveals an overflow (the seeded min was wrong), the swap reverts via
-`pendingSwapRevert` (animated path) or the inline snapshot in
-`swapWindows` (synchronous path). Rejection beeps and flashes a red
-`focusBorder.flashError` around the source window.
+The synchronous `swapWindows` path returns true only after verified
+acceptance. A rejected attempt restores the prior tree and captured actual
+frames, with restoration verified separately. Keyboard rejection retains
+its existing feedback behavior.
 
-## Cross-monitor swap
+## Pointer target insertion
 
-`crossSwapWindows` swaps two windows across `(workspace, screen)`
-trees by exchanging their leaf references in place. Both screens
-retile.
+`TiledDragHandler` owns a press snapshot and a deferred release. It captures
+the actual frames of the source tree and visible floating occluders once.
+A press must hit exactly one tile and no occluder. Floating and scratchpad
+presses do not start tiled insertion.
 
-The two retile passes run synchronously back-to-back (~720 ms total
-of `Thread.sleep` readback). `DragSwapHandler` registers
-`SuppressionRegistry["cross-swap-in-flight"]` for ~800 ms and
-`PollingScheduler` honors that key, so timer / notification polls do
-not race the in-flight cross-swap and observe windows mid-mutation.
+The mouse-up event supplies the release point and Option state. After the
+100 ms settle delay, a bounded read of the captured dragged window separates
+manual resizing from movement. A width or height change greater than 20 AX
+points produces a resize candidate. Position and size changes within one
+point are ignored, so text selection does not rearrange unmoved windows.
 
-## Drag classification
+An ordinary move chooses a target from the release point within the source
+workspace and physical display. The nearest normalized target edge selects
+left, right, top, or bottom insertion; ties use that order. Option at release
+requests a same-tree swap instead. A release without a target restores and
+verifies the captured frames. Cross-monitor and cross-workspace insertion
+are excluded.
 
-`DragManager.detect` compares mouse-down frames against post-mouse-up
-frames and produces one of:
+`BSPTree.candidateTree` clones the source, removes the dragged leaf, and
+splits the target on the selected side. Horizontal splits create columns;
+vertical splits create rows. The candidate preserves unrelated node state
+and exact membership. Every leaf must satisfy Max Splits before candidate
+writes. Restoration writes remain available when a candidate fails preflight.
+This hard limit also applies to modifier swaps and manual resize candidates;
+an existing tree deeper than a newly lowered limit is restored rather than
+applied. Keyboard swapping retains its existing path.
 
-- **resize** — width or height changed by more than 20 px. Sub-cases
-  filter out app min-size-overflow false positives (the app refused
-  to shrink) by checking `observedMinSize`.
-- **swap** — same-monitor or cross-monitor; window dragged onto
-  another tiled slot.
-- **dragToEmpty** — cross-monitor drag onto an empty workspace.
-- **snapBack** — small movement under thresholds, treat as user
-  cancellation; just retile.
-- **none** — nothing actionable.
-
-`DragSwapHandler` applies the classified result. The 0.1 s settle
-delay before classification gives macOS time to commit the final
-dragged frame before AX queries it.
+The engine applies the candidate through the verified sizing transaction
+and replaces the mapped tree only after all resulting frames are accepted.
+Failure leaves the old topology in place and verifies actual pre-drag frame
+restoration. Failed restoration is reported as degraded; stale work stops
+without overwriting newer geometry. The finishing flag suppresses polling
+through the settle delay and transaction, without a fixed expiry timer.
 
 ## `prepareTileLayout` / `prepareSwapLayout` / `prepareToggleSplitLayout`
 
-These methods mutate the tree before returning the new layout rects.
-Animation paths (`ActionDispatcher.swapInDirection`, `toggleSplit`,
-`WindowManager.animatedRetile`) use them to compute the target rects
-the animator interpolates toward; `applyComputedLayout` commits the
-mutation by re-running the two-pass layout.
-
-The contract: once `prepare*Layout` returns, the tree is committed
-to the post-mutation state regardless of what the caller does with
-the returned rects. `prepareSwapLayout` captures a pre-swap snapshot
-on `pendingSwapRevert` so `applyComputedLayout` can restore on
-post-readback overflow.
+These methods calculate layouts after provisional tree changes.
+`prepareSwapLayout` and `prepareToggleSplitLayout` capture actual frames
+and the prior tree state for a later verified `applyComputedLayout` call.
+They currently have test callers; keyboard actions use synchronous verified
+paths. A superseding operation invalidates prepared rollback data.
 
 The synchronous paths (`tileWindows`, `swapWindows`, `toggleSplit`)
 do not use `prepare*Layout` — they apply frames directly and own
@@ -275,10 +274,10 @@ home-screen migration path in `handleDisplayChange`.
 `TilingEngine` is over the 350-line target documented in the
 refactor plan. The action-method cluster (`tileWindows`,
 `prepareTileLayout`, `addWindow`, `removeWindow`, `applyResize`,
-`swapWindows`, `crossSwapWindows`, `toggleSplit`, `resizeInDirection`,
+`swapWindows`, `toggleSplit`, `resizeInDirection`,
 `prepareSwapLayout`, `prepareToggleSplitLayout`,
-`forceInsertWindow`, `canFitWindow`) plus `retile` and the
-`autoFloatOverflow` fallback is the engine's external API;
+`forceInsertWindow`, `canFitWindow`) plus verified drag capture/drop and
+`retile` make up the engine's orchestration surface;
 extracting them would require splitting the engine into a thin
 orchestrator over a sibling type, which produces ceremony without
 removing duplication. The decomposition is left for a future cycle.

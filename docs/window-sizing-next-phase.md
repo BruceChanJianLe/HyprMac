@@ -2,16 +2,21 @@
 
 ## Status and scope
 
-This is a research and implementation brief for the phase after the UX stability audit is merged. It does not implement target insertion or change the sizing engine.
+This brief records the research and source analysis for baseline commit
+`6056c7050741151edc1ed3f5796df03c1b2a8c10`. Descriptions of "current"
+behavior below refer to that baseline. Implementation behavior is documented
+in [tiling-algorithm.md](tiling-algorithm.md), and execution evidence and
+remaining checks are in [window-sizing-verification.md](window-sizing-verification.md).
+The audit and installation figures below are historical, not a new live check.
 
 Zach has exercised the current audit build and reports that those changes are working well. The verified audit baseline is 281 tests with 55 display-dependent skips and no failures. SwiftLint reports 200 violations and 15 errors versus the existing baseline of 201 violations and 16 errors, so the audit adds no lint errors. The canonical laptop build is `HyprMac Debug` 0.12.0 (82.1), bundle identifier `com.zachgray.HyprMac.debug`, source marker `08ec4f1adbef+51764a1a18cb`, with live Accessibility trust verified.
 
 The next phase should remain narrow:
 
-- Preserve SIP. Use public Accessibility APIs and the existing non-injecting architecture.
+- Preserve SIP. Use Accessibility APIs for sizing and add no new injection or SIP dependency; HyprMac's existing focus and Space support still contains private SkyLight and CGS calls.
 - Improve sizing verification before changing drag behavior.
 - Add same-workspace, same-monitor target insertion only after that foundation is tested.
-- Keep Max Splits as a hard per-monitor limit.
+- Keep Max Splits as a hard per-monitor BSP-depth limit.
 - Preserve keyboard swapping. A simple modifier can preserve drag swapping if it remains easy to explain and test.
 - Avoid layout presets, cross-monitor insertion, scratchpad insertion, continuous rearrangement during drag, automatic eviction, and new auto-floating behavior in the first version.
 
@@ -33,19 +38,21 @@ Primary references:
 - Apple, `AXUIElementSetAttributeValue`: <https://developer.apple.com/documentation/applicationservices/1460434-axuielementsetattributevalue>
 - Apple, `AXObserverAddNotification`: <https://developer.apple.com/documentation/applicationservices/1462089-axobserveraddnotification>
 - Apple, `NSWindow`: <https://developer.apple.com/documentation/appkit/nswindow>
-- AeroSpace window frame application: <https://github.com/nikitabobko/AeroSpace/blob/39e519044725694635712c739df9ca40ae78c5d1/Sources/AppBundle/tree/MacApp.swift#L411-L439>
-- Yabai window frame application: <https://github.com/asmvik/yabai/blob/dd845723416f5fe92af49fad5ebab00369e07edd/src/window_manager.c#L729-L766>
+- AeroSpace window frame application: <https://github.com/nikitabobko/AeroSpace/blob/39e519044725694635712c739df9ca40ae78c5d1/Sources/AppBundle/tree/MacApp.swift#L374-L397>
+- Yabai window frame application: <https://github.com/asmvik/yabai/blob/dd845723416f5fe92af49fad5ebab00369e07edd/src/window_manager.c#L667-L685>
 - Yabai SIP documentation: <https://github.com/asmvik/yabai/wiki/Disabling-System-Integrity-Protection>
 
 ## Current HyprMac behavior
 
-HyprMac already has a binary split tree capable of four vertical columns. The observed half-screen-heavy result comes from insertion policy rather than a structural limitation. Smart insertion searches eligible leaves, chooses a split orientation from geometry, honors minimum-slot estimates and Max Splits, and auto-floats a new window when no fitting leaf exists. Adding members clears user-set ratios and resets split ratios, which works against deliberately constructed layouts.
+HyprMac already has a binary split tree capable of four vertical columns. The observed half-screen-heavy result comes from insertion policy rather than a structural limitation. Smart insertion searches eligible leaves, chooses a split orientation from geometry, honors minimum-slot estimates and Max Splits, and auto-floats a new window when no fitting leaf exists. Max Splits is currently implemented as maximum BSP depth, so candidate insertion must validate the resulting leaf depth rather than compare a flat window count. Adding members clears user-set ratios and resets split ratios, which works against deliberately constructed layouts.
 
 Current drag handling detects a moved tiled window using its post-drag frame, uses the dragged window's center to choose a target slot, then swaps the two window occupants. It does not reparent a leaf or create a split around the target. Hyprland's Dwindle layout is the useful behavioral reference: a moved tiled window can be removed and inserted around a target, while split direction can be selected or preserved. Relevant upstream references are:
 
 - Dwindle configuration: <https://wiki.hypr.land/configuring/layouts/dwindle-layout/>
-- Hyprland drag controller: <https://github.com/hyprwm/Hyprland/blob/f05d73f35795ded80d7e1264a37e41b461625f9f/src/layout/supplementary/DragController.cpp#L252>
-- Dwindle insertion: <https://github.com/hyprwm/Hyprland/blob/f05d73f35795ded80d7e1264a37e41b461625f9f/src/layout/algorithm/tiled/dwindle/DwindleAlgorithm.cpp#L67>
+- Hyprland drag controller: <https://github.com/hyprwm/Hyprland/blob/f05d73f35795ded80d7e1264a37e41b461625f9f/src/layout/supplementary/DragController.cpp#L255-L293>
+- Dwindle insertion: <https://github.com/hyprwm/Hyprland/blob/f05d73f35795ded80d7e1264a37e41b461625f9f/src/layout/algorithm/tiled/dwindle/DwindleAlgorithm.cpp#L75-L138>
+
+Hyprland is an interaction and topology reference, not a sizing-contract reference. As the compositor, it owns target geometry and can query target constraints that an external macOS Accessibility client cannot.
 
 The closest local paths are:
 
@@ -62,7 +69,7 @@ The closest local paths are:
 
 The current two-pass design is a sound starting point, but it does not yet provide the acceptance boundary needed for structural drag operations:
 
-1. `HyprWindow` property setters discard `AXError`. A failed write and a successful asynchronous write are not distinguished at the call site.
+1. `HyprWindow` property setters discard `AXError`. A failed write and a successful asynchronous write are not distinguished at the call site. Its getters also ignore the copy and conversion results and force-cast any non-nil value as `AXValue`, so a missing, malformed, or wrong-typed read is not represented safely.
 2. Readback treats a failed position read as the requested position. It primarily classifies dimensions, so a correctly sized window that refused its position can be accepted while overlapping another tile.
 3. On unsettled or undersized outcomes, some paths cache or reapply the requested frame. Internal geometry can therefore diverge from the actual window.
 4. The adjusted second pass is applied without a second readback. The final state is assumed after only the first candidate was observed.
@@ -84,7 +91,7 @@ The deadline must be elapsed monotonic time, including time spent inside AX call
 
 Verify the complete affected layout after every final write, including the adjusted pass. Check position, dimensions, usable-screen containment, pairwise overlap, and gaps using tolerances that cannot silently consume the configured gap. Exact tolerance values should come from deterministic tests and live measurements rather than preserving the current 20-point constant by assumption.
 
-Do not auto-float or evict existing windows when target insertion fails. Leave the tree unchanged and restore actual pre-drag frames. Existing normal insertion overflow behavior can remain unchanged unless a separate reproduced bug justifies changing it.
+Do not auto-float or evict existing windows when target insertion fails. Leave the tree unchanged and restore actual pre-drag frames. Existing normal insertion can still auto-float when no fitting leaf exists. Its post-readback `autoFloatOverflow` path is currently disabled: it logs the apparent overflow and leaves the inserted window tiled because stale readback previously caused floating cascades. Keep that separate behavior unchanged unless a reproduced bug justifies changing it.
 
 ## Minimal target-insertion transaction
 

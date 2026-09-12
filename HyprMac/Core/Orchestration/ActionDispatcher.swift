@@ -18,8 +18,8 @@ import Cocoa
 ///
 /// What does not live here: workspace switch/move/cycle (in
 /// `WorkspaceOrchestrator`), float/cycle/raise (in
-/// `FloatingWindowController`), drag-result application (in
-/// `DragSwapHandler`).
+/// `FloatingWindowController`), and tiled drag transactions (in
+/// `TiledDragHandler`).
 ///
 /// Closure handles plumb in WM-side helpers without a service home:
 /// `currentFocusedWindow`, `updateFocusBorder`, `updatePositionCache`,
@@ -386,9 +386,8 @@ final class ActionDispatcher {
         updatePositionCache()
     }
 
-    /// Beep and flash a red border around `window` to signal a rejected
-    /// swap. Exposed publicly so `DragSwapHandler` can route cross-monitor
-    /// rejections through the same feedback as direction swaps.
+    /// Beep and flash a red border around `window` when a keyboard swap is
+    /// rejected.
     func rejectSwap(_ window: HyprWindow, reason: String) {
         hyprLog(.debug, .orchestration, "\(reason) — rejected swap")
         NSSound.beep()

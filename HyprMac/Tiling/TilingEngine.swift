@@ -15,6 +15,13 @@ private struct TilingKey: Hashable {
     }
 }
 
+private struct TiledDragOccluderContext: Equatable {
+    let workspace: Int
+    let physicalDisplayID: CGDirectDisplayID
+    let usableFrame: CGRect
+    let floatingIDs: Set<CGWindowID>
+}
+
 /// Owner of every BSP tree HyprMac maintains.
 ///
 /// One tree per `(workspace, screen)` pair. Keeps gap/padding tunables,
@@ -26,6 +33,8 @@ private struct TilingKey: Hashable {
 ///
 /// Threading: main-thread only.
 class TilingEngine {
+    typealias LayoutApplicationOutcome = FrameSizingTransaction.Outcome
+
     /// Pseudo-workspace the scratchpad layer's tree lives on. Matches
     /// `ScratchpadController.workspace`; kept local so the engine has no
     /// dependency on the controller.
@@ -37,16 +46,22 @@ class TilingEngine {
 
     /// Gap between adjacent tiles, in pixels. Default from
     /// `TilingConfig.defaultGap`; runtime-tunable from the settings UI.
-    var gapSize: CGFloat = TilingConfig.defaultGap
+    var gapSize: CGFloat = TilingConfig.defaultGap {
+        didSet { if gapSize != oldValue { invalidatePendingLayout() } }
+    }
 
     /// Padding between tiles and the screen edge, in pixels.
     /// Runtime-tunable.
-    var outerPadding: CGFloat = TilingConfig.defaultOuterPadding
+    var outerPadding: CGFloat = TilingConfig.defaultOuterPadding {
+        didSet { if outerPadding != oldValue { invalidatePendingLayout() } }
+    }
 
     /// Per-screen max BSP depth overrides, keyed by
     /// `NSScreen.localizedName`. Falls back to
     /// `TilingConfig.defaultMaxDepth` for screens without an override.
-    var maxSplitsPerMonitor: [String: Int] = [:]
+    var maxSplitsPerMonitor: [String: Int] = [:] {
+        didSet { if maxSplitsPerMonitor != oldValue { invalidatePendingLayout() } }
+    }
 
     /// Effective max depth for `screen`, honoring any per-screen
     /// override.
@@ -56,7 +71,9 @@ class TilingEngine {
 
     /// Minimum child dimension (px) below which smart insert
     /// backtracks to a shallower leaf.
-    var minSlotDimension: CGFloat = TilingConfig.minSlotDimension
+    var minSlotDimension: CGFloat = TilingConfig.minSlotDimension {
+        didSet { if minSlotDimension != oldValue { invalidatePendingLayout() } }
+    }
 
     /// Fired when a window cannot enter the tree (max depth reached
     /// even after smart-insert backtracking). The caller is expected to
@@ -64,9 +81,31 @@ class TilingEngine {
     var onAutoFloat: ((HyprWindow) -> Void)?
 
     private let minSizes = MinSizeMemory()
+    private var layoutGeneration: UInt64 = 0
+    private let frameSizingIOFactory: ([CGWindowID: HyprWindow], @escaping () -> UInt64) -> FrameSizingIO
+    private let tiledDragDisplayID: (NSScreen) -> CGDirectDisplayID
 
-    init(displayManager: DisplayManager) {
+    init(displayManager: DisplayManager,
+         frameSizingIOFactory: @escaping ([CGWindowID: HyprWindow], @escaping () -> UInt64) -> FrameSizingIO = FrameSizingIO.accessibility,
+         tiledDragDisplayID: @escaping (NSScreen) -> CGDirectDisplayID = {
+             ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?
+                 .uint32Value ?? 0
+         }) {
         self.displayManager = displayManager
+        self.frameSizingIOFactory = frameSizingIOFactory
+        self.tiledDragDisplayID = tiledDragDisplayID
+    }
+
+    @discardableResult
+    internal func beginLayoutGeneration() -> UInt64 {
+        layoutGeneration &+= 1
+        return layoutGeneration
+    }
+
+    @discardableResult
+    private func invalidatePendingLayout() -> UInt64 {
+        pendingSwapRevert = nil
+        return beginLayoutGeneration()
     }
 
     /// Seed `MinSizeMemory` from current AX values for every window.
@@ -88,6 +127,7 @@ class TilingEngine {
     func removeWindowID(_ windowID: CGWindowID) {
         for (_, t) in trees {
             guard let w = t.allWindows.first(where: { $0.windowID == windowID }) else { continue }
+            invalidatePendingLayout()
             t.remove(w)
             t.root.pruneEmptyNodes()
             return
@@ -109,6 +149,183 @@ class TilingEngine {
     /// created on demand.
     internal func existingTree(forWorkspace workspace: Int, screen: NSScreen) -> BSPTree? {
         trees[TilingKey(workspace: workspace, screen: screen)]
+    }
+
+    func captureTiledDrag(draggedID: CGWindowID, workspace: Int, screen: NSScreen,
+                          floatingIDs: Set<CGWindowID>) -> TiledDragCaptureResult {
+        let key = TilingKey(workspace: workspace, screen: screen)
+        guard let sourceTree = trees[key] else { return .ineligible(.notTiled) }
+        let generation = invalidatePendingLayout()
+        guard let context = tiledDragContext(workspace: workspace, screen: screen,
+                                             floatingIDs: floatingIDs,
+                                             sourceTree: sourceTree) else {
+            return .unknown(.superseded)
+        }
+        let transaction = TiledDragTransaction(ioFactory: frameSizingIOFactory)
+        return transaction.capture(
+            draggedID: draggedID, tree: sourceTree, context: context,
+            generation: generation,
+            currentContext: {
+                guard self.layoutGeneration == generation else { return nil }
+                return self.tiledDragContext(workspace: workspace, screen: screen,
+                                             floatingIDs: floatingIDs,
+                                             sourceTree: sourceTree)
+            }
+        )
+    }
+
+    func captureTiledDrag(
+        pointer: CGPoint,
+        occludingWindows: [HyprWindow],
+        currentLocation: @escaping () -> (workspace: Int, screen: NSScreen,
+                                          floatingIDs: Set<CGWindowID>)?,
+        onCapturedFrames: ([CGWindowID: CGRect]) -> Void = { _ in }
+    ) -> TiledDragCaptureResult {
+        guard let initialLocation = currentLocation() else { return .unknown(.superseded) }
+        let key = TilingKey(workspace: initialLocation.workspace, screen: initialLocation.screen)
+        guard let sourceTree = trees[key] else {
+            return captureTiledDragOccluders(
+                occludingWindows, initialLocation: initialLocation,
+                currentLocation: currentLocation, onCapturedFrames: onCapturedFrames)
+        }
+        let generation = invalidatePendingLayout()
+        guard let context = tiledDragContext(
+            workspace: initialLocation.workspace, screen: initialLocation.screen,
+            floatingIDs: initialLocation.floatingIDs, sourceTree: sourceTree
+        ) else { return .unknown(.superseded) }
+        let transaction = TiledDragTransaction(ioFactory: frameSizingIOFactory)
+        return transaction.capture(
+            pointer: pointer, tree: sourceTree, context: context,
+            occludingWindows: occludingWindows, generation: generation,
+            currentContext: {
+                guard self.layoutGeneration == generation,
+                      let location = currentLocation() else { return nil }
+                return self.tiledDragContext(workspace: location.workspace,
+                                             screen: location.screen,
+                                             floatingIDs: location.floatingIDs,
+                                             sourceTree: sourceTree)
+            },
+            onCapturedFrames: onCapturedFrames
+        )
+    }
+
+    private func captureTiledDragOccluders(
+        _ windows: [HyprWindow],
+        initialLocation: (workspace: Int, screen: NSScreen, floatingIDs: Set<CGWindowID>),
+        currentLocation: @escaping () -> (workspace: Int, screen: NSScreen,
+                                          floatingIDs: Set<CGWindowID>)?,
+        onCapturedFrames: ([CGWindowID: CGRect]) -> Void
+    ) -> TiledDragCaptureResult {
+        var seen = Set<CGWindowID>()
+        for window in windows where !seen.insert(window.windowID).inserted {
+            return .unknown(.duplicateWindowID(window.windowID))
+        }
+        let generation = invalidatePendingLayout()
+        guard let context = tiledDragOccluderContext(initialLocation) else {
+            return .unknown(.superseded)
+        }
+        let byID = Dictionary(uniqueKeysWithValues: windows.map { ($0.windowID, $0) })
+        let io = frameSizingIOFactory(byID) {
+            guard self.layoutGeneration == generation,
+                  let location = currentLocation(),
+                  self.tiledDragOccluderContext(location) == context else {
+                return generation &+ 1
+            }
+            return generation
+        }
+        let captured = FrameSizingAttempt(io: io).captureFrames(
+            windowIDs: windows.map(\.windowID), generation: generation)
+        guard case .accepted = captured.verdict,
+              captured.actualFrames.count == windows.count,
+              layoutGeneration == generation,
+              let location = currentLocation(),
+              tiledDragOccluderContext(location) == context else {
+            switch captured.verdict {
+            case .accepted: return .unknown(.superseded)
+            case let .rejected(reason), let .unknown(reason): return .unknown(reason)
+            }
+        }
+        onCapturedFrames(captured.actualFrames)
+        return .ineligible(.noTarget)
+    }
+
+    private func tiledDragOccluderContext(
+        _ location: (workspace: Int, screen: NSScreen, floatingIDs: Set<CGWindowID>)
+    ) -> TiledDragOccluderContext? {
+        let displayID = physicalDisplayID(for: location.screen)
+        let matchingScreens = displayManager.screens.filter {
+            physicalDisplayID(for: $0) == displayID
+        }
+        guard matchingScreens.count == 1, let screen = matchingScreens.first else { return nil }
+        return TiledDragOccluderContext(
+            workspace: location.workspace,
+            physicalDisplayID: displayID,
+            usableFrame: displayManager.cgRect(for: screen),
+            floatingIDs: location.floatingIDs)
+    }
+
+    func dropTiledDrag(
+        _ snapshot: TiledDragSnapshot,
+        mode: TiledDragMode?,
+        currentLocation: @escaping () -> (workspace: Int, screen: NSScreen,
+                                          floatingIDs: Set<CGWindowID>)?
+    ) -> TiledDragDropOutcome {
+        func currentState() -> (location: (workspace: Int, screen: NSScreen,
+                                            floatingIDs: Set<CGWindowID>),
+                                context: TiledDragContext)? {
+            guard layoutGeneration == snapshot.generation,
+                  let location = currentLocation() else { return nil }
+            guard let context = tiledDragContext(workspace: location.workspace,
+                                                 screen: location.screen,
+                                                 floatingIDs: location.floatingIDs,
+                                                 sourceTree: snapshot.sourceTree) else { return nil }
+            return (location, context)
+        }
+        func currentContext() -> TiledDragContext? {
+            currentState()?.context
+        }
+
+        guard currentContext() == snapshot.context else { return .superseded }
+        let transaction = TiledDragTransaction(ioFactory: frameSizingIOFactory)
+        let outcome = transaction.dropRelease(snapshot, mode: mode,
+                                              currentContext: currentContext)
+        guard currentContext() == snapshot.context else { return .superseded }
+        guard case let .committed(candidate, actualFrames) = outcome else { return outcome }
+        guard let state = currentState(), state.context == snapshot.context else {
+            return .superseded
+        }
+        let key = TilingKey(workspace: state.location.workspace, screen: state.location.screen)
+        guard trees[key] === snapshot.sourceTree else { return .superseded }
+        trees[key] = candidate
+        return .committed(candidate: candidate, actualFrames: actualFrames)
+    }
+
+    private func tiledDragContext(workspace: Int, screen: NSScreen,
+                                  floatingIDs: Set<CGWindowID>,
+                                  sourceTree: BSPTree) -> TiledDragContext? {
+        let requestedDisplayID = physicalDisplayID(for: screen)
+        let matchingScreens = displayManager.screens.filter {
+            physicalDisplayID(for: $0) == requestedDisplayID
+        }
+        guard matchingScreens.count == 1, let currentScreen = matchingScreens.first else { return nil }
+        let key = TilingKey(workspace: workspace, screen: currentScreen)
+        guard trees[key] === sourceTree else { return nil }
+        let memberIDs = sourceTree.allWindows.map(\.windowID)
+        return TiledDragContext(
+            workspace: workspace,
+            physicalDisplayID: physicalDisplayID(for: currentScreen),
+            usableFrame: displayManager.cgRect(for: currentScreen),
+            gap: gapSize,
+            padding: outerPadding,
+            maxDepth: maxDepth(for: currentScreen),
+            memberIDs: Set(memberIDs),
+            floatingIDs: floatingIDs,
+            fingerprint: sourceTree.structuralFingerprint()
+        )
+    }
+
+    private func physicalDisplayID(for screen: NSScreen) -> CGDirectDisplayID {
+        tiledDragDisplayID(screen)
     }
 
     /// Reconcile `trees` with the current monitor topology.
@@ -161,6 +378,10 @@ class TilingEngine {
             }
         }
 
+        if !migrations.isEmpty || !orphans.isEmpty {
+            invalidatePendingLayout()
+        }
+
         for (oldKey, newScreen) in migrations {
             guard let tree = trees.removeValue(forKey: oldKey) else { continue }
             let newKey = TilingKey(workspace: oldKey.workspace, screen: newScreen)
@@ -206,13 +427,83 @@ class TilingEngine {
                      minSlotDimension: minSlotDimension)
     }
 
-    private let readbackPoller = FrameReadbackPoller()
+    private lazy var readbackPoller = FrameReadbackPoller(
+        generation: { [weak self] in self?.layoutGeneration ?? UInt64.max },
+        ioFactory: frameSizingIOFactory
+    )
+
+    internal func applyVerifiedLayout(_ tree: BSPTree, in rect: CGRect,
+                                      generation: UInt64,
+                                      originalFrames suppliedOriginalFrames: [CGWindowID: CGRect]? = nil) -> LayoutApplicationOutcome {
+        let windows = tree.allWindows
+        let originalFrames: [CGWindowID: CGRect]
+        if let suppliedOriginalFrames {
+            guard suppliedOriginalFrames.count == windows.count,
+                  windows.allSatisfy({ suppliedOriginalFrames[$0.windowID] != nil }) else {
+                let missing = windows.first { suppliedOriginalFrames[$0.windowID] == nil }
+                return .degraded(candidateReason: .windowUnavailable(missing?.windowID ?? 0),
+                                 restorationReason: nil,
+                                 actualFrames: suppliedOriginalFrames)
+            }
+            originalFrames = suppliedOriginalFrames
+        } else {
+            let captured = readbackPoller.captureFrames(windows, generation: generation)
+            guard case .accepted = captured.verdict,
+                  captured.actualFrames.count == windows.count else {
+                let missing = windows.first { captured.actualFrames[$0.windowID] == nil }
+                return .degraded(
+                    candidateReason: captured.verdict.failure ?? .windowUnavailable(missing?.windowID ?? 0),
+                    restorationReason: nil,
+                    actualFrames: captured.actualFrames
+                )
+            }
+            originalFrames = captured.actualFrames
+        }
+
+        let ratioSnapshot = tree.snapshot()
+        let firstLayouts = tree.layout(in: rect, gap: gapSize, padding: outerPadding)
+        let first = applyLayout(firstLayouts, usableFrame: rect, generation: generation)
+        if case .accepted = first.verdict {
+            return .accepted(actualFrames: first.actualFrames)
+        }
+
+        var terminal = first
+        if case .rejected = first.verdict, !first.conflicts.isEmpty,
+           layoutGeneration == generation {
+            let conflicts = first.conflicts.map { (window: $0.window, actual: $0.actual) }
+            tree.adjustForMinSizes(conflicts, in: rect, gap: gapSize, padding: outerPadding)
+            let adjusted = tree.layout(in: rect, gap: gapSize, padding: outerPadding)
+            terminal = applyLayoutFinal(adjusted, usableFrame: rect, generation: generation)
+            if case .accepted = terminal.verdict {
+                return .accepted(actualFrames: terminal.actualFrames)
+            }
+        }
+
+        guard layoutGeneration == generation else {
+            return .degraded(candidateReason: .superseded, restorationReason: nil,
+                             actualFrames: terminal.actualFrames)
+        }
+        tree.restore(ratioSnapshot)
+        let originals = windows.compactMap { window in
+            originalFrames[window.windowID].map { (window, $0) }
+        }
+        let restored = applyLayoutFinal(originals, usableFrame: rect, generation: generation)
+        let reason = terminal.verdict.failure ?? .attemptsExhausted
+        if case .accepted = restored.verdict {
+            return .rejectedRestored(reason: reason, actualFrames: restored.actualFrames)
+        }
+        return .degraded(candidateReason: reason,
+                         restorationReason: restored.verdict.failure,
+                         actualFrames: restored.actualFrames)
+    }
 
     // delegate to FrameReadbackPoller and reconcile its result against our
     // min-size memory. returns the conflicts the engine should pass into
     // BSPTree.adjustForMinSizes.
-    private func applyLayout(_ layouts: [(HyprWindow, CGRect)]) -> [FrameReadbackPoller.Conflict] {
-        let result = readbackPoller.applyLayout(layouts)
+    private func applyLayout(_ layouts: [(HyprWindow, CGRect)], usableFrame: CGRect,
+                             generation: UInt64) -> FrameReadbackPoller.Result {
+        let result = readbackPoller.applyLayout(layouts, usableFrame: usableFrame,
+                                                gap: gapSize, generation: generation)
         for obs in result.observations {
             minSizes.recordObserved(obs.window, actual: obs.actual,
                                     widthConflict: obs.widthConflict,
@@ -221,11 +512,13 @@ class TilingEngine {
         for (window, size) in result.accepted {
             minSizes.lowerIfAccepted(window, actual: size)
         }
-        return result.conflicts
+        return result
     }
 
-    private func applyLayoutFinal(_ layouts: [(HyprWindow, CGRect)]) {
-        readbackPoller.applyFinal(layouts)
+    private func applyLayoutFinal(_ layouts: [(HyprWindow, CGRect)], usableFrame: CGRect,
+                                  generation: UInt64) -> FrameReadbackPoller.Result {
+        readbackPoller.applyFinal(layouts, usableFrame: usableFrame,
+                                  gap: gapSize, generation: generation)
     }
 
     private func overflowingWindows(in layouts: [(HyprWindow, CGRect)]) -> [HyprWindow] {
@@ -253,17 +546,6 @@ class TilingEngine {
         tree.adjustForMinSizes(conflicts, in: rect, gap: gapSize, padding: outerPadding)
         let adjusted = tree.layout(in: rect, gap: gapSize, padding: outerPadding)
         return overflowingWindows(in: adjusted).isEmpty
-    }
-
-    private func screen(for key: TilingKey) -> NSScreen? {
-        displayManager.screens.first { TilingKey(workspace: key.workspace, screen: $0) == key }
-    }
-
-    private func treeContaining(_ window: HyprWindow) -> (key: TilingKey, tree: BSPTree)? {
-        for (key, tree) in trees where tree.contains(window) {
-            return (key, tree)
-        }
-        return nil
     }
 
     private func autoFloatOverflow(_ overflow: [HyprWindow],
@@ -408,43 +690,15 @@ class TilingEngine {
     /// engine auto-floats the overflowing windows; otherwise it
     /// preserves the recorded mins and falls back to pass-1 frames.
     func tileWindows(_ windows: [HyprWindow], onWorkspace workspace: Int, screen: NSScreen) {
+        let generation = beginLayoutGeneration()
+        pendingSwapRevert = nil
         let m = updateTreeMembership(windows, onWorkspace: workspace, screen: screen)
         let key = m.key
         let t = m.tree
         let rect = m.rect
 
-        // pass 1: layout + readback
-        let layouts = t.layout(in: rect, gap: gapSize, padding: outerPadding)
-        hyprLog(.debug, .lifecycle, "tiling \(layouts.count) windows on workspace \(workspace) screen \(Int(screen.frame.width))x\(Int(screen.frame.height))")
-        let conflicts = applyLayout(layouts)
-        let insertedForOverflow = mergedInserted(m.insertedWindows, pending: consumePendingInserted(for: key, in: t))
-
-        if !conflicts.isEmpty {
-            // pass 2: adjust ratios and re-layout
-            let mapped = conflicts.map { (window: $0.window, actual: $0.actual) }
-            t.adjustForMinSizes(mapped, in: rect, gap: gapSize, padding: outerPadding)
-            let adjusted = t.layout(in: rect, gap: gapSize, padding: outerPadding)
-            let overflow = overflowingWindows(in: adjusted)
-            if autoFloatOverflow(overflow, inserted: insertedForOverflow,
-                                 tree: t, key: key, screen: screen) {
-                return
-            }
-            if !overflow.isEmpty {
-                hyprLog(.debug, .lifecycle, "overflow persisted with no inserted target — discarding min-size adjustment")
-                minSizes.clear(for: overflow)
-                t.root.resetSplitRatios()
-                applyLayoutFinal(layouts)
-                return
-            }
-            for (window, frame) in adjusted {
-                hyprLog(.debug, .lifecycle, "  '\(window.title ?? "?")' → \(frame)")
-            }
-            applyLayoutFinal(adjusted)
-        } else {
-            for (window, frame) in layouts {
-                hyprLog(.debug, .lifecycle, "  '\(window.title ?? "?")' → \(frame)")
-            }
-        }
+        _ = consumePendingInserted(for: key, in: t)
+        _ = applyVerifiedLayout(t, in: rect, generation: generation)
 
         // clean up empty trees for this workspace on other screens
         for (key, t) in trees where key.workspace == workspace {
@@ -468,6 +722,8 @@ class TilingEngine {
     /// - Returns: the windows that didn't fit (stay floating members).
     @discardableResult
     func tileScratchpad(_ windows: [HyprWindow], screen: NSScreen, in rect: CGRect) -> [HyprWindow] {
+        let generation = beginLayoutGeneration()
+        pendingSwapRevert = nil
         primeMinimumSizes(windows)
         let key = TilingKey(workspace: Self.scratchpadWorkspace, screen: screen)
         let t = tree(for: key)
@@ -499,14 +755,7 @@ class TilingEngine {
         t.root.resetSplitRatios()
         t.root.applySavedRatios()
 
-        let layouts = t.layout(in: rect, gap: gapSize, padding: outerPadding)
-        let conflicts = applyLayout(layouts)
-        if !conflicts.isEmpty {
-            let mapped = conflicts.map { (window: $0.window, actual: $0.actual) }
-            t.adjustForMinSizes(mapped, in: rect, gap: gapSize, padding: outerPadding)
-            let adjusted = t.layout(in: rect, gap: gapSize, padding: outerPadding)
-            applyLayoutFinal(adjusted)
-        }
+        _ = applyVerifiedLayout(t, in: rect, generation: generation)
         return rejects
     }
 
@@ -539,6 +788,8 @@ class TilingEngine {
     /// - Returns: `[(window, frame)]` pairs in tree iteration order. Empty
     ///   array if the tree ends up empty.
     func prepareTileLayout(_ windows: [HyprWindow], onWorkspace workspace: Int, screen: NSScreen) -> [(HyprWindow, CGRect)] {
+        _ = beginLayoutGeneration()
+        pendingSwapRevert = nil
         let m = updateTreeMembership(windows, onWorkspace: workspace, screen: screen)
         rememberPendingInserted(m.insertedWindows, for: m.key)
         return m.tree.layout(in: m.rect, gap: gapSize, padding: outerPadding)
@@ -588,6 +839,7 @@ class TilingEngine {
         let t = tree(for: key)
         let rect = displayManager.cgRect(for: screen)
         var inserted: [HyprWindow] = []
+        let generation = invalidatePendingLayout()
         if !t.contains(window) {
             // judge fit against post-reset geometry, not stale pass-2 ratios
             t.root.resetSplitRatios()
@@ -598,7 +850,7 @@ class TilingEngine {
             }
             inserted.append(window)
         }
-        retile(key: key, screen: screen, inserted: inserted)
+        _ = retile(key: key, screen: screen, inserted: inserted, generation: generation)
     }
 
     /// Remove `window` from its workspace's tree on whichever screen
@@ -608,67 +860,31 @@ class TilingEngine {
         // search all trees for this workspace
         for (key, t) in trees where key.workspace == workspace {
             if t.contains(window) {
+                let generation = invalidatePendingLayout()
                 t.remove(window)
                 t.root.pruneEmptyNodes()
                 if let screen = displayManager.screens.first(where: {
                     TilingKey(workspace: workspace, screen: $0) == key
                 }) {
-                    retile(key: key, screen: screen)
+                    _ = retile(key: key, screen: screen, generation: generation)
                 }
                 return
             }
         }
     }
 
-    // preserveMinSizesOnOverflow:
-    //   true  → swap-rejection callers (swapWindows + applyComputedLayout's
-    //           animated swap revert) need the readback-confirmed mins to
-    //           survive past this retile so their post-retile fit check sees
-    //           the real bound and can reject the swap.
-    //   false → all other callers want the pre-0f24775 behavior. preserving
-    //           mins here ratchets every visible app's recorded minimum up to
-    //           whatever-it-couldn't-shrink-to-this-attempt and keeps it
-    //           sticky. forceInsertWindow's smart-insert pre-check then
-    //           reads those bumped values via pairFits and false-rejects
-    //           legitimate slots, dropping forceInsertWindow into its
-    //           eviction fallback — which is supposed to fire only when the
-    //           tree is full. user-observed bug: Caps+Shift+T on a floating
-    //           window kicks an existing tile out instead of slotting in.
     private func retile(key: TilingKey, screen: NSScreen,
                         inserted: [HyprWindow] = [],
-                        preserveMinSizesOnOverflow: Bool = false) {
+                        generation suppliedGeneration: UInt64? = nil) -> LayoutApplicationOutcome {
         let t = tree(for: key)
         primeMinimumSizes(t.allWindows)
         let rect = displayManager.cgRect(for: screen)
-        let insertedForOverflow = mergedInserted(inserted, pending: consumePendingInserted(for: key, in: t))
+        _ = mergedInserted(inserted, pending: consumePendingInserted(for: key, in: t))
+        let generation = suppliedGeneration ?? beginLayoutGeneration()
 
         t.root.resetSplitRatios()
 
-        let layouts = t.layout(in: rect, gap: gapSize, padding: outerPadding)
-        let conflicts = applyLayout(layouts)
-
-        if !conflicts.isEmpty {
-            let mapped = conflicts.map { (window: $0.window, actual: $0.actual) }
-            t.adjustForMinSizes(mapped, in: rect, gap: gapSize, padding: outerPadding)
-            let adjusted = t.layout(in: rect, gap: gapSize, padding: outerPadding)
-            let overflow = overflowingWindows(in: adjusted)
-            if autoFloatOverflow(overflow, inserted: insertedForOverflow,
-                                 tree: t, key: key, screen: screen) {
-                return
-            }
-            if !overflow.isEmpty {
-                if preserveMinSizesOnOverflow {
-                    hyprLog(.debug, .lifecycle, "overflow persisted with no inserted target — preserving recorded min sizes for caller's post-retile fit check")
-                } else {
-                    hyprLog(.debug, .lifecycle, "overflow persisted with no inserted target — discarding min-size adjustment")
-                    minSizes.clear(for: overflow)
-                }
-                t.root.resetSplitRatios()
-                applyLayoutFinal(layouts)
-                return
-            }
-            applyLayoutFinal(adjusted)
-        }
+        return applyVerifiedLayout(t, in: rect, generation: generation)
     }
 
     /// Apply a manual resize: update the surrounding split ratios so
@@ -678,8 +894,12 @@ class TilingEngine {
         let t = tree(for: key)
         let rect = displayManager.cgRect(for: screen)
 
+        let snapshot = t.snapshot()
+        let generation = invalidatePendingLayout()
         t.applyResizeDelta(for: window, newFrame: newFrame, in: rect, gap: gapSize, padding: outerPadding)
-        retile(key: key, screen: screen)
+        let outcome = retile(key: key, screen: screen, generation: generation)
+        if case .accepted = outcome { return }
+        if layoutGeneration == generation { t.restore(snapshot) }
     }
 
     /// `true` when `a` and `b` can be swapped without violating any
@@ -720,48 +940,6 @@ class TilingEngine {
         return layoutCanAccommodateKnownMinimums(t, rect: rect)
     }
 
-    /// `true` when a cross-monitor swap can place each window into the
-    /// other's tree without violating recorded min-size constraints.
-    ///
-    /// Mirrors `canSwapWindows`, but evaluates both affected trees. The
-    /// trial clears user ratios because those ratios belonged to the
-    /// previous occupants on each screen; the real cross-swap path uses
-    /// the same baseline so preflight and commit agree.
-    func canCrossSwapWindows(_ a: HyprWindow, _ b: HyprWindow) -> Bool {
-        guard let foundA = treeContaining(a),
-              let foundB = treeContaining(b) else { return false }
-
-        if foundA.key == foundB.key {
-            guard let screen = screen(for: foundA.key) else { return false }
-            return canSwapWindows(a, b, onWorkspace: foundA.key.workspace, screen: screen)
-        }
-
-        let windowsToPrime = foundA.tree.allWindows + foundB.tree.allWindows
-        primeMinimumSizes(windowsToPrime)
-
-        let snapshotA = foundA.tree.snapshot()
-        let snapshotB = foundB.tree.snapshot()
-        defer {
-            foundA.tree.restore(snapshotA)
-            foundB.tree.restore(snapshotB)
-        }
-
-        guard let nodeA = foundA.tree.root.find(a),
-              let nodeB = foundB.tree.root.find(b),
-              let screenA = screen(for: foundA.key),
-              let screenB = screen(for: foundB.key) else { return false }
-
-        nodeA.window = b
-        nodeB.window = a
-        foundA.tree.root.clearUserSetRatios()
-        foundB.tree.root.clearUserSetRatios()
-        foundA.tree.root.resetSplitRatios()
-        foundB.tree.root.resetSplitRatios()
-
-        return layoutCanAccommodateKnownMinimums(foundA.tree, rect: displayManager.cgRect(for: screenA))
-            && layoutCanAccommodateKnownMinimums(foundB.tree, rect: displayManager.cgRect(for: screenB))
-    }
-
     /// Synchronous swap path (no animation).
     ///
     /// Snapshots the tree before swapping so a post-readback overflow
@@ -786,32 +964,28 @@ class TilingEngine {
         // see canSwapWindows — swap is a structural change, prior manual
         // ratios applied to the OLD occupant of a slot, not the new one.
         t.root.clearUserSetRatios()
-        // preserveMinSizesOnOverflow: the post-retile check below reads
-        // minimumSize against the retile's freshly-recorded mins. if retile
-        // cleared them on the no-inserted-target overflow branch, the
-        // post-retile check would false-pass.
-        retile(key: key, screen: screen, preserveMinSizesOnOverflow: true)
-
-        // post-retile fit check: minSizes was updated by pass-1 readback
-        // during retile. if the resulting layout still overflows the
-        // freshly-recorded mins, the swap doesn't actually fit — revert.
         let rect = displayManager.cgRect(for: screen)
-        let postLayout = t.layout(in: rect, gap: gapSize, padding: outerPadding)
-        if !overflowingWindows(in: postLayout).isEmpty {
-            hyprLog(.debug, .lifecycle, "swap overflow detected post-readback — reverting")
+        let generation = beginLayoutGeneration()
+        let outcome = applyVerifiedLayout(t, in: rect, generation: generation)
+        switch outcome {
+        case .accepted:
+            return true
+        case .rejectedRestored, .degraded:
+            guard layoutGeneration == generation else { return false }
+            hyprLog(.debug, .lifecycle, "swap frame application failed — restoring tree")
             t.restore(snapshot)
-            retile(key: key, screen: screen)
             return false
         }
-        return true
     }
 
-    /// Pending pre-swap snapshot for the animated swap path. Set by
-    /// `prepareSwapLayout`, consumed (or cleared) by `applyComputedLayout`.
+    /// Pending pre-mutation snapshot for animated swap and split-toggle paths.
+    /// Consumed (or cleared) by `applyComputedLayout`.
     /// Defensively cleared by `prepareToggleSplitLayout` to prevent leakage
     /// across consecutive prepare-then-apply cycles when the user triggers
     /// a non-swap action between the two halves.
-    private var pendingSwapRevert: (key: TilingKey, snapshot: BSPTree.Snapshot)?
+    private var pendingSwapRevert: (key: TilingKey, generation: UInt64,
+                                    snapshot: BSPTree.Snapshot,
+                                    originalFrames: [CGWindowID: CGRect])?
 
     /// Swap two windows' positions in the tree and return post-swap layout
     /// rects without applying frames.
@@ -831,6 +1005,11 @@ class TilingEngine {
         guard t.contains(a) && t.contains(b) else { return nil }
         let rect = displayManager.cgRect(for: screen)
 
+        let generation = beginLayoutGeneration()
+        let captured = readbackPoller.captureFrames(t.allWindows, generation: generation)
+        guard case .accepted = captured.verdict,
+              captured.actualFrames.count == t.allWindows.count else { return nil }
+
         // capture snapshot for post-readback overflow revert (animated swap
         // path). canSwapWindows uses the recorded min size which can be
         // seeded rather than confirmed via readback — for windows like
@@ -838,7 +1017,8 @@ class TilingEngine {
         // canSwapWindows false-accepts. The real readback during retile
         // (triggered by applyComputedLayout) is the ground truth, and
         // applyComputedLayout reverts via this snapshot if overflow persists.
-        pendingSwapRevert = (key: key, snapshot: t.snapshot())
+        pendingSwapRevert = (key: key, generation: generation,
+                             snapshot: t.snapshot(), originalFrames: captured.actualFrames)
         t.swap(a, b)
         // clear userSetRatio + reset to 50/50 so the test layout matches
         // canSwapWindows's evaluation baseline (see canSwapWindows).
@@ -852,85 +1032,33 @@ class TilingEngine {
     /// tree (via prepare), drives an animation against the returned rects,
     /// then calls `applyComputedLayout` on completion to settle frames.
     ///
-    /// If the prepare call was `prepareSwapLayout` (which captures a
-    /// pre-swap snapshot), the post-retile layout is checked for overflow
-    /// against the freshly-recorded min sizes; on overflow the snapshot is
-    /// restored and a clean retile applied. Returns `false` in that case so
-    /// the caller can `flashError`. For non-swap callers (toggleSplit etc.)
-    /// the return is always `true`.
+    /// Prepared mutations capture their pre-animation topology and frames.
+    /// A rejected or unknown final application restores that state and returns
+    /// `false` so the caller can report failure.
     @discardableResult
     func applyComputedLayout(onWorkspace workspace: Int, screen: NSScreen) -> Bool {
         let key = TilingKey(workspace: workspace, screen: screen)
         let t = tree(for: key)
-        // when a swap is pending, the post-retile fit check below relies on
-        // freshly-recorded mins surviving past retile (same contract as
-        // swapWindows above). otherwise — toggleSplit, animated retile from
-        // tileAllVisibleSpaces, etc. — fall through to the default which
-        // matches forceInsertWindow's expectations.
-        let preserve = (pendingSwapRevert?.key == key)
-        retile(key: key, screen: screen, preserveMinSizesOnOverflow: preserve)
-
-        // consume any pending swap snapshot for this key. only the swap
-        // path sets this — toggleSplit etc. leave it nil.
-        guard let pending = pendingSwapRevert, pending.key == key else { return true }
+        guard let pending = pendingSwapRevert, pending.key == key else {
+            let outcome = retile(key: key, screen: screen)
+            if case .accepted = outcome { return true }
+            return false
+        }
         pendingSwapRevert = nil
 
+        guard layoutGeneration == pending.generation else { return false }
         let rect = displayManager.cgRect(for: screen)
-        let postLayout = t.layout(in: rect, gap: gapSize, padding: outerPadding)
-        if !overflowingWindows(in: postLayout).isEmpty {
-            hyprLog(.debug, .lifecycle, "animated swap overflow detected post-readback — reverting")
+        let outcome = applyVerifiedLayout(t, in: rect, generation: pending.generation,
+                                          originalFrames: pending.originalFrames)
+        switch outcome {
+        case .accepted:
+            return true
+        case .rejectedRestored, .degraded:
+            guard layoutGeneration == pending.generation else { return false }
+            hyprLog(.debug, .lifecycle, "prepared frame application failed — restoring tree")
             t.restore(pending.snapshot)
-            retile(key: key, screen: screen)
             return false
         }
-        return true
-    }
-
-    /// Cross-monitor swap. Locates whichever trees hold `a` and `b`,
-    /// exchanges their leaf window references in place, and retiles
-    /// both screens. Silent no-op when either window is not in any
-    /// tree (handles drag-from-floating cases). The two retile passes
-    /// run synchronously back-to-back; pollers are gated externally
-    /// via `cross-swap-in-flight` for the ~800 ms it takes.
-    @discardableResult
-    func crossSwapWindows(_ a: HyprWindow, _ b: HyprWindow) -> Bool {
-        guard canCrossSwapWindows(a, b),
-              let foundA = treeContaining(a),
-              let foundB = treeContaining(b),
-              let screenA = screen(for: foundA.key),
-              let screenB = screen(for: foundB.key) else { return false }
-
-        if foundA.key == foundB.key {
-            return swapWindows(a, b, onWorkspace: foundA.key.workspace, screen: screenA)
-        }
-
-        let snapshotA = foundA.tree.snapshot()
-        let snapshotB = foundB.tree.snapshot()
-
-        if let nodeA = foundA.tree.root.find(a) { nodeA.window = b }
-        if let nodeB = foundB.tree.root.find(b) { nodeB.window = a }
-        foundA.tree.root.clearUserSetRatios()
-        foundB.tree.root.clearUserSetRatios()
-
-        retile(key: foundA.key, screen: screenA, preserveMinSizesOnOverflow: true)
-        retile(key: foundB.key, screen: screenB, preserveMinSizesOnOverflow: true)
-
-        let overflowA = overflowingWindows(in: foundA.tree.layout(in: displayManager.cgRect(for: screenA),
-                                                                  gap: gapSize,
-                                                                  padding: outerPadding))
-        let overflowB = overflowingWindows(in: foundB.tree.layout(in: displayManager.cgRect(for: screenB),
-                                                                  gap: gapSize,
-                                                                  padding: outerPadding))
-        if !overflowA.isEmpty || !overflowB.isEmpty {
-            hyprLog(.debug, .lifecycle, "cross-monitor swap overflow detected post-readback — reverting")
-            foundA.tree.restore(snapshotA)
-            foundB.tree.restore(snapshotB)
-            retile(key: foundA.key, screen: screenA)
-            retile(key: foundB.key, screen: screenB)
-            return false
-        }
-
-        return true
     }
 
     /// Synchronous split-direction toggle for `window`'s parent
@@ -940,8 +1068,12 @@ class TilingEngine {
         let key = TilingKey(workspace: workspace, screen: screen)
         let t = tree(for: key)
         let rect = displayManager.cgRect(for: screen)
+        let snapshot = t.snapshot()
+        let generation = invalidatePendingLayout()
         t.toggleSplit(for: window, in: rect, gap: gapSize, padding: outerPadding)
-        retile(key: key, screen: screen)
+        let outcome = retile(key: key, screen: screen, generation: generation)
+        if case .accepted = outcome { return }
+        if layoutGeneration == generation { t.restore(snapshot) }
     }
 
     /// Resize the focused window by moving the nearest matching-axis split
@@ -956,6 +1088,8 @@ class TilingEngine {
         let rect = displayManager.cgRect(for: screen)
 
         guard let leaf = t.root.find(window) else { return }
+        let snapshot = t.snapshot()
+        let generation = invalidatePendingLayout()
 
         let axis: SplitDirection = (direction == .left || direction == .right) ? .horizontal : .vertical
         let positive = (direction == .right || direction == .down)
@@ -987,7 +1121,9 @@ class TilingEngine {
         }
 
         if didResize {
-            retile(key: key, screen: screen)
+            let outcome = retile(key: key, screen: screen, generation: generation)
+            if case .accepted = outcome { return }
+            if layoutGeneration == generation { t.restore(snapshot) }
         }
     }
 
@@ -1006,9 +1142,12 @@ class TilingEngine {
         let key = TilingKey(workspace: workspace, screen: screen)
         let t = tree(for: key)
         guard t.contains(window) else { return nil }
-        // defensive: clear any stale pending swap snapshot so the next
-        // applyComputedLayout doesn't try to revert this toggleSplit.
-        pendingSwapRevert = nil
+        let generation = invalidatePendingLayout()
+        let captured = readbackPoller.captureFrames(t.allWindows, generation: generation)
+        guard case .accepted = captured.verdict,
+              captured.actualFrames.count == t.allWindows.count else { return nil }
+        pendingSwapRevert = (key: key, generation: generation,
+                             snapshot: t.snapshot(), originalFrames: captured.actualFrames)
         let rect = displayManager.cgRect(for: screen)
         t.toggleSplit(for: window, in: rect, gap: gapSize, padding: outerPadding)
         t.root.resetSplitRatios()
@@ -1056,9 +1195,10 @@ class TilingEngine {
         let rect = displayManager.cgRect(for: screen)
 
         if t.contains(window) { return nil }
+        let generation = invalidatePendingLayout()
 
         if smartInsertFitting(window, into: t, maxDepth: maxDepth(for: screen), rect: rect) {
-            retile(key: key, screen: screen, inserted: [window])
+            _ = retile(key: key, screen: screen, inserted: [window], generation: generation)
             return nil
         }
 
@@ -1066,12 +1206,21 @@ class TilingEngine {
         t.remove(evicted)
 
         if smartInsertFitting(window, into: t, maxDepth: maxDepth(for: screen), rect: rect) {
-            retile(key: key, screen: screen, inserted: [window])
+            _ = retile(key: key, screen: screen, inserted: [window], generation: generation)
             return evicted
         }
 
         _ = t.insert(evicted, maxDepth: maxDepth(for: screen))
-        retile(key: key, screen: screen)
+        _ = retile(key: key, screen: screen, generation: generation)
         return nil
+    }
+}
+
+private extension FrameSizingAttempt.Verdict {
+    var failure: FrameSizingFailure? {
+        switch self {
+        case .accepted: nil
+        case .rejected(let reason), .unknown(let reason): reason
+        }
     }
 }

@@ -2,7 +2,7 @@
 
 A keyboard-driven tiling window manager for macOS.
 
-Caps Lock becomes a **Hypr** modifier key by default, and the physical Hypr key can be changed in Settings. From there: BSP dwindle tiling, 9 virtual workspaces, directional focus and window swapping, drag-to-swap, and focus-follows-mouse — all without touching System Integrity Protection.
+Caps Lock becomes a **Hypr** modifier key by default, and the physical Hypr key can be changed in Settings. From there: BSP dwindle tiling, 9 virtual workspaces, directional focus and window swapping, pointer-edge target insertion, and focus-follows-mouse — all without touching System Integrity Protection.
 
 [![HyprMac demo](docs/screenshots/demo-thumb.png)](https://github.com/user-attachments/assets/1f6f12ff-8e89-49ab-8be9-f2996025763a)
 
@@ -100,6 +100,8 @@ The physical Hypr key is configurable in Settings → General. Options include C
 | Action | Effect |
 |--------|--------|
 | Hover over tiled window | Focus follows mouse (when enabled) |
+| Drag a tiled window onto a target edge | Insert on that side, within the same workspace and monitor |
+| Hold Option when releasing a tiled drag | Swap with the target, subject to verified sizing and Max Splits |
 | Drag window onto another | Swap positions |
 
 ---
@@ -157,7 +159,7 @@ PollingScheduler (1 Hz timer + coalesced notification triggers)
         └→ ActionDispatcher.applyChanges
 ```
 
-Window-keyed state lives in `WindowStateCache`; focus state in `FocusStateController`; date-gated suppressions (`activation-switch`, `mouse-focus`, `cross-swap-in-flight`) in `SuppressionRegistry`. BSP trees live in `TilingEngine` (one per `(workspace, screen)` pair) with smart insert backtracking on constrained monitors and two-pass min-size resolution via `FrameReadbackPoller`.
+Window-keyed state lives in `WindowStateCache`; focus state in `FocusStateController`; date-gated suppressions (`activation-switch`, `mouse-focus`, `workspace-transition`) in `SuppressionRegistry`. BSP trees live in `TilingEngine` (one per `(workspace, screen)` pair). Sizing verifies complete actual frames, including the final adjusted pass. Tiled drags use an isolated candidate tree and commit only after verified acceptance; failed candidates restore and verify the pre-drag frames.
 
 Everything runs on the main thread. UI-touching classes (`FocusBorder`, `DimmingOverlay`, `KeybindOverlayController`, `CursorManager`, `MouseTrackingManager`) assert this in DEBUG via `mainThreadOnly()`.
 
