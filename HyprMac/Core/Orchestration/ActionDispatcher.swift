@@ -29,6 +29,19 @@ import Cocoa
 ///
 /// Threading: main-thread only.
 final class ActionDispatcher {
+    static func newWindowIDsForAdmission(
+        _ windowIDs: [CGWindowID],
+        workspaceFor: (CGWindowID) -> Int?
+    ) -> [CGWindowID] {
+        windowIDs.filter { workspaceFor($0) != ScratchpadController.workspace }
+    }
+
+    static func existingAssignmentsForAdmission(
+        _ assignments: [Int: Set<CGWindowID>],
+        fullyForgottenIDs: Set<CGWindowID>
+    ) -> [Int: Set<CGWindowID>] {
+        assignments.mapValues { $0.subtracting(fullyForgottenIDs) }
+    }
 
     // hard dependencies
     private let stateCache: WindowStateCache
@@ -106,9 +119,10 @@ final class ActionDispatcher {
         // workspace assignment for new windows that didn't auto-float onto a
         // disabled monitor. assigning by physical screen — cursor-based was
         // unreliable under multi-monitor + display-reconfig churn.
-        for w in changes.newWindows where !changes.newOnDisabledMonitor.contains(w.windowID) {
-            assignNewWindow(w)
-        }
+        assignNewWindows(
+            changes.newWindows.filter { !changes.newOnDisabledMonitor.contains($0.windowID) },
+            fullyForgottenIDs: changes.fullyForgottenIDs
+        )
 
         // engine/workspace/focus cleanup for ids the service forgot.
         for id in changes.fullyForgottenIDs {
@@ -238,17 +252,63 @@ final class ActionDispatcher {
     /// usable frame yet. Always overwrites any prior assignment: a
     /// recycled `CGWindowID` could carry a leftover entry pointing at a
     /// workspace the user has not touched in days.
-    private func assignNewWindow(_ window: HyprWindow) {
-        let physical = displayManager.screen(for: window)
-        let cursor = screenUnderCursor()
-        let screen = physical ?? cursor
-        let frameDesc = window.frame.map { "(\(Int($0.minX)),\(Int($0.minY)) \(Int($0.width))×\(Int($0.height)))" } ?? "nil"
-        let physicalName = physical?.localizedName ?? "nil"
-        hyprLog(.notice, .orchestration, "assignNewWindow: '\(window.title ?? "?")' (\(window.windowID)) frame=\(frameDesc) physical=\(physicalName) cursor=\(cursor.localizedName) → ws\(workspaceManager.workspaceForScreen(screen)) on \(screen.localizedName)")
+    private func assignNewWindows(_ windows: [HyprWindow], fullyForgottenIDs: Set<CGWindowID>) {
+        let admittedIDs = Set(Self.newWindowIDsForAdmission(
+            windows.map(\.windowID), workspaceFor: workspaceManager.workspaceFor
+        ))
+        var groups: [(screen: NSScreen, windows: [HyprWindow])] = []
+        for window in windows where admittedIDs.contains(window.windowID) {
+            let screen = displayManager.screen(for: window) ?? screenUnderCursor()
+            if let index = groups.firstIndex(where: { $0.screen == screen }) {
+                groups[index].windows.append(window)
+            } else {
+                groups.append((screen, [window]))
+            }
+        }
+        for group in groups {
+            assignNewWindows(group.windows, on: group.screen, fullyForgottenIDs: fullyForgottenIDs)
+        }
+    }
+
+    private func assignNewWindows(_ windows: [HyprWindow], on screen: NSScreen,
+                                  fullyForgottenIDs: Set<CGWindowID>) {
         guard !workspaceManager.isMonitorDisabled(screen) else { return }
-        let ws = workspaceManager.workspaceForScreen(screen)
-        // overwrite any stale entry — assignWindow handles old-set cleanup
-        workspaceManager.assignWindow(window.windowID, toWorkspace: ws)
+        let preferredWorkspace = workspaceManager.workspaceForScreen(screen)
+        let byID = Dictionary(windows.map { ($0.windowID, $0) },
+                              uniquingKeysWith: { first, _ in first })
+        let plan = RetileAllPlanner.admit(
+            windowIDs: windows.map(\.windowID),
+            preferredWorkspace: preferredWorkspace,
+            eligibleWorkspaces: workspaceManager.workspacesAnchoredTo(screen),
+            existingAssignments: Self.existingAssignmentsForAdmission(
+                workspaceManager.regularWorkspaceWindowIDs(),
+                fullyForgottenIDs: fullyForgottenIDs
+            ),
+            excludedWindowIDs: stateCache.floatingWindowIDs.union(stateCache.hiddenWindowIDs),
+            capacityForWorkspace: { [self] workspace in
+                guard let home = workspaceManager.homeScreenForWorkspace(workspace) else { return 0 }
+                return RetileAllPlanner.workspaceCapacity(maxDepth: tilingEngine.maxDepth(for: home))
+            }
+        )
+        RetileAllPlanner.applyAdmission(
+            plan,
+            isWorkspaceVisible: workspaceManager.isWorkspaceVisible,
+            assign: { [self] windowID, workspace in
+                if let window = byID[windowID] {
+                    let physical = displayManager.screen(for: window)
+                    let cursor = screenUnderCursor()
+                    let frameDesc = window.frame.map { "(\(Int($0.minX)),\(Int($0.minY)) \(Int($0.width))×\(Int($0.height)))" } ?? "nil"
+                    let physicalName = physical?.localizedName ?? "nil"
+                    hyprLog(.notice, .orchestration, "assignNewWindow: '\(window.title ?? "?")' (\(window.windowID)) frame=\(frameDesc) physical=\(physicalName) cursor=\(cursor.localizedName) → ws\(workspace) on \(screen.localizedName)")
+                }
+                workspaceManager.assignWindow(windowID, toWorkspace: workspace)
+            },
+            park: { [self] windowID, workspace in
+                guard let window = byID[windowID],
+                      let home = workspaceManager.homeScreenForWorkspace(workspace) else { return }
+                workspaceManager.hideInCorner(window, on: home)
+            }
+        )
     }
 
     /// Re-establish keyboard focus when the border has gone dark but the

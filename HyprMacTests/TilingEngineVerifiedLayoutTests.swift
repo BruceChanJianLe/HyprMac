@@ -297,6 +297,87 @@ final class TilingEngineVerifiedLayoutTests: XCTestCase {
         }
     }
 
+    func testHiddenOriginalsAreNotRestoredAfterUnknownCandidateRead() {
+        assertHiddenOriginalsAreNotRestored(
+            mode: .unknownRead,
+            expectedReason: .readFailed(401, .cannotComplete)
+        )
+    }
+
+    func testHiddenOriginalsAreNotRestoredAfterCandidateDeadline() {
+        assertHiddenOriginalsAreNotRestored(
+            mode: .deadline,
+            expectedReason: .deadlineExceeded
+        )
+    }
+
+    func testHiddenOriginalsAreNotRestoredAfterKnownPositionRefusal() {
+        assertHiddenOriginalsAreNotRestored(
+            mode: .positionRefusal,
+            expectedReason: .geometryMismatch(401)
+        )
+    }
+
+    func testHiddenOriginalsCanCompleteVerifiedReveal() {
+        let fixture = hiddenOriginalFixture(mode: .success)
+
+        let outcome = fixture.engine.applyVerifiedLayout(
+            fixture.tree, in: fixture.usable, generation: fixture.generation
+        )
+
+        guard case .accepted = outcome else {
+            return XCTFail("expected accepted reveal, got \(outcome)")
+        }
+        XCTAssertEqual(fixture.trace.frames, fixture.targets)
+        XCTAssertTrue(fixture.trace.hiddenPositionWrites.isEmpty)
+    }
+
+    private func assertHiddenOriginalsAreNotRestored(
+        mode: HiddenOriginalTrace.Mode,
+        expectedReason: FrameSizingFailure
+    ) {
+        let fixture = hiddenOriginalFixture(mode: mode)
+
+        let outcome = fixture.engine.applyVerifiedLayout(
+            fixture.tree, in: fixture.usable, generation: fixture.generation
+        )
+        let reasons = degradedReasons(outcome)
+
+        XCTAssertEqual(reasons.candidate, expectedReason)
+        XCTAssertEqual(reasons.restoration, .outsideUsableFrame(401))
+        XCTAssertTrue(fixture.trace.hiddenPositionWrites.isEmpty,
+                      "invalid offscreen originals must be rejected before recovery writes")
+        XCTAssertTrue(fixture.trace.frames.values.allSatisfy { fixture.usable.contains($0) },
+                      "the completed candidate writes must remain visible")
+    }
+
+    private func hiddenOriginalFixture(
+        mode: HiddenOriginalTrace.Mode
+    ) -> (engine: TilingEngine, tree: BSPTree, trace: HiddenOriginalTrace,
+          usable: CGRect, targets: [CGWindowID: CGRect], generation: UInt64) {
+        let first = makeWindow(id: 401)
+        let second = makeWindow(id: 402)
+        let tree = BSPTree()
+        XCTAssertTrue(tree.insert(first, maxDepth: 3))
+        XCTAssertTrue(tree.insert(second, maxDepth: 3))
+
+        let usable = CGRect(x: 0, y: 0, width: 1000, height: 700)
+        let hidden: [CGWindowID: CGRect] = [
+            401: CGRect(x: 999, y: 699, width: 480, height: 620),
+            402: CGRect(x: 999, y: 699, width: 480, height: 620)
+        ]
+        let trace = HiddenOriginalTrace(frames: hidden, hiddenFrames: hidden, mode: mode)
+        let engine = TilingEngine(
+            displayManager: DisplayManager(),
+            frameSizingIOFactory: { _, generation in trace.io(generation: generation) }
+        )
+        let targets = Dictionary(uniqueKeysWithValues: tree.layout(
+            in: usable, gap: engine.gapSize, padding: engine.outerPadding
+        ).map { ($0.0.windowID, $0.1) })
+        let generation = engine.beginLayoutGeneration()
+        return (engine, tree, trace, usable, targets, generation)
+    }
+
 }
 
 private enum DirectMutation: CaseIterable {
@@ -438,6 +519,65 @@ private final class OneUnknownReadTrace {
                 if hasWritten && !didFail {
                     didFail = true
                     failedReads += 1
+                    return (.cannotComplete, nil)
+                }
+                return (.success, frames[id]?.origin)
+            },
+            readSize: { [self] id, _ in (.success, frames[id]?.size) },
+            now: { [self] in now },
+            sleep: { [self] interval in now += interval },
+            currentGeneration: generation
+        )
+    }
+}
+
+private final class HiddenOriginalTrace {
+    enum Mode: Equatable {
+        case success
+        case unknownRead
+        case deadline
+        case positionRefusal
+    }
+
+    var frames: [CGWindowID: CGRect]
+    var hiddenPositionWrites: [(CGWindowID, CGPoint)] = []
+    private var now: TimeInterval = 0
+    private var sizeWrites = 0
+    private var failedRead = false
+    private let hiddenFrames: [CGWindowID: CGRect]
+    private let mode: Mode
+
+    init(frames: [CGWindowID: CGRect], hiddenFrames: [CGWindowID: CGRect], mode: Mode) {
+        self.frames = frames
+        self.hiddenFrames = hiddenFrames
+        self.mode = mode
+    }
+
+    func io(generation: @escaping () -> UInt64) -> FrameSizingIO {
+        FrameSizingIO(
+            setMessagingTimeout: { _, _ in .success },
+            writeSize: { [self] id, size, _ in
+                sizeWrites += 1
+                var frame = frames[id] ?? .zero
+                frame.size = size
+                frames[id] = frame
+                if mode == .deadline, sizeWrites == 4 { now = 1 }
+                return .success
+            },
+            writePosition: { [self] id, position, _ in
+                if hiddenFrames[id]?.origin == position {
+                    hiddenPositionWrites.append((id, position))
+                }
+                var frame = frames[id] ?? .zero
+                frame.origin = mode == .positionRefusal
+                    ? CGPoint(x: position.x + 5, y: position.y)
+                    : position
+                frames[id] = frame
+                return .success
+            },
+            readPosition: { [self] id, _ in
+                if mode == .unknownRead, sizeWrites >= 4, !failedRead {
+                    failedRead = true
                     return (.cannotComplete, nil)
                 }
                 return (.success, frames[id]?.origin)

@@ -132,13 +132,25 @@ never become accepted geometry.
 Only a known, stable size conflict permits a second pass.
 `BSPTree.adjustForMinSizes` adjusts constrained ratios, and the final
 adjusted layout goes through the same complete verification. If that pass
-fails, the engine restores the prior ratio snapshot and writes the captured
-original frames once, then verifies restoration. Results distinguish
+fails, the engine restores the prior ratio snapshot. It checks captured
+original frames against the usable screen before writing them back. Parked
+workspace frames are not valid restoration targets for a visible workspace;
+the result remains degraded without moving windows back offscreen. Valid
+original frames are written once and restoration is verified. Scratchpad
+restoration uses the full display bounds, even when its candidate layout uses
+an inset region. Results distinguish
 accepted geometry, rejected geometry with verified restoration, and a
 degraded state whose restoration could not be verified. Superseded work
 does not restore frames over a newer operation.
 
 Normal smart insertion can still auto-float a new window when no leaf fits.
+Before insertion, discovery assigns new tiled windows within the physical
+monitor's regular workspaces. It fills the active workspace up to
+`2^maxDepth`, then visits the next anchored workspace in cyclic numeric order.
+Only new IDs are assigned; existing workspace membership, floating windows,
+and scratchpad members are preserved. New windows assigned to a hidden
+workspace are parked there. Startup packing uses the same capacity. This
+count limit does not guarantee that every application's dimensions will fit.
 The old post-readback overflow auto-floating path remains disabled. Target
 insertion uses one candidate pass and one possible restoration, without
 ratio adjustment, eviction, or automatic floating.

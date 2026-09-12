@@ -7,6 +7,11 @@ implemented. The historical checkpoints below preserve both failed and passing
 runs; they are not claims about the current source. The final verification
 section records the latest results and remaining checks.
 
+Live use of the original implementation subsequently exposed workspace reveal
+and late-discovery admission failures. The follow-up investigation and fixes
+are recorded at the end of this document. The original passing unit suite did
+not establish visual correctness.
+
 ## Deterministic sizing seam
 
 The focused sizing tests use an injected AX operation surface and monotonic
@@ -388,3 +393,86 @@ display/workspace changes, queued-drop cancellation during stop, focus
 indicators, floating-window dimming, containment, padding, and gaps. The 18
 skipped visual tests also remain unverified. Unit tests do not prove this
 visual behavior.
+
+## Workspace regression follow-up
+
+After an authorized installation of `93bfedf`, Zach reported that incoming
+workspace windows flashed onscreen and disappeared. Messages also entered
+scratchpad when five windows should have occupied two regular workspaces.
+The running build was kept in place for investigation at Zach's request.
+The following changes have not been deployed or visually accepted.
+
+### Causes and corrections
+
+The new ordinary-layout transaction captured incoming windows while they were
+still parked at the workspace hide corner. When candidate verification failed,
+it wrote those parked originals back before discovering that restoration was
+outside the usable screen. That rollback introduced the visible disappearance.
+Ordinary layout restoration now preflights captured originals against the
+usable screen before any restoration write. An invalid offscreen baseline
+returns a typed degraded result with the candidate and restoration reasons;
+it never claims a successful restoration or substitutes invented originals.
+The current observed candidate frames are retained as evidence, and the
+failure reasons are logged. Valid visible originals still restore normally.
+
+Scratchpad uses separate bounds: candidates validate against its inset region,
+while restoration validates against the full display. Otherwise a legitimate
+full-screen pre-operation frame would be incorrectly treated as offscreen.
+
+The overflow report had a separate cause. Startup distribution ran before
+windows were discoverable during a screen interruption. After wake/unlock,
+discovery delivered five windows together and the existing dispatcher assigned
+every one to the active workspace without checking capacity. The fifth tile
+hit the existing scratchpad overflow handler. This assignment policy predates
+`93bfedf`; the new verified-layout rollback did not send Messages to scratchpad.
+
+Discovery now admits new windows as a batch. It counts existing tiled members,
+fills the active workspace, then uses the next regular workspace anchored to
+the same physical monitor. Hidden destinations are parked immediately. Existing
+assignments and scratchpad membership remain intact; incoming floating windows
+do not consume tiled capacity. Incoming IDs are sorted and deduplicated, and
+recycled IDs do not count against both their old and new slots. Only genuine
+exhaustion of eligible workspaces falls back to the existing overflow path.
+Startup distribution and workspace moves share the same `2^maxDepth` capacity;
+the former incorrectly used `maxDepth + 1`. The settings caption now states
+the actual capacity and next-workspace behavior.
+
+### Red/green evidence
+
+- `red-workspace-reveal.log`: 13 tests, six expected assertions across unknown
+  read, elapsed-deadline, and stable position-refusal cases. Each proved that
+  rollback wrote hidden positions and left final fake frames offscreen.
+- `green-workspace-reveal.log`: the new regressions passed, but two existing
+  scratchpad assertions failed because the first guard used inset bounds.
+  `green-reveal-scratchpad-bounds.log`: all 13 passed after separating bounds.
+- `red-late-admission.log`: 11 tests, 11 expected assertions for capacity,
+  occupancy, destination order, and actual assignment/parking callbacks.
+- `red-admission-classification.log`: 14 tests, four expected assertions for
+  floating capacity, scratchpad preservation, and forgotten occupancy.
+- `red-admission-order.log`: 16 tests, four expected assertions for stable
+  deduplication and recycled-ID occupancy. Earlier admission cases passed.
+- `workspace-regression-full.log`: **474 tests, 18 visual skips, zero failures**.
+  The relevant suites include 16 planner/admission tests and 13 verified engine
+  tests. Existing sizing, drag transactions, and keyboard behavior tests ran.
+- `workspace-regression-stress.log`: **2,720 passing test executions** across
+  100 suite runs: 20 repetitions each of admission, verified layout, frame sizing,
+  tiled drag transaction, and tiled drag engine suites.
+- `workspace-regression-debug.log` and `workspace-regression-release.log`:
+  Sparkle-linked Debug and Release application builds both succeeded.
+- `regression-lint.json`: 241 findings (228 warnings, 13 errors), compared with
+  240 findings (227 warnings, 13 errors) in the archived `93bfedf` baseline.
+  There are no new errors. The admission planner adds one six-parameter warning;
+  existing engine file/type length warnings increase by 16 lines. No baseline
+  findings were suppressed and no lint configuration changed.
+- Shell syntax checks for the isolated test and Debug build scripts passed,
+  as did `git diff --check`.
+
+All logs above are under ignored `build/sizing/`. Expected assertion failures
+were observed before the corresponding production fixes. Independent review
+of the final restoration and admission paths found no blocking issues.
+
+These tests establish the specific code-path corrections, not live visual
+acceptance. The original running app did not log the precise candidate
+verification failure, so the investigation does not claim whether its trigger
+was readback delay, a write error, deadline, or geometry rejection. The new
+diagnostic preserves that distinction for subsequent authorized testing.

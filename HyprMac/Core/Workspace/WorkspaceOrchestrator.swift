@@ -199,7 +199,7 @@ final class WorkspaceOrchestrator {
                 let wids = workspaceManager.windowIDs(onWorkspace: number).subtracting(stateCache.hiddenWindowIDs)
                 let tiledCount = wids.filter { !stateCache.floatingWindowIDs.contains($0) }.count
                 let maxDepth = tilingEngine.maxDepth(for: targetScreen)
-                let maxWindows = 1 << maxDepth // 2^maxDepth — smart insert backtracks to fill all slots
+                let maxWindows = RetileAllPlanner.workspaceCapacity(maxDepth: maxDepth)
                 if tiledCount >= maxWindows {
                     hyprLog(.debug, .workspace, "workspace \(number) full (\(tiledCount) tiled, max \(maxWindows)) — rejected move")
                     NSSound.beep()

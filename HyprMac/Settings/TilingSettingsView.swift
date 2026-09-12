@@ -326,7 +326,8 @@ private struct MaxSplitsPicker: View {
                     .foregroundStyle(Color.hyprTextSecondary)
                     .padding(.leading, HyprSpacing.xs)
             }
-            Text("Maximum number of tiled windows on this display. Additional windows auto-float.")
+            Text("Up to \(RetileAllPlanner.workspaceCapacity(maxDepth: value)) tiles per workspace, depending on window sizes. "
+                 + "New windows use the next workspace when full.")
                 .font(.hyprCaption)
                 .foregroundStyle(Color.hyprTextTertiary)
         }

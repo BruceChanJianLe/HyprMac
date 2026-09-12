@@ -434,8 +434,10 @@ class TilingEngine {
 
     internal func applyVerifiedLayout(_ tree: BSPTree, in rect: CGRect,
                                       generation: UInt64,
-                                      originalFrames suppliedOriginalFrames: [CGWindowID: CGRect]? = nil) -> LayoutApplicationOutcome {
+                                      originalFrames suppliedOriginalFrames: [CGWindowID: CGRect]? = nil,
+                                      restorationUsableFrame suppliedRestorationFrame: CGRect? = nil) -> LayoutApplicationOutcome {
         let windows = tree.allWindows
+        let restorationFrame = suppliedRestorationFrame ?? rect
         let originalFrames: [CGWindowID: CGRect]
         if let suppliedOriginalFrames {
             guard suppliedOriginalFrames.count == windows.count,
@@ -484,11 +486,19 @@ class TilingEngine {
                              actualFrames: terminal.actualFrames)
         }
         tree.restore(ratioSnapshot)
+        let reason = terminal.verdict.failure ?? .attemptsExhausted
+        if let invalidOriginalID = originalFrames.keys.sorted().first(where: { windowID in
+            originalFrames[windowID].map { !restorationFrame.contains($0) } ?? true
+        }) {
+            return .degraded(candidateReason: reason,
+                             restorationReason: .outsideUsableFrame(invalidOriginalID),
+                             actualFrames: terminal.actualFrames)
+        }
         let originals = windows.compactMap { window in
             originalFrames[window.windowID].map { (window, $0) }
         }
-        let restored = applyLayoutFinal(originals, usableFrame: rect, generation: generation)
-        let reason = terminal.verdict.failure ?? .attemptsExhausted
+        let restored = applyLayoutFinal(originals, usableFrame: restorationFrame,
+                                        generation: generation)
         if case .accepted = restored.verdict {
             return .rejectedRestored(reason: reason, actualFrames: restored.actualFrames)
         }
@@ -698,7 +708,12 @@ class TilingEngine {
         let rect = m.rect
 
         _ = consumePendingInserted(for: key, in: t)
-        _ = applyVerifiedLayout(t, in: rect, generation: generation)
+        let outcome = applyVerifiedLayout(t, in: rect, generation: generation)
+        if case let .degraded(candidateReason, restorationReason, _) = outcome {
+            let restoration = String(describing: restorationReason)
+            hyprLog(.notice, .tiling,
+                    "verified layout degraded: candidate=\(candidateReason) restoration=\(restoration)")
+        }
 
         // clean up empty trees for this workspace on other screens
         for (key, t) in trees where key.workspace == workspace {
@@ -755,7 +770,8 @@ class TilingEngine {
         t.root.resetSplitRatios()
         t.root.applySavedRatios()
 
-        _ = applyVerifiedLayout(t, in: rect, generation: generation)
+        _ = applyVerifiedLayout(t, in: rect, generation: generation,
+                                restorationUsableFrame: displayManager.cgRect(for: screen))
         return rejects
     }
 

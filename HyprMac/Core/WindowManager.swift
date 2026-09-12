@@ -1586,7 +1586,7 @@ class WindowManager {
             workspaceCount: workspaceManager.workspaceCount,
             capacityForWorkspace: { [self] workspace in
                 guard let screen = workspaceManager.homeScreenForWorkspace(workspace) else { return 0 }
-                return tilingEngine.maxDepth(for: screen) + 1
+                return RetileAllPlanner.workspaceCapacity(maxDepth: tilingEngine.maxDepth(for: screen))
             }
         )
         for workspace in plan.assignments.keys.sorted() {
