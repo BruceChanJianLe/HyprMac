@@ -40,6 +40,38 @@ final class TiledDragEventTests: XCTestCase {
                                              sawDragEvent: true).sawDragEvent)
     }
 
+    func testJitterUnderThresholdIsNotADrag() {
+        XCTAssertFalse(TiledDragEvent.isDrag(from: CGPoint(x: 100, y: 100),
+                                             to: CGPoint(x: 103, y: 100),
+                                             sawDragEvent: true))
+    }
+
+    func testTravelBeyondThresholdIsADrag() {
+        XCTAssertTrue(TiledDragEvent.isDrag(from: CGPoint(x: 100, y: 100),
+                                            to: CGPoint(x: 100, y: 112),
+                                            sawDragEvent: true))
+    }
+
+    func testMissingPressPointFallsBackToTheDragEventFlag() {
+        XCTAssertTrue(TiledDragEvent.isDrag(from: nil, to: CGPoint(x: 500, y: 500),
+                                            sawDragEvent: true))
+        XCTAssertFalse(TiledDragEvent.isDrag(from: nil, to: CGPoint(x: 500, y: 500),
+                                             sawDragEvent: false))
+    }
+
+    func testTravelWithoutADragEventIsNeverADrag() {
+        XCTAssertFalse(TiledDragEvent.isDrag(from: CGPoint(x: 100, y: 100),
+                                             to: CGPoint(x: 130, y: 100),
+                                             sawDragEvent: false))
+    }
+
+    func testTravelExactlyAtTheThresholdIsADrag() {
+        XCTAssertEqual(TilingConfig.dragThresholdPx, 8)
+        XCTAssertTrue(TiledDragEvent.isDrag(from: CGPoint(x: 100, y: 100),
+                                            to: CGPoint(x: 108, y: 100),
+                                            sawDragEvent: true))
+    }
+
     private func makeEvent(type: CGEventType, point: CGPoint,
                            optionDown: Bool = false) throws -> NSEvent {
         let mouseType: CGMouseButton = .left

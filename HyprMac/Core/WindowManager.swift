@@ -862,10 +862,17 @@ class WindowManager {
             let shouldDetectDrag = self?.mouseDraggedSinceDown ?? false
             let draggedFloatingID = self?.mouseDownFloatingWindowID ?? 0
             if let self {
+                let primaryHeight = self.displayManager.primaryScreenHeight
+                let releasePoint = TiledDragEvent.point(event: event, primaryHeight: primaryHeight)
+                // a .leftMouseDragged fires on a pixel of hand jitter, so the flag
+                // alone turns ordinary clicks into drag transactions. pointer
+                // travel from the press point is what actually decides.
                 let release = TiledDragEvent.release(
                     event: event,
-                    primaryHeight: self.displayManager.primaryScreenHeight,
-                    sawDragEvent: shouldDetectDrag)
+                    primaryHeight: primaryHeight,
+                    sawDragEvent: TiledDragEvent.isDrag(from: self.mouseDownPointCG,
+                                                        to: releasePoint,
+                                                        sawDragEvent: shouldDetectDrag))
                 self.tiledDragHandler.handleMouseUp(release)
             }
             self?.mouseButtonDown = false

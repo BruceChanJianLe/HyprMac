@@ -60,15 +60,22 @@ struct AXFrameWriteBatch {
         let application = raw.makeApplication(ownerPID)
         let timeoutError = raw.setApplicationTimeout(application, timeout)
         if let failure = checkpoint() { return .interrupted(failure) }
-        guard timeoutError == .success else { return .failed(timeoutError) }
+        guard timeoutError == .success else {
+            hyprLog(.debug, .tiling, "enhanced ui: pid=\(ownerPID) begin timeout err=\(timeoutError.rawValue)")
+            return .failed(timeoutError)
+        }
 
         let (readError, value) = raw.copyEnhancedUI(application)
         if let failure = checkpoint() { return .interrupted(failure) }
         if readError == .attributeUnsupported || readError == .noValue {
             return .ready(Token(ownerPID: ownerPID, application: application, restoreEnhancedUI: false))
         }
-        guard readError == .success else { return .failed(readError) }
+        guard readError == .success else {
+            hyprLog(.debug, .tiling, "enhanced ui: pid=\(ownerPID) begin read err=\(readError.rawValue)")
+            return .failed(readError)
+        }
         guard let value, CFGetTypeID(value) == CFBooleanGetTypeID() else {
+            hyprLog(.debug, .tiling, "enhanced ui: pid=\(ownerPID) begin read gave a non-boolean")
             return .failed(.failure)
         }
         guard let enhancedUI = value as? Bool else { return .failed(.failure) }
@@ -78,10 +85,14 @@ struct AXFrameWriteBatch {
 
         let toggleTimeoutError = raw.setApplicationTimeout(application, timeout)
         if let failure = checkpoint() { return .interrupted(failure) }
-        guard toggleTimeoutError == .success else { return .failed(toggleTimeoutError) }
+        guard toggleTimeoutError == .success else {
+            hyprLog(.debug, .tiling, "enhanced ui: pid=\(ownerPID) begin toggle timeout err=\(toggleTimeoutError.rawValue)")
+            return .failed(toggleTimeoutError)
+        }
         let disableError = raw.setEnhancedUI(application, false)
         let token = Token(ownerPID: ownerPID, application: application, restoreEnhancedUI: true)
         guard disableError == .success else {
+            hyprLog(.debug, .tiling, "enhanced ui: pid=\(ownerPID) begin disable err=\(disableError.rawValue)")
             let cleanup = end(token, timeout: timeout, checkpoint: checkpoint)
             return cleanup == .restored
                 ? .failed(disableError)
@@ -99,6 +110,9 @@ struct AXFrameWriteBatch {
         _ = checkpoint()
         let restoreError = raw.setEnhancedUI(token.application, true)
         _ = checkpoint()
+        if timeoutError != .success || restoreError != .success {
+            hyprLog(.debug, .tiling, "enhanced ui: pid=\(token.ownerPID) end timeout err=\(timeoutError.rawValue) restore err=\(restoreError.rawValue)")
+        }
         switch (timeoutError, restoreError) {
         case (.success, .success):
             return .restored

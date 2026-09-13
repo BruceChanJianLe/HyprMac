@@ -86,6 +86,15 @@ enum TilingConfig {
     // px wiggle that still counts as the same reading during settle detection.
     static let readbackStableTolerancePx: CGFloat = 2
 
+    // MARK: - pointer input
+
+    // pointer travel between mouse-down and mouse-up below which a press is
+    // a click, not a drag. a .leftMouseDragged event fires on 1pt of hand
+    // jitter during an ordinary click; without this floor every such click
+    // ran a full tiled-drag transaction and flashed red when the busy app's
+    // frame read timed out.
+    static let dragThresholdPx: CGFloat = 8
+
     // MARK: - geometric tolerances
 
     // 1px slack on rect comparisons in pairFits (sub-pixel rounding).

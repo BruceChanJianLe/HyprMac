@@ -49,6 +49,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         #endif
 
+        // one-shot frame diagnostic. runs before anything starts, so no
+        // window manager and no key remap touch the machine.
+        #if DEBUG
+        if let probe = ProbeFrameArguments.parse(CommandLine.arguments) {
+            switch probe {
+            case let .success(arguments):
+                ProbeFrame.run(arguments)
+            case let .failure(reason):
+                print("HyprMac --probe-frame: \(reason)")
+                fflush(stdout)
+                exit(1)
+            }
+        }
+        #endif
+
         if AXIsProcessTrusted() {
             startAfterPermissionGranted()
         } else {

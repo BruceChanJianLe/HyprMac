@@ -112,6 +112,25 @@ class AccessibilityManager {
         return err == .success && wid != 0 ? wid : nil
     }
 
+    /// Resolve one `CGWindowID` to its AX element and owner pid.
+    ///
+    /// Same pairing path as `getAllWindows` — owner from the CG window
+    /// list, then the owning app's AX window whose `_AXUIElementGetWindow`
+    /// matches — but for a single id and without the discovery filters.
+    /// Used by the `--probe-frame` diagnostic.
+    func axWindow(forWindowID target: CGWindowID) -> (element: AXUIElement, ownerPID: pid_t)? {
+        let owner = cgWindowsByPID().first { _, windows in
+            windows.contains { $0.windowID == target }
+        }
+        guard let pid = owner?.key else { return nil }
+        let appRef = AXUIElementCreateApplication(pid)
+        var value: AnyObject?
+        guard AXUIElementCopyAttributeValue(appRef, kAXWindowsAttribute as CFString, &value) == .success,
+              let axWindows = value as? [AXUIElement],
+              let element = axWindows.first(where: { windowID(for: $0) == target }) else { return nil }
+        return (element, pid)
+    }
+
     /// Snapshot every visible normal window across all running apps.
     ///
     /// Walks every regular-activation app's `kAXWindowsAttribute`,

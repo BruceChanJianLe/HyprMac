@@ -8,6 +8,19 @@ struct TiledDragEvent {
         return CGPoint(x: appKitPoint.x, y: primaryHeight - appKitPoint.y)
     }
 
+    /// Did this press actually move the pointer far enough to be a drag?
+    ///
+    /// macOS fires `.leftMouseDragged` on a pixel of hand jitter, so the
+    /// event alone is not evidence. Travel from the press point decides.
+    /// A nil press point (monitors installed mid-press) falls back to the
+    /// event flag — the old behaviour.
+    static func isDrag(from press: CGPoint?, to release: CGPoint, sawDragEvent: Bool,
+                       threshold: CGFloat = TilingConfig.dragThresholdPx) -> Bool {
+        guard sawDragEvent else { return false }
+        guard let press else { return true }
+        return hypot(release.x - press.x, release.y - press.y) >= threshold
+    }
+
     static func release(event: NSEvent, primaryHeight: CGFloat,
                         sawDragEvent: Bool) -> TiledDragRelease {
         TiledDragRelease(pointer: point(event: event, primaryHeight: primaryHeight),

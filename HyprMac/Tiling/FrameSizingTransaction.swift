@@ -169,8 +169,22 @@ struct FrameSizingAttempt {
         return Result(verdict: .accepted, actualFrames: frames)
     }
 
+    /// Traced wrapper around the attempt. Every line is `.debug` and built
+    /// inside `hyprLog`'s autoclosure, so nothing is formatted unless the
+    /// file log or the trace tier is on.
     func apply(targets: [Target], usableFrame: CGRect, gap: CGFloat,
                generation: UInt64) -> Result {
+        let started = io.now()
+        let result = perform(targets: targets, usableFrame: usableFrame, gap: gap,
+                             generation: generation)
+        hyprLog(.debug, .tiling, "frame attempt: wids=\(targets.map(\.windowID)) "
+                + "verdict=\(traced(result.verdict)) "
+                + "elapsed=\(String(format: "%.0f", (io.now() - started) * 1000))ms")
+        return result
+    }
+
+    private func perform(targets: [Target], usableFrame: CGRect, gap: CGFloat,
+                         generation: UInt64) -> Result {
         guard io.currentGeneration() == generation else {
             return Result(verdict: .unknown(.superseded), actualFrames: [:])
         }
@@ -212,6 +226,17 @@ struct FrameSizingAttempt {
                 guard let frame = actualFrames[target.windowID] else {
                     return Result(verdict: .unknown(.windowUnavailable(target.windowID)),
                                   actualFrames: actualFrames)
+                }
+                // only off-target samples are logged, and "off" means not
+                // exactly what we asked for — a cell-rounded size sits inside
+                // the verdict's tolerance and is precisely what we want to see.
+                if frame != target.frame {
+                    hyprLog(.debug, .tiling, "frame readback: wid=\(target.windowID) "
+                            + "sample=\(attemptIndex + 1) actual=\(traced(frame)) "
+                            + "delta=(\(traced(frame.width - target.frame.width)),"
+                            + "\(traced(frame.height - target.frame.height))) "
+                            + "dx=\(traced(frame.minX - target.frame.minX)),"
+                            + "dy=\(traced(frame.minY - target.frame.minY))")
                 }
                 if let anchor = stableAnchors[target.windowID], stable(frame, anchor) {
                     stableCounts[target.windowID, default: 1] += 1
@@ -266,6 +291,8 @@ struct FrameSizingAttempt {
 
     private func write(_ target: Target, actualFrames: [CGWindowID: CGRect],
                        checkpoint: () -> FrameSizingFailure?) -> Result? {
+        hyprLog(.debug, .tiling,
+                "frame write: wid=\(target.windowID) target=\(traced(target.frame))")
         if let failure = checkpoint() {
             return Result(verdict: .unknown(failure), actualFrames: actualFrames)
         }
@@ -287,18 +314,22 @@ struct FrameSizingAttempt {
                        checkpoint: checkpoint)
         }
 
-        let writes: [() -> AXError] = [
-            { io.writeSize(target.windowID, target.frame.size, configuration.perCallTimeout) },
-            { io.writePosition(target.windowID, target.frame.origin, configuration.perCallTimeout) },
-            { io.writeSize(target.windowID, target.frame.size, configuration.perCallTimeout) }
+        let writes: [(String, () -> AXError)] = [
+            ("size", { io.writeSize(target.windowID, target.frame.size, configuration.perCallTimeout) }),
+            ("position", { io.writePosition(target.windowID, target.frame.origin, configuration.perCallTimeout) }),
+            ("size2", { io.writeSize(target.windowID, target.frame.size, configuration.perCallTimeout) })
         ]
-        for operation in writes {
+        for (label, operation) in writes {
             if let failure = prepare(target.windowID, checkpoint: checkpoint) {
                 return end(token, windowID: target.windowID,
                            preserving: result(for: failure, actualFrames: actualFrames),
                            checkpoint: checkpoint)
             }
             let error = operation()
+            if error != .success {
+                hyprLog(.debug, .tiling,
+                        "frame write: wid=\(target.windowID) \(label) err=\(error.rawValue)")
+            }
             let primary: Result
             if let failure = checkpoint() {
                 primary = Result(verdict: .unknown(failure), actualFrames: actualFrames)
@@ -387,6 +418,24 @@ struct FrameSizingAttempt {
         case let .failedTimeoutAndRestore(timeout, restore):
             let nested = cleanupFailure(windowID, primary: primaryResult, error: timeout)
             return cleanupFailure(windowID, primary: nested, error: restore)
+        }
+    }
+
+    // compact trace formatting. %g so whole pixels stay short and a
+    // sub-pixel value still shows its fraction.
+    private func traced(_ value: CGFloat) -> String {
+        String(format: "%g", Double(value))
+    }
+
+    private func traced(_ rect: CGRect) -> String {
+        "(\(traced(rect.minX)),\(traced(rect.minY)),\(traced(rect.width)),\(traced(rect.height)))"
+    }
+
+    private func traced(_ verdict: Verdict) -> String {
+        switch verdict {
+        case .accepted: return "accepted"
+        case let .rejected(failure): return "rejected(\(failure))"
+        case let .unknown(failure): return "unknown(\(failure))"
         }
     }
 

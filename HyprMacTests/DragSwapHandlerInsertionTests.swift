@@ -508,6 +508,35 @@ final class DragSwapHandlerInsertionTests: XCTestCase {
         XCTAssertNil(written)
     }
 
+    func testClickJitterOnAFailedCaptureNeitherReportsNorCompletes() {
+        let press = CGPoint(x: 400, y: 300)
+        let release = CGPoint(x: 403, y: 302)
+        let scheduler = DeferredScheduler()
+        var captureFailures = 0
+        var completions = 0
+        let handler = TiledDragHandler(
+            capture: { _, _ in .unknown(.deadlineExceeded) },
+            drop: { _, _ in XCTFail("a click must not apply a drop"); return .superseded },
+            resolveTarget: { _, _ in nil },
+            schedule: scheduler.schedule,
+            capturedFrames: { _ in },
+            readCache: { [:] },
+            writeCache: { _ in XCTFail("a click must not write the cache") },
+            completion: { _ in completions += 1 },
+            captureFailure: { _ in captureFailures += 1 }
+        )
+
+        handler.handleMouseDown(at: press)
+        handler.handleMouseUp(TiledDragRelease(
+            pointer: release, optionDown: false,
+            sawDragEvent: TiledDragEvent.isDrag(from: press, to: release, sawDragEvent: true)))
+
+        XCTAssertEqual(captureFailures, 0)
+        XCTAssertEqual(completions, 0)
+        XCTAssertEqual(scheduler.jobCount, 0)
+        XCTAssertFalse(handler.isFinishingDrag)
+    }
+
     func testInjectedHandlerSkipsCacheWriteEntirelyForSupersededCompletion() {
         let captured = snapshot(draggedID: 111)
         let scheduler = DeferredScheduler()

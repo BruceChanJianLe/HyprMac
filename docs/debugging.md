@@ -146,6 +146,34 @@ defaults to `true` under `#if DEBUG`; in Release it follows the same
 directory or the file cannot be created the log disables itself
 silently — one `.notice` says so and the app runs unchanged.
 
+### Frame write tracing
+
+`FrameSizingAttempt` traces every AX frame write and every readback at
+`.debug` under `category: tiling`, so the file log shows what was asked
+for and what actually came back — not just the final `verified layout`
+verdict. Four line names:
+
+- `frame write: wid=<id> target=(x,y,w,h)` — once per window, before its
+  writes. The target is the frame the layout asked for.
+- `frame write: wid=<id> <size|position|size2> err=<raw>` — one per
+  individual AX write that did not succeed, with the raw `AXError` code.
+  `size2` is the second size write of the resize-move-resize pattern.
+- `frame readback: wid=<id> sample=<n> actual=(x,y,w,h) delta=(dw,dh)
+  dx=<>,dy=<>` — one per settle-loop sample that did not land exactly on
+  target. `delta` is size (actual minus target), `dx`/`dy` position.
+  Cell-quantizing apps (terminals) show a steady non-zero delta here
+  even on an accepted attempt, because the verdict tolerates one cell.
+- `frame attempt: wids=[…] verdict=<…> elapsed=<n>ms` — once at the end
+  of every attempt, the restore attempt after a rejection included.
+
+`AXFrameWriteBatch` logs its AXEnhancedUserInterface toggle at the same
+tier, and only when it fails: `enhanced ui: pid=<pid> begin disable
+err=<raw>`, plus the `begin timeout`, `begin toggle timeout`, `begin
+read`, `begin read gave a non-boolean` and `end` variants. A healthy run
+logs none of them.
+
+Window ids only; no titles.
+
 ## On-demand state dump
 
 `WindowManager.dumpState(reason:)` logs a `.notice` block under
@@ -176,6 +204,41 @@ tree on its home screen — compare it against `assigned` minus
 `floating` minus `hidden` to spot a window that holds a workspace slot
 but is missing from the tree. Window ids only; titles never enter the
 dump.
+
+## `--probe-frame` (debug builds)
+
+One AX frame write against one window, in isolation, with the window
+manager and the key remap not started. Use it when a window reads back
+a size nobody asked for and you want to know whether the app or the
+layout is responsible.
+
+```
+--probe-frame <windowID> <x> <y> <w> <h> [--order size-position-size|position-size|size-only] [--out <path>]
+```
+
+It reads position and size, performs the writes in the requested order
+with a 1.0 s messaging timeout, waits 0.3 s, reads back, and records
+every screen's `frame` and `visibleFrame` in both NS and CG
+coordinates. The report goes to `--out` (default
+`/tmp/hyprmac-probe-frame.txt`). Exit status is 0 on a clean run and 1
+when any AX call failed — the raw error code is in the file either way.
+The default order, `size-position-size`, is the one
+`FrameSizingAttempt` uses.
+
+Launch it through Launch Services, not by exec'ing the binary: the
+Accessibility grant belongs to the bundle, and a direct exec from SSH
+comes back untrusted (see
+[laptop-debug-deployment.md](laptop-debug-deployment.md)).
+
+```bash
+/usr/bin/open -n -W --stdout /tmp/probe.out --stderr /tmp/probe.err \
+  '/Users/zgray/Applications/HyprMac Debug.app' \
+  --args --probe-frame <wid> <x> <y> <w> <h>
+cat /tmp/hyprmac-probe-frame.txt
+```
+
+Window ids come from the state dump above, or from
+`frame write:` lines in the file log.
 
 ## Verbose logging in Release
 
