@@ -102,6 +102,13 @@ final class WindowDiscoveryService {
     /// teleport it to the foreground workspace.
     private var userHiddenIDs: Set<CGWindowID> = []
 
+    /// Reserved hidden ids where AX could not answer when they vanished,
+    /// so the reservation is a guess, with the cycles spent asking. Re-checked
+    /// until AX gives a real answer or the budget runs out (then it stays
+    /// reserved — the safe side).
+    private var unverifiedReservedIDs: [CGWindowID: Int] = [:]
+    private static let maxReverifyAttempts = 5
+
     /// When each id went gone-but-pid-alive. A return within seconds is a
     /// flap — a stale/partial AX snapshot, not a real minimize — and each
     /// flap cycle drives two retiles (sibling expands full-screen, then
@@ -166,6 +173,8 @@ final class WindowDiscoveryService {
                                  focusedWindowGone: false, requestsRecheck: true)
         }
         massGoneSkips = 0
+
+        reverifyUnresolvedReservations(currentIDs: currentIDs, runningPIDs: runningPIDs)
 
         var newWindows: [HyprWindow] = []
         var newOnDisabled: Set<CGWindowID> = []
@@ -237,8 +246,16 @@ final class WindowDiscoveryService {
                 stateCache.knownWindowIDs.remove(id)
                 stateCache.hiddenWindowIDs.insert(id)
                 hiddenAt[id] = Date()
-                // nil (AX unreadable) counts as user-hidden — the safe side
-                if accessibility.isWindowMinimizedOrAppHidden(windowID: id, pid: pid) != false {
+                // anything but a verified close keeps its tile slot: minimized,
+                // Cmd-H'd, on another Space, or unreadable. nil (AX unreadable)
+                // reserves too — the safe side — but gets re-checked next cycle
+                // so a close isn't reserved forever.
+                let state = accessibility.hiddenWindowState(windowID: id, pid: pid)
+                if state != .absent {
+                    stateCache.reservedHiddenWindowIDs.insert(id)
+                    if state == nil { unverifiedReservedIDs[id] = 0 }
+                }
+                if state == nil || state == .minimized || state == .appHidden {
                     userHiddenIDs.insert(id)
                 }
                 let bundle = bundleIDForPID(pid) ?? "pid \(pid)"
@@ -267,6 +284,9 @@ final class WindowDiscoveryService {
         let reopened = Set(returned.map { $0.windowID }).subtracting(userHiddenIDs)
         userHiddenIDs.subtract(returned.map { $0.windowID })
         userHiddenIDs.formIntersection(stateCache.hiddenWindowIDs)
+        stateCache.reservedHiddenWindowIDs.subtract(returned.map { $0.windowID })
+        stateCache.reservedHiddenWindowIDs.formIntersection(stateCache.hiddenWindowIDs)
+        unverifiedReservedIDs = unverifiedReservedIDs.filter { stateCache.hiddenWindowIDs.contains($0.key) }
         let drift = detectScreenDrift(snapshot, justReturned: reopened)
 
         let focusedGone = goneIDs.contains(focusedWindowID)
@@ -301,6 +321,41 @@ final class WindowDiscoveryService {
     }
 
     // MARK: - private helpers
+
+    /// Re-ask AX about hidden ids whose reservation was a guess (the query
+    /// returned nil when they vanished). A window the user actually closed
+    /// would otherwise hold its workspace slot until the app quits.
+    ///
+    /// Ids back in this cycle's snapshot are left alone: the returned pass
+    /// below owns them, and AX would answer "not minimized" for a window
+    /// that is plainly on screen — stripping the reservation and misfiling
+    /// the return as a recycled-id reopen.
+    private func reverifyUnresolvedReservations(currentIDs: Set<CGWindowID>, runningPIDs: Set<pid_t>) {
+        for (id, attempts) in unverifiedReservedIDs {
+            guard stateCache.hiddenWindowIDs.contains(id) else {
+                unverifiedReservedIDs[id] = nil
+                continue
+            }
+            guard !currentIDs.contains(id) else { continue }
+            guard let pid = stateCache.windowOwners[id], runningPIDs.contains(pid) else { continue }
+            switch accessibility.hiddenWindowState(windowID: id, pid: pid) {
+            case .absent:
+                stateCache.reservedHiddenWindowIDs.remove(id)
+                unverifiedReservedIDs[id] = nil
+                userHiddenIDs.remove(id)
+                hyprLog(.debug, .discovery, "hidden window \(id) verified closed — releasing its workspace reservation")
+            case .minimized, .appHidden, .present:
+                unverifiedReservedIDs[id] = nil
+            case nil:
+                // one AX round trip per cycle; stop asking after a few
+                if attempts + 1 >= Self.maxReverifyAttempts {
+                    unverifiedReservedIDs[id] = nil
+                } else {
+                    unverifiedReservedIDs[id] = attempts + 1
+                }
+            }
+        }
+    }
 
     /// Sweep cache state for ids that are no longer alive anywhere.
     ///

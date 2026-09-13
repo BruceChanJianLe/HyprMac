@@ -34,6 +34,13 @@ final class AXNotificationServiceTests: XCTestCase {
         XCTAssertEqual(fireCount, 0)
     }
 
+    func testSubscriptionIsRecordedOnlyWhenTheDestroyNotificationTookHold() {
+        XCTAssertTrue(AXNotificationService.subscriptionRecorded(destroyed: .success))
+        XCTAssertTrue(AXNotificationService.subscriptionRecorded(destroyed: .notificationAlreadyRegistered))
+        XCTAssertFalse(AXNotificationService.subscriptionRecorded(destroyed: .cannotComplete))
+        XCTAssertFalse(AXNotificationService.subscriptionRecorded(destroyed: .failure))
+    }
+
     func testStartupAttachesAppsBeforeSubscribingInitialWindows() {
         var calls: [String] = []
         var subscribed: [CGWindowID] = []

@@ -55,7 +55,8 @@ final class RetileAllPlannerTests: XCTestCase {
     func testAssignedHiddenWindowsStillConsumeWorkspaceCapacity() {
         let exclusions = ActionDispatcher.admissionExclusions(
             floatingWindowIDs: [],
-            hiddenWindowIDs: [10, 11, 12, 13]
+            hiddenWindowIDs: [10, 11, 12, 13],
+            reservedHiddenWindowIDs: [10, 11, 12, 13]
         )
         let result = RetileAllPlanner.admit(
             windowIDs: [100, 101],
@@ -68,6 +69,28 @@ final class RetileAllPlannerTests: XCTestCase {
 
         XCTAssertNil(result.assignments[1])
         XCTAssertEqual(result.assignments[2], [100, 101])
+    }
+
+    func testClosedHiddenWindowsDoNotConsumeFocusedWorkspaceCapacity() {
+        // closed-but-app-alive ghosts hold no tile slot, so a half-full
+        // workspace still admits the new window instead of spilling.
+        let exclusions = ActionDispatcher.admissionExclusions(
+            floatingWindowIDs: [],
+            hiddenWindowIDs: [20, 21],
+            reservedHiddenWindowIDs: []
+        )
+        let result = RetileAllPlanner.admit(
+            windowIDs: [100],
+            preferredWorkspace: 2,
+            eligibleWorkspaces: [2, 4, 6, 8],
+            existingAssignments: [2: [10, 11, 20, 21], 4: []],
+            excludedWindowIDs: exclusions,
+            capacityForWorkspace: { _ in 4 }
+        )
+
+        XCTAssertEqual(result.assignments[2], [100])
+        XCTAssertNil(result.assignments[4])
+        XCTAssertTrue(result.overflow.isEmpty)
     }
 
     func testAdmissionCyclesFromPreferredAndStaysOnEligibleMonitorHomes() {
@@ -253,7 +276,7 @@ final class RetileAllPlannerTests: XCTestCase {
             RetileAllPlanner.availableStartupCapacity(
                 capacity: 4,
                 assignedWindowIDs: assignments[workspace, default: []],
-                hiddenWindowIDs: hidden,
+                reservedHiddenWindowIDs: hidden,
                 floatingWindowIDs: []
             )
         }
@@ -261,6 +284,19 @@ final class RetileAllPlannerTests: XCTestCase {
         XCTAssertEqual(result.assignments[1], [100, 101])
         XCTAssertEqual(result.assignments[2], [102])
         XCTAssertTrue(result.overflow.isEmpty)
+    }
+
+    func testStartupCapacityOnlyReservesForReservableHiddenWindows() {
+        // only the hidden id that can come back on its own holds a slot.
+        XCTAssertEqual(
+            RetileAllPlanner.availableStartupCapacity(
+                capacity: 4,
+                assignedWindowIDs: [1, 2, 3, 4],
+                reservedHiddenWindowIDs: [3],
+                floatingWindowIDs: []
+            ),
+            3
+        )
     }
 
     func testStartupWindowOrderUsesFrameOrderWithFocusedWindowFirst() {

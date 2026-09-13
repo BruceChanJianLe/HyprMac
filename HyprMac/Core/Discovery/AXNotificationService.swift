@@ -40,6 +40,13 @@ final class AXNotificationService {
         subscribe(initialWindows)
     }
 
+    /// `true` when the destroyed-notification subscription actually took
+    /// hold. A failed add must not be recorded — the window would never
+    /// report its close.
+    static func subscriptionRecorded(destroyed error: AXError) -> Bool {
+        error == .success || error == .notificationAlreadyRegistered
+    }
+
     /// The AX notifications we translate and forward. Each maps to one or
     /// more `kAX…Notification` strings on the app or window element.
     enum Kind {
@@ -132,10 +139,13 @@ final class AXNotificationService {
     /// haven't subscribed yet. Called after each discovery pass with the
     /// fresh snapshot.
     ///
-    /// Deduped by `CGWindowID`. Stale ids (windows since closed) are not
-    /// pruned here — a minimized window legitimately leaves the snapshot but
-    /// must keep its deminiaturize subscription, so snapshot presence can't
-    /// gate removal. `detach` prunes a pid's bookkeeping wholesale on quit.
+    /// Deduped by `CGWindowID`, but only once the destroy subscription
+    /// took hold — a window recorded after a failed add would never report
+    /// its close, so a failure is left unrecorded and retried next poll.
+    /// Stale ids (windows since closed) are not pruned here — a minimized
+    /// window legitimately leaves the snapshot but must keep its
+    /// deminiaturize subscription, so snapshot presence can't gate removal.
+    /// `detach` prunes a pid's bookkeeping wholesale on quit.
     func ensureWindowSubscriptions(for snapshot: [HyprWindow]) {
         mainThreadOnly()
         let refcon = Unmanaged.passUnretained(self).toOpaque()
@@ -145,12 +155,19 @@ final class AXNotificationService {
             guard !entry.subscribedWindowIDs.contains(wid) else { continue }
 
             let element = window.element
-            AXObserverAddNotification(entry.observer, element, kAXUIElementDestroyedNotification as CFString, refcon)
+            let destroyedErr = AXObserverAddNotification(entry.observer, element, kAXUIElementDestroyedNotification as CFString, refcon)
             AXObserverAddNotification(entry.observer, element, kAXWindowMiniaturizedNotification as CFString, refcon)
             AXObserverAddNotification(entry.observer, element, kAXWindowDeminiaturizedNotification as CFString, refcon)
 
-            entry.subscribedWindowIDs.insert(wid)
+            // retain the element either way — the miniaturize adds above may
+            // have taken hold and need it alive; only a landed destroy add
+            // marks the window done.
             entry.windowElements[wid] = element
+            guard Self.subscriptionRecorded(destroyed: destroyedErr) else {
+                hyprLog(.debug, .discovery, "destroy subscription failed for window \(wid) (err \(destroyedErr.rawValue)) — retrying next poll")
+                continue
+            }
+            entry.subscribedWindowIDs.insert(wid)
         }
     }
 

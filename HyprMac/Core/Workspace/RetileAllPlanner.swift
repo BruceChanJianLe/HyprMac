@@ -9,11 +9,11 @@ enum RetileAllPlanner {
     static func availableStartupCapacity(
         capacity: Int,
         assignedWindowIDs: Set<CGWindowID>,
-        hiddenWindowIDs: Set<CGWindowID>,
+        reservedHiddenWindowIDs: Set<CGWindowID>,
         floatingWindowIDs: Set<CGWindowID>
     ) -> Int {
         let reserved = assignedWindowIDs
-            .intersection(hiddenWindowIDs)
+            .intersection(reservedHiddenWindowIDs)
             .subtracting(floatingWindowIDs)
             .count
         return max(0, capacity - reserved)

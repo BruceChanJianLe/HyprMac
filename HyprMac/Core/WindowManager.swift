@@ -152,6 +152,8 @@ class WindowManager {
     // deregister display callbacks, color profile bumps), and our handler
     // runs the destructive redistribute every time. guard against no-op fires.
     private var lastDisplayFingerprint: String = ""
+    /// Pending destroy notifications whose poll has not yet seen the close.
+    private var destroyRecheck = DestroyRecheck()
     /// Monotonic token for the display-change stability debounce — a newer
     /// notification supersedes any pending stability check.
     private var displayChangeGeneration = 0
@@ -401,10 +403,11 @@ class WindowManager {
         // so no extra guards here. create/miniaturize/deminiaturize get a 0.2s
         // debounce to let AX settle; focus is snappier at 0.15s; destroy uses
         // the 0.2s default.
-        axNotifications.onEvent = { [weak self] kind, _ in
+        axNotifications.onEvent = { [weak self] kind, pid in
             guard let self else { return }
             switch kind {
             case .windowDestroyed:
+                self.destroyRecheck.noteDestroy(pid: pid)
                 self.pollingScheduler.schedule()
             case .windowCreated, .windowMiniaturized, .windowDeminiaturized:
                 self.pollingScheduler.schedule(after: 0.2)
@@ -2089,6 +2092,8 @@ class WindowManager {
         axNotifications.ensureWindowSubscriptions(for: allWindows)
         tilingEngine.primeMinimumSizes(allWindows)
         let runningPIDs = Set(NSWorkspace.shared.runningApplications.map { $0.processIdentifier })
+        // owners as of before the diff — computeChanges forgets closed ids
+        let ownersBefore = stateCache.windowOwners
 
         let changes = discovery.computeChanges(
             snapshot: allWindows,
@@ -2098,8 +2103,15 @@ class WindowManager {
         )
         actionDispatcher.applyChanges(changes, allWindows: allWindows)
         repairParkedWindows(allWindows)
+        // a guarded cycle diffed nothing, so it can't have seen the close —
+        // don't spend a recheck attempt on it, and don't let the slower
+        // destroy re-poll coalesce away the prompt one.
         if changes.requestsRecheck {
             pollingScheduler.schedule(after: 0.1)
+        } else if destroyRecheck.resolve(goneIDs: changes.goneIDs, ownersBefore: ownersBefore,
+                                         runningPIDs: runningPIDs) {
+            hyprLog(.debug, .discovery, "destroy recheck: closed window not yet gone from the snapshot — re-polling")
+            pollingScheduler.schedule(after: DestroyRecheck.delay)
         }
     }
 
@@ -2554,7 +2566,7 @@ private extension WindowManager {
                 RetileAllPlanner.availableStartupCapacity(
                     capacity: RetileAllPlanner.workspaceCapacity(maxDepth: tilingEngine.maxDepth(for: screen)),
                     assignedWindowIDs: workspaceManager.windowIDs(onWorkspace: workspace),
-                    hiddenWindowIDs: stateCache.hiddenWindowIDs,
+                    reservedHiddenWindowIDs: stateCache.reservedHiddenWindowIDs,
                     floatingWindowIDs: stateCache.floatingWindowIDs)
             })
             assignments.merge(plan.assignments, uniquingKeysWith: +)
@@ -2570,9 +2582,15 @@ private extension WindowManager {
         let destination = RetileAllPlanner.nextFittingHome(
             after: source, eligibleWorkspaces: workspaceManager.workspacesAnchoredTo(screen)
         ) { [self] workspace in
-            let ids = workspaceManager.windowIDs(onWorkspace: workspace)
-                .subtracting(stateCache.floatingWindowIDs).union([window.windowID])
-            guard ids.count <= RetileAllPlanner.workspaceCapacity(maxDepth: tilingEngine.maxDepth(for: screen)) else { return false }
+            // hidden ids have no cached HyprWindow, so leaving them in would
+            // fail the tenant count and reject every destination. reserved
+            // ones still hold a slot, same as admission counts them.
+            let assigned = workspaceManager.windowIDs(onWorkspace: workspace)
+                .subtracting(stateCache.floatingWindowIDs)
+            let reservedCount = assigned.intersection(stateCache.reservedHiddenWindowIDs).count
+            let ids = assigned.subtracting(stateCache.hiddenWindowIDs).union([window.windowID])
+            let capacity = RetileAllPlanner.workspaceCapacity(maxDepth: tilingEngine.maxDepth(for: screen))
+            guard ids.count + reservedCount <= capacity else { return false }
             let tenants = ids.sorted().compactMap { id in
                 id == window.windowID ? window : stateCache.cachedWindows[id]
             }

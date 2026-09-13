@@ -122,14 +122,22 @@ class AccessibilityManager {
     /// is defensive — it should not fire in practice.
     ///
     /// Returns an empty array when AX permission has not been granted.
-    /// Whether `windowID` is still alive in `pid`'s AX window list as a
-    /// minimized window, or the app itself is hidden (Cmd-H). Used by the
-    /// discovery gone path to distinguish user-hidden windows — which must
-    /// keep their workspace on return — from closed windows whose id a
-    /// later reopen may recycle. Returns nil when the AX list can't be
-    /// read (caller treats unknown as user-hidden, the conservative side).
-    func isWindowMinimizedOrAppHidden(windowID target: CGWindowID, pid: pid_t) -> Bool? {
-        if NSRunningApplication(processIdentifier: pid)?.isHidden == true { return true }
+    /// Where a window that left the on-screen snapshot actually is.
+    /// `present` means the app still lists it and it is not minimized —
+    /// another Space or native full-screen — so it can come back on its
+    /// own. `absent` means the app enumerated fine and the id is gone:
+    /// genuinely closed.
+    enum HiddenWindowState {
+        case minimized
+        case appHidden
+        case present
+        case absent
+    }
+
+    /// Classify a hidden window. Returns nil when the AX list can't be
+    /// read (caller treats unknown as still-around, the conservative side).
+    func hiddenWindowState(windowID target: CGWindowID, pid: pid_t) -> HiddenWindowState? {
+        if NSRunningApplication(processIdentifier: pid)?.isHidden == true { return .appHidden }
         let appRef = AXUIElementCreateApplication(pid)
         var value: AnyObject?
         let result = AXUIElementCopyAttributeValue(appRef, kAXWindowsAttribute as CFString, &value)
@@ -138,10 +146,9 @@ class AccessibilityManager {
             guard windowID(for: axWin) == target else { continue }
             var minimized: AnyObject?
             AXUIElementCopyAttributeValue(axWin, kAXMinimizedAttribute as CFString, &minimized)
-            return (minimized as? Bool) ?? false
+            return (minimized as? Bool) == true ? .minimized : .present
         }
-        // enumerated fine and the id is gone — genuinely closed
-        return false
+        return .absent
     }
 
     func getAllWindows() -> [HyprWindow] {

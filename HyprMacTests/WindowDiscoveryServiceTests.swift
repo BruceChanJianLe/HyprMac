@@ -9,17 +9,31 @@ import XCTest
 // state and aren't exercisable at this level — those land in the manual smoke
 // checklist.
 
+/// answers the minimized/app-hidden query with a scripted value so the
+/// gone path's reservation branch is testable without live AX.
+final class StubAccessibility: AccessibilityManager {
+    var stateAnswer: AccessibilityManager.HiddenWindowState?
+    /// ids the service asked about, so tests can pin who gets re-verified.
+    var queries: [CGWindowID] = []
+
+    override func hiddenWindowState(windowID: CGWindowID, pid: pid_t) -> AccessibilityManager.HiddenWindowState? {
+        queries.append(windowID)
+        return stateAnswer
+    }
+}
+
 final class WindowDiscoveryServiceTests: XCTestCase {
 
     // MARK: - fixtures
 
     private func makeService(
         cache: WindowStateCache = WindowStateCache(),
+        accessibility: AccessibilityManager = AccessibilityManager(),
         bundleIDForPID: @escaping (pid_t) -> String? = { _ in nil }
     ) -> (WindowDiscoveryService, WindowStateCache, WorkspaceManager) {
         let display = DisplayManager()
         let workspaces = WorkspaceManager(displayManager: display)
-        let access = AccessibilityManager()
+        let access = accessibility
         let svc = WindowDiscoveryService(
             stateCache: cache,
             accessibility: access,
@@ -145,6 +159,126 @@ final class WindowDiscoveryServiceTests: XCTestCase {
         // owner pid retained so the un-hide path can restore the wid as "returned"
         XCTAssertEqual(cache.windowOwners[10], 8000)
         XCTAssertTrue(changes.needsRetile)
+    }
+
+    // MARK: - hidden-window workspace reservations
+
+    func testVerifiedClosedHiddenWindowDoesNotReserveItsWorkspaceSlot() {
+        let access = StubAccessibility()
+        access.stateAnswer = .absent
+        let (svc, cache, _) = makeService(accessibility: access)
+        cache.knownWindowIDs = [10]
+        cache.windowOwners[10] = 8000
+
+        _ = compute(svc, snapshot: [], runningPIDs: [8000])
+
+        XCTAssertTrue(cache.hiddenWindowIDs.contains(10))
+        XCTAssertFalse(cache.reservedHiddenWindowIDs.contains(10))
+    }
+
+    func testMinimizedHiddenWindowReservesItsWorkspaceSlot() {
+        let access = StubAccessibility()
+        access.stateAnswer = .minimized
+        let (svc, cache, _) = makeService(accessibility: access)
+        cache.knownWindowIDs = [11]
+        cache.windowOwners[11] = 8100
+
+        _ = compute(svc, snapshot: [], runningPIDs: [8100])
+
+        XCTAssertTrue(cache.hiddenWindowIDs.contains(11))
+        XCTAssertTrue(cache.reservedHiddenWindowIDs.contains(11))
+    }
+
+    func testWindowStillListedByItsAppReservesItsWorkspaceSlot() {
+        // another Space or native full-screen: the app still lists it, it is
+        // not minimized, and it comes back on its own — not a close.
+        let access = StubAccessibility()
+        access.stateAnswer = .present
+        let (svc, cache, _) = makeService(accessibility: access)
+        cache.knownWindowIDs = [12]
+        cache.windowOwners[12] = 8200
+
+        _ = compute(svc, snapshot: [], runningPIDs: [8200])
+
+        XCTAssertTrue(cache.hiddenWindowIDs.contains(12))
+        XCTAssertTrue(cache.reservedHiddenWindowIDs.contains(12))
+    }
+
+    func testUnreadableHiddenWindowStopsBeingReQueriedAfterTheBudgetButStaysReserved() {
+        let access = StubAccessibility()
+        access.stateAnswer = nil
+        let (svc, cache, _) = makeService(accessibility: access)
+        cache.knownWindowIDs = [13]
+        cache.windowOwners[13] = 8300
+
+        _ = compute(svc, snapshot: [], runningPIDs: [8300])
+        for _ in 0..<10 { _ = compute(svc, snapshot: [], runningPIDs: [8300]) }
+
+        // one query when it vanished plus a bounded number of re-checks
+        XCTAssertEqual(access.queries.filter { $0 == 13 }.count, 1 + 5)
+        XCTAssertTrue(cache.hiddenWindowIDs.contains(13))
+        XCTAssertTrue(cache.reservedHiddenWindowIDs.contains(13))
+    }
+
+    func testUnreadableHiddenWindowReservesUntilAReVerifyProvesItClosed() {
+        let access = StubAccessibility()
+        access.stateAnswer = nil
+        let (svc, cache, _) = makeService(accessibility: access)
+        cache.knownWindowIDs = [12]
+        cache.windowOwners[12] = 8200
+
+        _ = compute(svc, snapshot: [], runningPIDs: [8200])
+        XCTAssertTrue(cache.hiddenWindowIDs.contains(12))
+        XCTAssertTrue(cache.reservedHiddenWindowIDs.contains(12))
+
+        // AX reads fine on the next cycle and says the window is gone
+        access.stateAnswer = .absent
+        _ = compute(svc, snapshot: [], runningPIDs: [8200])
+
+        XCTAssertTrue(cache.hiddenWindowIDs.contains(12))
+        XCTAssertFalse(cache.reservedHiddenWindowIDs.contains(12))
+    }
+
+    func testReturningUnverifiedWindowIsNotReVerifiedAsClosed() {
+        // a flapping window comes back in the same cycle the re-verify runs.
+        // asking AX then answers "not minimized" for a window that is plainly
+        // on screen, which would strip the reservation and misfile the return
+        // as a recycled-id reopen.
+        let access = StubAccessibility()
+        access.stateAnswer = nil
+        let (svc, cache, _) = makeService(accessibility: access)
+        cache.knownWindowIDs = [14]
+        cache.windowOwners[14] = 8400
+
+        _ = compute(svc, snapshot: [], runningPIDs: [8400])
+        XCTAssertTrue(cache.reservedHiddenWindowIDs.contains(14))
+
+        access.queries.removeAll()
+        access.stateAnswer = .absent
+        let w = makeWindow(id: 14, pid: 8400)
+        let back = compute(svc, snapshot: [w], runningPIDs: [8400])
+
+        XCTAssertEqual(back.returned.map { $0.windowID }, [14])
+        XCTAssertFalse(access.queries.contains(14),
+                       "a window present in the snapshot must be left to the returned pass")
+    }
+
+    func testReturnedWindowDropsItsReservation() {
+        let access = StubAccessibility()
+        access.stateAnswer = .minimized
+        let (svc, cache, _) = makeService(accessibility: access)
+        cache.knownWindowIDs = [13]
+        cache.windowOwners[13] = 8300
+
+        _ = compute(svc, snapshot: [], runningPIDs: [8300])
+        XCTAssertTrue(cache.reservedHiddenWindowIDs.contains(13))
+
+        let w = makeWindow(id: 13, pid: 8300)
+        let back = compute(svc, snapshot: [w], runningPIDs: [8300])
+
+        XCTAssertEqual(back.returned.map { $0.windowID }, [13])
+        XCTAssertFalse(cache.hiddenWindowIDs.contains(13))
+        XCTAssertFalse(cache.reservedHiddenWindowIDs.contains(13))
     }
 
     // MARK: - gone (dead pid → fully forgotten)

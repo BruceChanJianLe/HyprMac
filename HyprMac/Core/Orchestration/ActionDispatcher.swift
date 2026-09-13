@@ -29,11 +29,15 @@ import Cocoa
 ///
 /// Threading: main-thread only.
 final class ActionDispatcher {
+    /// Ids that must not count as occupancy when admitting new windows.
+    /// a closed-but-app-alive ghost holds no tile slot, while a minimized,
+    /// Cmd-H'd, or AX-unreadable window still does — it can come back.
     static func admissionExclusions(
         floatingWindowIDs: Set<CGWindowID>,
-        hiddenWindowIDs _: Set<CGWindowID>
+        hiddenWindowIDs: Set<CGWindowID>,
+        reservedHiddenWindowIDs: Set<CGWindowID>
     ) -> Set<CGWindowID> {
-        floatingWindowIDs
+        floatingWindowIDs.union(hiddenWindowIDs.subtracting(reservedHiddenWindowIDs))
     }
 
     static func newWindowIDsForAdmission(
@@ -293,7 +297,8 @@ final class ActionDispatcher {
             ),
             excludedWindowIDs: Self.admissionExclusions(
                 floatingWindowIDs: stateCache.floatingWindowIDs,
-                hiddenWindowIDs: stateCache.hiddenWindowIDs
+                hiddenWindowIDs: stateCache.hiddenWindowIDs,
+                reservedHiddenWindowIDs: stateCache.reservedHiddenWindowIDs
             ),
             capacityForWorkspace: { [self] workspace in
                 guard let home = workspaceManager.homeScreenForWorkspace(workspace) else { return 0 }

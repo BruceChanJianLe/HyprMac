@@ -504,7 +504,9 @@ Confirmed and corrected:
   retains one coalesced request until startup completes. The display fingerprint
   is seeded before notification observers are registered.
 - Hidden assigned windows were excluded from incremental occupancy. They now
-  reserve capacity, including during startup/Retile All packing. Startup packs
+  reserve capacity, including during startup/Retile All packing (narrowed on
+  2026-09-12 to hidden windows that can return; see the live workspace
+  regressions follow-up below). Startup packs
   each monitor's visible workspace first and orders readable windows by frame,
   with the focused window first. Missing-frame tracked IDs are retained.
 - Count capacity did not guarantee tree fit. Insert-time fit failures now probe
@@ -573,3 +575,46 @@ MacBook build and settings have not been changed by this follow-up. SIP-enabled
 manual checks remain required for startup/wake, terminal size rounding, hidden
 window return, all insertion edges, rejection overlay timing, rollback refusal,
 and mixed-application layouts. The skipped AppKit panel tests remain unverified.
+
+## Live workspace regressions follow-up (2026-09-12)
+
+Two live regressions remained after `f334604`: new windows spilled to the next
+anchored workspace while the current one looked full, and a closed window's tile
+slot stayed empty until some later, unrelated poll.
+
+### Causes and corrections
+
+Discovery moves a window to `hiddenWindowIDs` whenever it leaves the AX
+snapshot while its owning process is alive. That includes windows the user
+closed with Cmd-W, and admission counted every such id as occupancy. A
+workspace with two visible windows therefore read as full. The cache now
+carries `reservedHiddenWindowIDs`, the subset that can return on its own —
+minimized, app hidden, or AX unreadable at the moment it vanished. Only that
+subset reserves a slot, in admission, in startup capacity, and in the rejection
+routing probe. A window the app still lists (another Space, full-screen) counts
+as returnable. An id whose state was unreadable when it vanished is reserved
+provisionally and re-queried on the next few cycles while its app runs; a
+verified close releases the reservation, and an id that stays unreadable stays
+reserved.
+
+Closes are learned only from a poll, and that poll is requested by the
+per-window destroyed notification. Two holes lost it. An app that tears its
+window down after the AX element dies is still enumerated by the 0.2 s poll, so
+nothing appeared gone and nothing re-polled. `DestroyRecheck` now schedules
+bounded follow-up polls, three polls in all for a pending close, until the
+close shows up or the owning process stops being relevant. Separately, a
+window whose destroyed subscription failed was still recorded as subscribed,
+so it never reported its own close; only a subscription that actually took
+hold is recorded now, and a failure is retried on the next poll.
+
+### Evidence to look for
+
+- Fix A: `assignNewWindow: … → ws4` while the preceding `switch: … (hide N, …)`
+  line shows workspace N at capacity with ids that no longer have windows.
+- Fix B: `discovery retile: gone=` lines that follow `focusWithoutRaise`
+  hover lines instead of the close itself. The persisted log records the
+  poll, not the close, so a live `log stream --level debug` during a
+  reproduction is needed to see the destroy-to-poll gap directly.
+- After the fix: `hidden window <id> verified closed — releasing its workspace
+  reservation` and `destroy recheck: closed window not yet gone from the
+  snapshot — re-polling`.
