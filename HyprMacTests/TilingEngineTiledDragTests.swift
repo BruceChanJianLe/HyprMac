@@ -101,7 +101,7 @@ final class TilingEngineTiledDragTests: XCTestCase {
         let outcome = fixture.engine.dropTiledDrag(
             snapshot, mode: nil, currentLocation: { (1, fixture.screen, []) })
 
-        guard case let .committed(candidate, _) = outcome else {
+        guard case let .committed(candidate, _, _) = outcome else {
             return XCTFail("detected resize must commit")
         }
         XCTAssertTrue(fixture.engine.existingTree(forWorkspace: 1,
@@ -207,7 +207,7 @@ final class TilingEngineTiledDragTests: XCTestCase {
             snapshot, mode: .insert(targetID: 2, edge: .left),
             currentLocation: { (1, fixture.screen, []) })
 
-        guard case let .committed(candidate, actualFrames) = outcome else {
+        guard case let .committed(candidate, actualFrames, _) = outcome else {
             return XCTFail("expected committed drop")
         }
         let mapped = try XCTUnwrap(fixture.engine.existingTree(forWorkspace: 1,

@@ -25,7 +25,7 @@ final class DragSwapHandlerInsertionTests: XCTestCase {
     func testFeedbackPolicyStaysSilentForNonFailures() {
         let tree = BSPTree()
         XCTAssertNil(TiledDragFeedbackPolicy.feedback(for: .committed(
-            candidate: tree, actualFrames: [:])))
+            candidate: tree, actualFrames: [:], progress: FrameSizingProgressReport())))
         XCTAssertNil(TiledDragFeedbackPolicy.feedback(for: .ignored))
         XCTAssertNil(TiledDragFeedbackPolicy.feedback(for: .superseded))
     }
@@ -71,7 +71,9 @@ final class DragSwapHandlerInsertionTests: XCTestCase {
             apply: { snapshot, mode in
                 appliedDraggedID = snapshot.draggedID
                 appliedMode = mode
-                return .committed(candidate: snapshot.originalTree, actualFrames: snapshot.originalFrames)
+                return .committed(candidate: snapshot.originalTree,
+                                  actualFrames: snapshot.originalFrames,
+                                  progress: FrameSizingProgressReport())
             },
             resolveTarget: { point, _ in
                 point == CGPoint(x: 220, y: 40)
@@ -300,7 +302,8 @@ final class DragSwapHandlerInsertionTests: XCTestCase {
         let candidate = BSPTree()
 
         let committed = TiledDragCacheUpdate.applying(
-            .committed(candidate: candidate, actualFrames: verified),
+            .committed(candidate: candidate, actualFrames: verified,
+                       progress: FrameSizingProgressReport()),
             draggedID: 1, affectedIDs: [1, 2], to: existing
         )
         XCTAssertEqual(committed[1], verified[1])
@@ -389,7 +392,8 @@ final class DragSwapHandlerInsertionTests: XCTestCase {
             3: CGRect(x: 300, y: 0, width: 10, height: 10)
         ]
         let outcomes: [TiledDragDropOutcome] = [
-            .committed(candidate: BSPTree(), actualFrames: verified),
+            .committed(candidate: BSPTree(), actualFrames: verified,
+                       progress: FrameSizingProgressReport()),
             .rejectedRestored(reason: .preflight(.noTarget), actualFrames: verified),
             .degraded(candidateReason: .sizing(.geometryMismatch(2)), restorationReason: nil,
                       actualFrames: [:], progress: progress),
@@ -534,7 +538,8 @@ final class DragSwapHandlerInsertionTests: XCTestCase {
                 droppedID = snapshot.draggedID
                 droppedMode = mode
                 return .committed(candidate: snapshot.originalTree,
-                                  actualFrames: snapshot.originalFrames)
+                                  actualFrames: snapshot.originalFrames,
+                                  progress: FrameSizingProgressReport())
             },
             resolveTarget: { point, _ in
                 point == CGPoint(x: 350, y: 250)

@@ -294,9 +294,36 @@ when the key itself goes away. A window listed here is one the tree cannot
 speak for; compare it against `tree(...)` to see whether the tree even
 holds it.
 
-`recovery pending` reports windows waiting on a bounded recovery attempt.
-Nothing produces those yet, so it is always empty today — the field is here
-so the shape does not move when it fills.
+`recovery pending` reports newcomers a failed admission left outside the
+tree and that admission recovery has not finished with. A window is listed
+while its one retry is armed, and while it is waiting for evidence — it was
+unreadable, or its workspace was hidden, when its turn came. It leaves the
+list when the retry tiles it, when a later layout tiles it, when the
+fallback floats it in place, when the user acts on it, or when it goes
+away. An id that stays here across several dumps is a window nothing can
+read; check whether its app is alive.
+
+The recovery's own lines, all `[notice] [tiling]`:
+
+```
+admission retry scheduled: ids=[26016] ws2 in 250ms cause=geometryMismatch(21611)
+admission retry attempt: ws2 bypassMinimaSince=[26016:418]
+admission retry cancelled: ids=[26016] reason=later press
+admission recovery pending: 26016 not judgeable yet — waiting for evidence
+admission recovery resolved: 26016 (retry tiled it)
+admission recovery fallback: floated 26016 in place on ws2 first=geometryMismatch(21611) retry=geometryMismatch(21611)
+```
+
+`cause` and `first`/`retry` are the layout failures, which name whichever
+window refused — usually an incumbent, not the newcomer being recovered.
+`bypassMinimaSince` maps each newcomer in the attempt to the generation it
+ignores freshly observed minima from — one reach per window, because two
+newcomers retried together were admitted at different times. Cancellation
+reasons are `stop`, `later press`, `display change`, `moved workspace`,
+`screen changed` and `user floated it`; showing another workspace is not one
+of them. A separate `unverified mark kept for wsN: a rollback did not
+verify` line says the fallback floated a window but the key still cannot
+speak for its incumbents.
 
 ## `--probe-frame` (debug builds)
 

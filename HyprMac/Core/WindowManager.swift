@@ -77,6 +77,10 @@ class WindowManager {
     // constructed in init() so the closure can capture self weakly.
     private var pollingScheduler: PollingScheduler!
 
+    // one bounded retry, then an explicit float, for a newcomer a failed
+    // admission left outside the tree.
+    private let admissionRecovery = AdmissionRecovery()
+
     // SIGUSR1 → dumpState. armed in start(), cancelled in stop().
     private var dumpStateSignalSource: DispatchSourceSignal?
 
@@ -323,6 +327,13 @@ class WindowManager {
         floatingController.isMenuTracking = { [weak self] in self?.mouseTracker.menuTracking ?? false }
         floatingController.isScratchpadVisible = { [weak self] in self?.scratchpad.isVisible ?? false }
         floatingController.adoptIntoScratchpad = { [weak self] w, frame in self?.scratchpad.adopt(w, preferredFrame: frame) }
+        floatingController.rejectFloatToTile = { [weak self] w in
+            guard let self, let frame = w.frame ?? self.stateCache.cachedWindows[w.windowID]?.frame else { return }
+            self.focusBorder.flashError(around: frame, windowID: w.windowID, window: w,
+                                        message: "No room to tile this window")
+        }
+
+        wireAdmissionRecovery()
 
         self.tiledDragHandler = makeTiledDragHandler()
 
@@ -678,6 +689,7 @@ class WindowManager {
     /// and hides every focus indicator. Safe to call when not running.
     func stop() {
         isRunning = false
+        admissionRecovery.cancelAll(reason: "stop")
         dumpStateSignalSource?.cancel()
         dumpStateSignalSource = nil
         tiledDragHandler.cancel()
@@ -1288,6 +1300,17 @@ class WindowManager {
     /// callback site stays terse and so subclasses or tests can intercept
     /// in one place. Also called from the menu bar (cheat-sheet row).
     func handleAction(_ action: Action) {
+        // whatever the user just asked for is newer than a retry armed off
+        // a layout they have already moved past. showing another workspace
+        // is the exception: that is the evidence a parked newcomer has been
+        // waiting for, and forgetting it here would hand it a fresh timer on
+        // the reveal retile instead of its one remaining attempt.
+        switch action {
+        case .switchWorkspace, .cycleWorkspace:
+            break
+        default:
+            admissionRecovery.cancelAll(reason: "later press")
+        }
         // workspace flows park/unpark and then focus+warp. mid-display-
         // transition the tile pass is deferred, so the target workspace
         // would stay parked with the cursor warped to the 1px park sliver.
@@ -1522,6 +1545,9 @@ class WindowManager {
     /// workspace assignment and un-floated manual floats on every
     /// monitor connect/disconnect.
     private func reconcileAfterDisplayChange() {
+        // every pending recovery captured a screen that may no longer own
+        // its workspace
+        admissionRecovery.cancelAll(reason: "display change")
         workspaceManager.initializeMonitors()
         tilingEngine.handleDisplayChange(
             currentScreens: displayManager.screens,
@@ -1593,10 +1619,14 @@ class WindowManager {
             }
 
             hyprLog(.debug, .lifecycle, "retile: workspace=\(workspace) screen=\(workspaceManager.screenID(for: screen)), \(workspaceWindows.count) windows")
-            tilingEngine.tileWindows(workspaceWindows, onWorkspace: workspace, screen: screen)
+            let result = tilingEngine.tileWindows(workspaceWindows, onWorkspace: workspace, screen: screen)
+            admissionRecovery.note(result)
         }
 
         updatePositionCache(windows: allWindows)
+        // a workspace that just became visible is new evidence about any
+        // newcomer parked on it
+        offerRecoveryEvidence()
     }
 
     /// Retile with a slide animation between old and new tile rects.
@@ -1883,19 +1913,17 @@ class WindowManager {
         let cgY = displayManager.primaryScreenHeight - mouseNS.y
         let cgPoint = CGPoint(x: mouseNS.x, y: cgY)
 
-        // floating windows take precedence (drawn on top)
-        for wid in stateCache.floatingWindowIDs {
+        // floaters and newcomers in explicit recovery are both drawn over
+        // the tiles, so both are hit-tested before the tiled rects
+        let overlayIDs = stateCache.floatingWindowIDs.union(admissionRecovery.pendingWindowIDs)
+        let overlayFrames = overlayIDs.sorted().compactMap { wid -> (id: CGWindowID, frame: CGRect)? in
             guard workspaceManager.isWindowVisible(wid),
-                  let w = stateCache.cachedWindows[wid], let frame = w.frame else { continue }
-            if frame.contains(cgPoint) {
-                focusController.recordFocus(wid, reason: "syncTracker-floating")
-                return
-            }
+                  let frame = stateCache.cachedWindows[wid]?.frame else { return nil }
+            return (wid, frame)
         }
-        for (wid, rect) in stateCache.tiledPositions where rect.contains(cgPoint) {
-            focusController.recordFocus(wid, reason: "syncTracker-tiled")
-            return
-        }
+        guard let target = Self.clickFocusTarget(at: cgPoint, overlayFrames: overlayFrames,
+                                                 tiledPositions: stateCache.tiledPositions) else { return }
+        focusController.recordFocus(target.id, reason: target.reason)
     }
 
     /// Forget every trace of `id` from cache state and the engine, workspace,
@@ -1911,6 +1939,7 @@ class WindowManager {
     /// min-size memory, removes workspace assignment, and clears any focus
     /// or border state that pointed at the window.
     private func applyForgottenIDExternalCleanup(_ id: CGWindowID) {
+        admissionRecovery.forget(id)
         tilingEngine.forgetMinimumSize(windowID: id)
         workspaceManager.removeWindow(id)
         scratchpad.forget(id)
@@ -2184,6 +2213,10 @@ class WindowManager {
             focusedWindowID: focusController.lastFocusedID
         )
         actionDispatcher.applyChanges(changes, allWindows: allWindows)
+        // a poll is the real event that says a window came back, became
+        // readable, or went away — the only thing that can unblock a
+        // recovery waiting on evidence
+        offerRecoveryEvidence()
         repairParkedWindows(allWindows)
         // a guarded cycle diffed nothing, so it can't have seen the close —
         // don't spend a recheck attempt on it, and don't let the slower
@@ -2681,6 +2714,78 @@ private extension WindowManager {
         return RetileAllPlan(assignments: assignments, overflow: overflow)
     }
 
+    /// Give `admissionRecovery` its probes and its two actions.
+    ///
+    /// Everything it can do is here: run one more tiling pass with the
+    /// newcomer's freshly learned minima ignored, and float a window where
+    /// it stands. It has no handle on workspace assignment, so the fallback
+    /// cannot turn into `routeUnfittedWindow` by another name.
+    private func wireAdmissionRecovery() {
+        tilingEngine.pendingRecoverySource = { [weak self] in
+            self?.admissionRecovery.pendingWindowIDs ?? []
+        }
+        admissionRecovery.workspaceFor = { [weak self] id in self?.workspaceManager.workspaceFor(id) }
+        admissionRecovery.homeScreenForWorkspace = { [weak self] ws in
+            self?.workspaceManager.homeScreenForWorkspace(ws)
+        }
+        admissionRecovery.isWorkspaceVisible = { [weak self] ws in
+            self?.workspaceManager.isWorkspaceVisible(ws) ?? false
+        }
+        admissionRecovery.isFloating = { [weak self] id in
+            guard let self else { return true }
+            return self.stateCache.floatingWindowIDs.contains(id)
+                || (self.stateCache.cachedWindows[id]?.isFloating ?? false)
+        }
+        admissionRecovery.isDisplayTransitionPending = { [weak self] in
+            self?.displayTransitionPending ?? true
+        }
+        admissionRecovery.liveWindow = { [weak self] id in
+            guard let self,
+                  self.stateCache.knownWindowIDs.contains(id),
+                  !self.stateCache.hiddenWindowIDs.contains(id),
+                  let window = self.stateCache.cachedWindows[id],
+                  let pid = self.stateCache.windowOwners[id],
+                  NSRunningApplication(processIdentifier: pid) != nil
+            else { return nil }
+            return window
+        }
+        admissionRecovery.attempt = { [weak self] workspace, screen, bypass in
+            guard let self else { return AdmissionRecovery.AttemptResult() }
+            let allWindows = self.accessibility.getAllWindows()
+            self.tilingEngine.primeMinimumSizes(allWindows)
+            for w in allWindows where self.stateCache.floatingWindowIDs.contains(w.windowID) {
+                w.isFloating = true
+            }
+            let assigned = self.workspaceManager.windowIDs(onWorkspace: workspace)
+            let windows = allWindows.filter { assigned.contains($0.windowID) }
+            let result = self.tilingEngine.retryAdmission(
+                windows, onWorkspace: workspace, screen: screen,
+                bypassingMinimaSince: bypass)
+            self.updatePositionCache(windows: allWindows)
+            return AdmissionRecovery.AttemptResult(
+                placed: result.publishedIDs.intersection(bypass.keys),
+                failure: result.failure)
+        }
+        admissionRecovery.floatInPlace = { [weak self] window, reason in
+            guard let self else { return }
+            self.floatingController.floatInPlace(window, reason: reason)
+            self.updatePositionCache()
+        }
+        admissionRecovery.clearUnverified = { [weak self] workspace, screen in
+            self?.tilingEngine.clearUnverifiedGeometry(forWorkspace: workspace, screen: screen)
+        }
+    }
+
+    /// Offer every window still waiting on evidence a fresh look. Called
+    /// from the discovery poll and after a retile, the two places that
+    /// actually learn something new about a window; the recovery itself
+    /// decides whether what it sees is enough to act on.
+    private func offerRecoveryEvidence() {
+        for id in admissionRecovery.pendingWindowIDs.sorted() {
+            admissionRecovery.noteEvidence(for: id)
+        }
+    }
+
     private func routeUnfittedWindow(_ window: HyprWindow) -> Bool {
         guard let source = workspaceManager.workspaceFor(window.windowID), source > 0,
               !scratchpad.contains(window.windowID), !stateCache.floatingWindowIDs.contains(window.windowID),
@@ -2710,4 +2815,25 @@ private extension WindowManager {
         return true
     }
 
+}
+
+extension WindowManager {
+    /// Which window a click at `point` should focus.
+    ///
+    /// Windows drawn over the tiles win: floaters, and newcomers in explicit
+    /// recovery, which are in no tree and sit on top exactly like a floater.
+    /// The tiled rects get a look only after those, so a recovery newcomer
+    /// overlapping an incumbent's slot does not hand the click to the
+    /// incumbent underneath it.
+    static func clickFocusTarget(at point: CGPoint,
+                                 overlayFrames: [(id: CGWindowID, frame: CGRect)],
+                                 tiledPositions: [CGWindowID: CGRect]) -> (id: CGWindowID, reason: String)? {
+        for entry in overlayFrames where entry.frame.contains(point) {
+            return (entry.id, "syncTracker-floating")
+        }
+        for (wid, rect) in tiledPositions where rect.contains(point) {
+            return (wid, "syncTracker-tiled")
+        }
+        return nil
+    }
 }

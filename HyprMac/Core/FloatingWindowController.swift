@@ -45,6 +45,8 @@ final class FloatingWindowController {
     var isScratchpadVisible: () -> Bool = { false }
     // spill an evicted window into the scratchpad overflow buffer.
     var adoptIntoScratchpad: ((HyprWindow, CGRect?) -> Void)?
+    // red flash on a float→tile the tree or the screen refused.
+    var rejectFloatToTile: ((HyprWindow) -> Void)?
 
     // same-stack-frame reentrancy guard for raiseBehind. paired with defer.
     // moved here from WindowManager (per §5.5 — not a SuppressionRegistry key).
@@ -103,15 +105,30 @@ final class FloatingWindowController {
                 stateCache.floatingWindowIDs.remove(window.windowID)
                 window.isFloating = false
 
-                if let evicted = tilingEngine.forceInsertWindow(window, toWorkspace: workspace, on: screen) {
+                switch tilingEngine.forceInsertWindow(window, toWorkspace: workspace, on: screen) {
+                case .inserted, .alreadyPresent:
+                    hyprLog(.debug, .floating, "tiling window '\(window.title ?? "?")'")
+                case let .evicted(evictedID):
                     // evicted tile spills into the scratchpad overflow buffer.
+                    // the eviction is already committed, so a cache miss has
+                    // to be answered from AX rather than dropped — otherwise
+                    // the window is in no tree and not floating either.
+                    let cached = stateCache.cachedWindows[evictedID]
+                        ?? accessibility.getAllWindows().first { $0.windowID == evictedID }
+                    guard let evicted = cached else {
+                        hyprLog(.notice, .floating, "tiled \(window.windowID) but evicted \(evictedID) is gone")
+                        break
+                    }
                     let screenRect = displayManager.cgRect(for: screen)
-                    let original = stateCache.originalFrames[evicted.windowID]
+                    let original = stateCache.originalFrames[evictedID]
                     let preferred = original.flatMap { $0.isSubstantiallyVisible(on: screenRect) ? $0 : nil }
                     adoptIntoScratchpad?(evicted, preferred)
                     hyprLog(.debug, .floating, "tiling '\(window.title ?? "?")' — bumped '\(evicted.title ?? "?")' to scratchpad")
-                } else {
-                    hyprLog(.debug, .floating, "tiling window '\(window.title ?? "?")'")
+                case let .failed(reason):
+                    // the tree never took it, so it is still a floater. put
+                    // both flags back the way they were and say so.
+                    floatInPlace(window, reason: "float→tile refused: \(reason)")
+                    rejectFloatToTile?(window)
                 }
             }
         } else {
@@ -140,6 +157,20 @@ final class FloatingWindowController {
                 }
             }
         }
+    }
+
+    /// Leave `window` floating exactly where it is.
+    ///
+    /// Both flags move together — the controller's set and the window's own
+    /// — because half a float is what makes a window tiled to one subsystem
+    /// and floating to the next. No frame is written: the window is already
+    /// somewhere the user can see, and that is the whole point of the
+    /// fallback. Focus is left alone.
+    func floatInPlace(_ window: HyprWindow, reason: String) {
+        stateCache.floatingWindowIDs.insert(window.windowID)
+        window.isFloating = true
+        stateCache.cachedWindows[window.windowID] = window
+        hyprLog(.notice, .floating, "float in place: \(window.windowID) (\(reason))")
     }
 
     /// Cycle focus through visible floating windows in id order, raising

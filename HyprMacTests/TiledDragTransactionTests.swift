@@ -283,7 +283,7 @@ final class TiledDragTransactionTests: XCTestCase {
             draggedID: 1, tree: tree, context: context, generation: 1, currentContext: { context }) else {
             return XCTFail("capture failed")
         }
-        guard case let .committed(candidate, _) = transaction.drop(
+        guard case let .committed(candidate, _, _) = transaction.drop(
             snapshot, mode: .insert(targetID: 2, edge: .left), currentContext: { context }) else {
             return XCTFail("drop did not commit")
         }
@@ -382,7 +382,7 @@ final class TiledDragTransactionTests: XCTestCase {
         guard case let .captured(snapshot) = transaction.capture(
             draggedID: 1, tree: tree, context: context, generation: 1,
             currentContext: { context }) else { return XCTFail("capture failed") }
-        guard case let .committed(candidate, _) = transaction.drop(
+        guard case let .committed(candidate, _, _) = transaction.drop(
             snapshot, mode: .swap(targetID: 2), currentContext: { context }) else {
             return XCTFail("swap did not commit")
         }
@@ -608,7 +608,7 @@ final class TiledDragTransactionTests: XCTestCase {
         guard case let .captured(snapshot) = transaction.capture(
             draggedID: 1, tree: tree, context: context, generation: 1,
             currentContext: { context }) else { return XCTFail("capture failed") }
-        guard case let .committed(_, frames) = transaction.drop(
+        guard case let .committed(_, frames, _) = transaction.drop(
             snapshot, mode: .insert(targetID: 2, edge: .left), currentContext: { context }) else {
             return XCTFail("four-column candidate must commit")
         }
@@ -631,7 +631,7 @@ final class TiledDragTransactionTests: XCTestCase {
         fake.onWrite = {
             if classificationReadIDs.isEmpty { classificationReadIDs = fake.readIDs }
         }
-        guard case let .committed(candidate, actualFrames) = transaction.dropRelease(
+        guard case let .committed(candidate, actualFrames, _) = transaction.dropRelease(
             snapshot, mode: nil, currentContext: { context }) else {
             return XCTFail("manual resize must commit a candidate")
         }
@@ -777,7 +777,7 @@ final class TiledDragTransactionTests: XCTestCase {
             draggedID: 1, tree: tree, context: context, generation: 1,
             currentContext: { context }) else { return XCTFail("capture failed") }
         fake.frames[1]!.size.height += 21
-        guard case let .committed(candidate, _) = transaction.dropRelease(
+        guard case let .committed(candidate, _, _) = transaction.dropRelease(
             snapshot, mode: .insert(targetID: 2, edge: .left),
             currentContext: { context }) else {
             return XCTFail("height-only manual resize must commit")
@@ -893,7 +893,7 @@ final class TiledDragTransactionTests: XCTestCase {
             currentContext: { context }) else {
             return XCTFail("capture failed", file: file, line: line)
         }
-        guard case let .committed(candidate, _) = transaction.drop(
+        guard case let .committed(candidate, _, _) = transaction.drop(
             snapshot, mode: .insert(targetID: 2, edge: edge), currentContext: { context }) else {
             return XCTFail("edge did not commit", file: file, line: line)
         }

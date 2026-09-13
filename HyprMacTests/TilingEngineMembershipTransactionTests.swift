@@ -244,6 +244,185 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         }
     }
 
+    // MARK: - who the failed admission stranded
+
+    func testFailedAdmissionNamesTheInsertedNewcomerNotTheWindowThatRefused() throws {
+        let f = try fixture()
+        // the incumbent refuses its frame, the way Safari 21611 did while
+        // 26016 was the window that had just opened
+        let usable = f.engine.displayManager.cgRect(for: f.screen)
+        f.trace.minSize[f.windows[0].windowID] = CGSize(width: usable.width * 1.2, height: 0)
+
+        let result = f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+
+        XCTAssertEqual(result.insertedIDs, [f.windows[2].windowID])
+        XCTAssertEqual(result.failedInsertedIDs, [f.windows[2].windowID])
+        XCTAssertFalse(result.published)
+        XCTAssertNotNil(result.failure)
+        XCTAssertFalse(result.publishedIDs.contains(f.windows[2].windowID))
+    }
+
+    func testFailedAdmissionKeepsTheIncumbentsMembershipAndRatios() throws {
+        let f = try fixture()
+        let before = f.tree.structuralFingerprint()
+        f.trace.rejectNextRead = true
+
+        let result = f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+
+        let live = try XCTUnwrap(f.engine.existingTree(forWorkspace: 1, screen: f.screen))
+        XCTAssertEqual(live.structuralFingerprint(), before)
+        XCTAssertEqual(live.root.splitRatio, 0.6, accuracy: 0.0001)
+        XCTAssertEqual(result.publishedIDs, Set(f.windows.prefix(2).map(\.windowID)))
+        XCTAssertEqual(result.failedInsertedIDs, [f.windows[2].windowID])
+    }
+
+    func testAcceptedAdmissionStrandsNobody() throws {
+        let f = try fixture()
+
+        let result = f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+
+        XCTAssertTrue(result.published)
+        XCTAssertNil(result.failure)
+        XCTAssertTrue(result.failedInsertedIDs.isEmpty)
+        XCTAssertEqual(result.publishedIDs, Set(f.windows.map(\.windowID)))
+    }
+
+    func testAVerifiedRollbackReportsTheIncumbentsItPutBack() throws {
+        let f = try fixture()
+        f.trace.rejectNextRead = true
+
+        let result = f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+
+        XCTAssertTrue(result.restorationVerified)
+        XCTAssertEqual(result.restoredIDs, Set(f.windows.map(\.windowID)))
+    }
+
+    // MARK: - the retry's minima bypass
+
+    func testTheRetryIgnoresOnlyTheMinimumTheFailedAttemptObserved() throws {
+        let f = try fixture()
+        let newcomer = f.windows[2]
+        let usable = f.engine.displayManager.cgRect(for: f.screen)
+        // the newcomer refuses to shrink, so the admission fails and the
+        // engine learns a bound from that very readback
+        f.trace.minSize[newcomer.windowID] = CGSize(width: usable.width * 1.2, height: 0)
+
+        let admission = f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+        XCTAssertEqual(admission.failedInsertedIDs, [newcomer.windowID])
+        XCTAssertEqual(f.engine.knownMinimumSizes[newcomer.windowID]?.provenance, .observed)
+
+        // the app would accept the slot now, but the bound blocks the fit
+        // check before a single setter can go out
+        f.trace.minSize.removeValue(forKey: newcomer.windowID)
+        let plain = f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+        XCTAssertTrue(plain.insertedIDs.isEmpty, "the learned bound refuses the insert outright")
+        XCTAssertFalse(f.engine.windowIDs(inTreeForWorkspace: 1, screen: f.screen).contains(newcomer.windowID))
+
+        // a bypass that only reaches back to a later generation changes nothing
+        let tooLate = f.engine.retryAdmission(
+            f.windows, onWorkspace: 1, screen: f.screen,
+            bypassingMinimaSince: [newcomer.windowID: admission.generation &+ 100])
+        XCTAssertTrue(tooLate.insertedIDs.isEmpty)
+
+        let retry = f.engine.retryAdmission(
+            f.windows, onWorkspace: 1, screen: f.screen,
+            bypassingMinimaSince: [newcomer.windowID: admission.generation])
+
+        XCTAssertEqual(retry.insertedIDs, [newcomer.windowID])
+        XCTAssertTrue(retry.published)
+        XCTAssertTrue(retry.publishedIDs.contains(newcomer.windowID))
+        XCTAssertNotNil(f.engine.knownMinimumSizes[newcomer.windowID],
+                        "the bypass lasts one pass; it does not erase the memory")
+    }
+
+    func testTheBypassLeavesEveryOtherWindowsMinimumAlone() throws {
+        let f = try fixture()
+        let newcomer = f.windows[2]
+        let usable = f.engine.displayManager.cgRect(for: f.screen)
+        f.trace.minSize[f.windows[0].windowID] = CGSize(width: usable.width * 1.2, height: 0)
+
+        let admission = f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+        let incumbentBound = f.engine.knownMinimumSizes[f.windows[0].windowID]
+        XCTAssertEqual(incumbentBound?.provenance, .observed)
+
+        _ = f.engine.retryAdmission(
+            f.windows, onWorkspace: 1, screen: f.screen,
+            bypassingMinimaSince: [newcomer.windowID: admission.generation])
+
+        XCTAssertEqual(f.engine.knownMinimumSizes[f.windows[0].windowID]?.provenance, .observed)
+    }
+
+    // MARK: - clearing the mark
+
+    func testTheMarkClearsWhenEveryAttemptOnTheKeyRestoredItsOriginals() throws {
+        let f = try fixture()
+        f.trace.rejectNextRead = true
+        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+        XCTAssertFalse(unverifiedIDs(f.engine, workspace: 1).isEmpty)
+
+        XCTAssertTrue(f.engine.clearUnverifiedGeometry(forWorkspace: 1, screen: f.screen))
+        XCTAssertTrue(unverifiedIDs(f.engine, workspace: 1).isEmpty)
+    }
+
+    func testTheMarkStandsOnceAnyAttemptOnTheKeyFailedToRestore() throws {
+        let f = try fixture()
+        // originals parked off the usable frame: no rollback runs at all, so
+        // the incumbents are left on the candidate's frames
+        let usable = f.engine.displayManager.cgRect(for: f.screen)
+        let parked = CGRect(x: usable.maxX + 200, y: usable.minY + 20, width: 120, height: 120)
+        for window in f.windows { f.trace.frames[window.windowID] = parked }
+        f.trace.rejectReadsFor = [f.windows[1].windowID]
+        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+        XCTAssertFalse(unverifiedIDs(f.engine, workspace: 1).isEmpty)
+
+        XCTAssertFalse(f.engine.clearUnverifiedGeometry(forWorkspace: 1, screen: f.screen))
+        XCTAssertFalse(unverifiedIDs(f.engine, workspace: 1).isEmpty,
+                       "nobody knows where the incumbents are, so the key keeps its mark")
+    }
+
+    func testALaterVerifiedRollbackDoesNotRedeemAnEarlierFailedOne() throws {
+        let f = try fixture()
+        // first attempt: originals parked, so nothing is restored
+        let usable = f.engine.displayManager.cgRect(for: f.screen)
+        let parked = CGRect(x: usable.maxX + 200, y: usable.minY + 20, width: 120, height: 120)
+        for window in f.windows { f.trace.frames[window.windowID] = parked }
+        f.trace.rejectReadsFor = [f.windows[1].windowID]
+        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+
+        // second attempt: the originals are on screen now and the rollback
+        // verifies — but it restored the frames the first attempt left, not
+        // the ones the tree describes
+        f.trace.rejectReadsFor = []
+        for (index, window) in f.windows.enumerated() {
+            f.trace.frames[window.windowID] = CGRect(x: usable.minX + 20 + CGFloat(index) * 150,
+                                                     y: usable.minY + 20, width: 120, height: 120)
+        }
+        f.trace.forgetWrites()
+        f.trace.rejectNextRead = true
+        let second = f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+
+        XCTAssertTrue(second.restorationVerified,
+                      "pass 2's rollback has to verify or this proves nothing")
+        XCTAssertFalse(f.engine.clearUnverifiedGeometry(forWorkspace: 1, screen: f.screen))
+        XCTAssertFalse(unverifiedIDs(f.engine, workspace: 1).isEmpty)
+    }
+
+    func testAnAcceptedLayoutStillClearsTheMarkAfterAFailedRollback() throws {
+        let f = try fixture()
+        let usable = f.engine.displayManager.cgRect(for: f.screen)
+        let parked = CGRect(x: usable.maxX + 200, y: usable.minY + 20, width: 120, height: 120)
+        for window in f.windows { f.trace.frames[window.windowID] = parked }
+        f.trace.rejectReadsFor = [f.windows[1].windowID]
+        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+        XCTAssertFalse(f.engine.clearUnverifiedGeometry(forWorkspace: 1, screen: f.screen))
+
+        f.trace.rejectReadsFor = []
+        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+
+        XCTAssertTrue(unverifiedIDs(f.engine, workspace: 1).isEmpty,
+                      "fresh verified geometry is the one thing that redeems a key")
+    }
+
     private func unverifiedIDs(_ engine: TilingEngine, workspace: Int) -> Set<CGWindowID> {
         engine.unverifiedLayouts.filter { $0.workspace == workspace }
             .reduce(into: Set<CGWindowID>()) { $0.formUnion($1.windowIDs) }
@@ -303,6 +482,10 @@ private final class MembershipTrace {
     var requested: [CGWindowID: CGRect] = [:]
     /// every window a setter went out for
     var written: Set<CGWindowID> = []
+    /// forget that a setter has ever run, so a second pass in the same test
+    /// gets the same read behaviour as the first — otherwise rejectNextRead
+    /// fires on the capture instead of on the candidate's readback
+    func forgetWrites() { wrote = false }
     private var wrote = false
     private var now: TimeInterval = 0
 

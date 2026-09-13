@@ -66,7 +66,7 @@ struct TiledDragCachePolicy {
                         affectedIDs: Set<CGWindowID>) -> [CGWindowID: TiledDragCacheAction] {
         var actions: [CGWindowID: TiledDragCacheAction] = [:]
         switch outcome {
-        case let .committed(_, actualFrames), let .rejectedRestored(_, actualFrames):
+        case let .committed(_, actualFrames, _), let .rejectedRestored(_, actualFrames):
             // both verdicts are verified: the candidate landed, or every
             // original was written back and read back within a point
             for id in affectedIDs {

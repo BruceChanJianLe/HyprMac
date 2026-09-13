@@ -901,7 +901,11 @@ per-window `cachedFrame`, plus the focus border and brackets, all read the
 same decisions, so they cannot disagree. Degraded drops no longer hide the
 dimming overlay wholesale; it is refreshed from the surviving entries.
 
-Feedback is unchanged. The red rejection flash on a classification
+The feedback policy is unchanged, but the classification feeding it moved:
+a verified rollback onto originals that overlap each other is now
+`rejectedRestored` rather than `degraded`, so it shows "Arrangement
+rejected; previous positions restored" where it used to show "Could not
+restore the tiled layout". The red rejection flash on a classification
 `readFailed` stays until the batch-2 evidence gate.
 
 Evidence logs, both under `build/sizing/recovery/`:
@@ -918,7 +922,146 @@ Evidence logs, both under `build/sizing/recovery/`:
   for a tree that could not verify its layout.
 - Green: `green-step3.log`.
 
-Four of the new tests pass in both runs on purpose. They pin behaviour that
-must not move: a superseded generation marks nothing, an accepted layout's
-progress is what the gate reads, the fallback expression prefers an intended
-rect when there is one, and a tree-absent window stays a focus candidate.
+Ten of step 3's 18 new tests fail in the red run; the eleventh failing case
+is an assertion added to the existing
+`testFailedScratchpadMigrationKeepsSourceTreeAndDoesNotPublishDestination`.
+The other eight new tests pass in both runs. Seven of them do so on purpose,
+pinning behaviour that must not move:
+
+- `testSupersededLayoutLeavesNoUnverifiedMarkBehindForANewerAcceptedOne`
+- `testAcceptedLayoutCarriesCompleteWritesAndAStableReadback`
+- `testFallbackFrameIsUsedForUnverifiedAndTreeAbsentWindows`
+- `testVisibleTreeAbsentWindowStaysAFocusCandidate`
+- `testOverlappingOriginalsRestoreWithoutPublishingThemAsATiledLayout`
+- `testCachePolicyWipesEveryAffectedFrameWhenProvenanceIsMissing`
+- `testEveryCacheGetsTheSameDecisionPerWindow`
+
+The eighth,
+`testDirectionalPickUsesActualFramesForAnUnverifiedKey`, passed because it
+was vacuous — its two windows were in no tree, so the intended map could not
+contain them either way. Step 4 rewrote it to use the tree's own windows and
+assert the opposite answers from the intended rects and the live frames.
+
+## Step 4 — admission recovery and float-to-tile, 2026-09-13
+
+A failed admission used to end with the newcomer visible, assigned, not
+floating and in no tree, and nothing ever went back for it. The evidence run
+shows exactly that: 26016 opens on ws2 at 12:32:49, the candidate is refused
+on 21611, the tree keeps its two incumbents, and the window sits untiled
+until the user toggles floating twice and it is routed to ws3. This step
+finishes those windows.
+
+### Newcomer identity
+
+`TilingEngine.tileWindows` and `addWindow` return an `AdmissionResult`: the
+workspace and screen, the generation, the ids the pass inserted, the ids the
+live tree holds afterwards, the failure, and the ids a verified rollback put
+back. `failedInsertedIDs` is the difference between inserted and published.
+Nothing reads the newcomer off the failure's window id — the failure names
+whichever window refused, which in the evidence is the incumbent 21611 while
+26016 was new.
+
+### One retry, then a float in place
+
+`AdmissionRecovery` (`Core/Orchestration/AdmissionRecovery.swift`) holds the
+records and the policy. Every probe and every action is an injected closure,
+including the scheduler, so the whole state machine is driven in tests with
+no wall clock. `WindowManager.wireAdmissionRecovery` supplies the production
+ones; the only two actions it hands over are "run one more tiling pass" and
+"float this window where it is". It gets no handle on workspace assignment,
+so the fallback cannot become `routeUnfittedWindow` by another name.
+
+The retry runs once, about 250 ms later, under a fresh generation, with the
+minima that attempt itself observed for the newcomer ignored. The bypass is
+scoped three ways: to the newcomer's own id, to entries whose provenance is
+`observed`, and to entries recorded at or after *that window's own*
+admission generation — the reach is carried per id, so two newcomers
+retried together do not share one another's.
+`MinSizeMemory` is not cleared — the bypass is a parameter that lasts one
+pass. Without it the retry never reaches AX: the bound the failed candidate
+taught refuses the window at the fit check.
+
+A second failure, geometry or I/O, floats a readable visible newcomer in
+place with both flags set. It is not sent anywhere. The key's unverified
+mark is dropped by the engine, not by the recovery. `clearUnverifiedGeometry`
+is now a request: it drops the mark only when every attempt on that key since
+the last accepted layout put its own originals back, and returns whether it
+did. The recovery cannot make that call — a restoration restores the frames
+it captured when it started, not the tree's layout, so once one rollback
+fails, every later one faithfully restores wherever that left the incumbents,
+and any number of attempts may have marked the key between the admission and
+the retry. `UnverifiedRecord` carries the running answer and only an accepted
+layout resets it. A drag that read back on target but could not prove its
+writes marks the key the same way: the caches still take the drop, but the
+candidate was not published, so the live tree describes the pre-drag
+arrangement while the windows sit in the post-drag one. This is the smaller of the two options the plan offered —
+no retile of the incumbents is needed, since the newcomer was never in the
+published tree.
+
+An unreadable newcomer, or one whose workspace is hidden, stays in
+`recovery pending=` and waits for a discovery poll or a workspace reveal.
+No timer is renewed and no frame is invented. A close, a stop, a later key
+press, a display change, a workspace move, a user float, or a later layout
+that tiles the window all cancel the pending work. Showing another
+workspace is the exception: `switchWorkspace` and `cycleWorkspace` leave
+the records alone, because a reveal is the evidence a parked newcomer is
+waiting for, and cancelling there would hand it a fresh timer on the reveal
+retile instead of its one remaining attempt. A retry that comes due while
+`displayTransitionPending` is set waits too: it calls `retryAdmission`
+directly and so does not pass the guard in `tileAllVisibleSpaces` that keeps
+a retile from building trees at keys that are about to migrate.
+
+### Forced insertion
+
+`forceInsertWindow` works on a private candidate and returns
+`.alreadyPresent`, `.inserted`, `.evicted(id)` or `.failed(reason)`. A
+refusal discards the candidate whole, so the live tree keeps the window that
+would have been evicted, and `FloatingWindowController.toggle` puts both
+floating flags back and shows the rejection flash. The eviction is committed
+only after the replacing layout is accepted.
+
+### Corrections to `f3bb62a`
+
+- A migrated tree now carries its unverified mark to the new key. Dropping
+  it let the same unverified windows advertise intended rects under the new
+  key without a single accepted layout.
+- `FrameSizingProgressReport.candidateVerified` is the one predicate behind
+  both publication gates. `TilingEngine.publishes` and the drag commit in
+  `dropTiledDrag` now call it, so an accepted drag needs the same complete
+  writes and complete stable readback a tiling candidate needs. Today the
+  gate is unreachable through the IO seam — a setter error aborts the
+  attempt before the verdict can be accepted — so it is a guard, not a fix,
+  and it is pinned at the predicate rather than through a drop.
+- `testDirectionalPickUsesActualFramesForAnUnverifiedKey` was vacuous and is
+  rewritten; see the step 3 section above.
+- The step 3 section's feedback and red-run test counts are corrected.
+
+### Evidence
+
+Both logs under `build/sizing/recovery/`:
+
+- Red: `red-step4-admission-recovery.log`, taken with the new API in place
+  and ten behaviour switches reverted — the recovery tracks nothing,
+  `failedInsertedIDs` is read off the failure's window id, the minima bypass
+  is gone, forced insertion publishes whatever the screen said, a migrated
+  tree loses its mark, `candidateVerified` forgets the empty-layout case,
+  `intendedTileRects` hands out rects for a marked key, the click hit-test
+  tries the tiles first, `floatInPlace` sets only the cache flag, and a
+  refused float→tile neither restores the flags nor flashes.
+  `Executed 652 tests, with 20 tests skipped and 50 failures` across 28
+  tests. Two of those, `testUnverifiedKeyOffersNoIntendedRects` and
+  `testEmptyMembersEmptiesTree`, are step 3's and fail as a side effect of
+  the last two switches — proof the switches reached the behaviour they
+  aimed at.
+- Green: `green-step4.log`. 658 tests, 20 skipped, 0 failures. One full run
+  of this commit hit the known wall-clock flake in
+  `PollingSchedulerTests.testScheduleAfterPollFiresAgain` ("1 is not equal
+  to 2"); it passed on its own rerun, and the recorded log is a clean
+  repeat of the whole suite.
+
+Tests that pass in both runs on purpose: the cancellation cases, which check
+that nothing happens and hold whether or not the recovery tracks anything;
+`testAcceptedAdmissionStrandsNobody` and `testAcceptedAdmissionTracksNothing`,
+which pin the quiet path; and
+`testAVanishedNewcomerStopsLookingLiveToAdmissionRecovery`, which pins
+existing discovery behaviour that the recovery's liveness probe reads.

@@ -49,7 +49,10 @@ enum TiledDragCaptureResult {
 
 enum TiledDragDropOutcome {
     case ignored
-    case committed(candidate: BSPTree, actualFrames: [CGWindowID: CGRect])
+    /// `progress` says what the accepted attempt actually did, so the
+    /// engine can apply the same publication gate the tiling trees use.
+    case committed(candidate: BSPTree, actualFrames: [CGWindowID: CGRect],
+                   progress: FrameSizingProgressReport)
     case rejectedRestored(reason: TiledDragFailure, actualFrames: [CGWindowID: CGRect])
     /// `progress` is nil when nothing knows what was written — provenance
     /// the cache policy cannot narrow with, so it falls back to clearing
@@ -269,7 +272,8 @@ struct TiledDragTransaction {
         switch result.outcome {
         case let .accepted(actualFrames):
             guard isCurrent(snapshot, currentContext: currentContext) else { return .superseded }
-            return .committed(candidate: candidate, actualFrames: actualFrames)
+            return .committed(candidate: candidate, actualFrames: actualFrames,
+                              progress: result.progress)
         case let .rejectedRestored(reason, actualFrames):
             return .rejectedRestored(reason: .sizing(reason), actualFrames: actualFrames)
         case let .degraded(candidateReason, restorationReason, actualFrames):

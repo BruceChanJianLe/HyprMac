@@ -190,7 +190,9 @@ outcome sets it, including a rejection whose rollback verified, because the
 frames the tree describes are not the frames the screen ended up with. A
 superseded attempt records nothing: a newer generation already owns the key.
 A key's mark is dropped when the key is, on display-change pruning or when
-an empty tree is removed.
+an empty tree is removed. A tree that *migrates* to another screen carries
+its mark to the new key: the claim belongs to the tree, not to the
+coordinates, and a migrated tree has still never had a layout accepted.
 
 `intendedTileRects` omits every window under a marked key. Directional focus
 and directional swap then fall back to the window's own frame for all of
@@ -202,7 +204,78 @@ candidate set for having no intended rect; it is picked on its actual frame.
 `TilingEngine.unverifiedLayouts` exposes the marked keys with their window
 ids and the ids the failed attempt had just inserted, and
 `clearUnverifiedGeometry(forWorkspace:screen:)` drops one. The state dump
-prints the ids as `unverified=`. Nothing schedules a retry yet.
+prints the ids as `unverified=`.
+
+### Admission recovery
+
+A tiling pass that inserted a new window and was then refused keeps its
+prior tree, which leaves the newcomer visible, assigned, not floating and in
+no tree at all. `TilingEngine.tileWindows` reports that as an
+`AdmissionResult`: the ids the pass inserted, the ids the live tree holds
+afterwards, and the difference between them — the newcomers it stranded.
+The newcomer is never read off the failure's own window id. A candidate
+fails on whichever window refused its frame, and that is usually an
+incumbent: Safari 21611 refused while 26016 was the window that had just
+opened.
+
+`AdmissionRecovery` finishes those windows in at most two steps.
+
+1. **One retry, about 250 ms later**, through an injected scheduler and
+   under a fresh generation. It ignores the minima that failed attempt
+   itself observed for the newcomer — a bound learned from the readback of
+   the candidate that just failed would refuse the retry at the fit check,
+   before a single setter went out. The reach is per window: two newcomers
+   retried together were admitted at different generations, and neither
+   inherits the other's. Nothing else is ignored: seeded hints, older
+   observed bounds and every other window's memory all still count, and
+   `MinSizeMemory` is never cleared. Before acting the recovery
+   re-checks the assignment, the workspace's home screen, whether the
+   workspace is visible, whether the app is running, whether the window
+   still exists and can be read, and whether the user has floated it.
+2. **Float in place.** A second failure — geometry or I/O — leaves a
+   readable visible newcomer floating exactly where it is, with both
+   floating flags set and the cause logged. It is not sent to another
+   workspace. The recovery then asks the engine to drop the key's unverified
+   mark, and the engine decides: `clearUnverifiedGeometry` drops it only if
+   every attempt on that key since the last accepted layout put its own
+   originals back. A restoration restores the frames it captured when it
+   started, not the tree's layout, so once one rollback fails, every later
+   one faithfully restores wherever that left the incumbents. The mark then
+   stands until a layout for the key is accepted, which is the one thing
+   that redeems it.
+
+The retry cannot re-arm itself, and a window already in recovery does not
+collect a second one from a later failed pass. A newcomer that is
+unreadable, or whose workspace is hidden, when its turn comes keeps its
+place in the pending set and waits for a real discovery event or a
+workspace reveal rather than a renewed timer; no frame is invented for it.
+A close, a stop, a later key press, a display change, a workspace move, a
+user float, or a later layout that tiles the window all cancel the pending
+work. Switching or cycling workspaces is the exception: a reveal is the
+evidence a parked newcomer is waiting for, so those two actions leave the
+records alone. A retry that comes due while the screens are being
+reconfigured waits as well, rather than tiling into keys that are about to
+move. Scratchpad tiling never enters this path.
+
+Every visible nonfloating assignment is therefore a verified tile, a window
+under a marked key, or a tracked recovery member. The state dump's
+`recovery pending=` lists the last group.
+
+A newcomer in recovery is drawn over the tiles, so a click is hit-tested
+against it before the tiled rects — otherwise the click lands on the
+incumbent whose slot it overlaps and `syncTracker-tiled` pulls focus away
+from the window the user just clicked.
+
+### Forced insertion
+
+`forceInsertWindow` is the float→tile entry point. It works on a private
+candidate and returns `.alreadyPresent`, `.inserted`, `.evicted(id)` or
+`.failed(reason)`. A refusal — no leaf takes the window even after evicting
+the deepest right tile, or the screen will not accept the layout — discards
+the candidate whole, so the live tree survives with the evicted window still
+in it and the caller's window stays floating with both flags set and the
+existing rejection flash. The eviction is committed only once the layout
+that replaces it has been accepted.
 
 Normal smart insertion can still auto-float a new window when no leaf fits.
 Before that existing scratchpad fallback, a rejected new window is offered to

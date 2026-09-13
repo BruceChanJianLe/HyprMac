@@ -306,6 +306,33 @@ final class WindowDiscoveryServiceTests: XCTestCase {
         XCTAssertFalse(cache.floatingWindowIDs.contains(20))
     }
 
+    // MARK: - what admission recovery reads
+
+    func testAVanishedNewcomerStopsLookingLiveToAdmissionRecovery() {
+        let (svc, cache, _) = makeService()
+        cache.knownWindowIDs = [26]
+        cache.windowOwners[26] = 9100
+        cache.cachedWindows[26] = makeWindow(id: 26, pid: 9100)
+
+        // the liveness probe WindowManager hands the recovery: a window is
+        // live only while discovery still calls it known and not hidden.
+        // this is the discovery half only — the production closure also
+        // checks NSRunningApplication, which needs the whole manager graph
+        func looksLive(_ id: CGWindowID) -> Bool {
+            cache.knownWindowIDs.contains(id) && !cache.hiddenWindowIDs.contains(id)
+                && cache.cachedWindows[id] != nil
+        }
+        XCTAssertTrue(looksLive(26))
+
+        // the window went away while its app kept running
+        let changes = compute(svc, snapshot: [], runningPIDs: [9100])
+
+        XCTAssertTrue(changes.goneIDs.contains(26))
+        XCTAssertFalse(changes.fullyForgottenIDs.contains(26))
+        XCTAssertFalse(looksLive(26),
+                       "a vanished newcomer leaves recovery through ordinary cleanup")
+    }
+
     // MARK: - returned (hidden → present)
 
     func testReturnedWindowComesBackFromHidden() {

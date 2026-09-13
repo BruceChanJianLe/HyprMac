@@ -36,22 +36,33 @@ final class DirectionalFocusGeometryTests: XCTestCase {
     func testDirectionalPickUsesActualFramesForAnUnverifiedKey() throws {
         let f = try fixture()
         let accessibility = AccessibilityManager()
-        // the left window claims a wide intended rect; on screen it is
-        // narrow, and the right window sits where the tree says nothing
-        let left = StubFrameWindow(id: 41, frame: CGRect(x: 0, y: 0, width: 200, height: 400))
-        let right = StubFrameWindow(id: 42, frame: CGRect(x: 300, y: 0, width: 200, height: 400))
-
-        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
-        f.trace.rejectNextRead = true
-        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
-        let intended = f.engine.intendedTileRects()
-        let frameFor: (HyprWindow) -> CGRect? = {
-            DirectionalGeometry.frame(for: $0.windowID, intended: intended, actual: $0.frame)
+        // the two windows sit on screen in the opposite order to the tree,
+        // so the intended rects and the live frames answer differently and
+        // the test can tell which one the picker used
+        let first = StubFrameWindow(id: f.windows[0].windowID,
+                                    frame: CGRect(x: 400, y: 0, width: 200, height: 400))
+        let second = StubFrameWindow(id: f.windows[1].windowID,
+                                     frame: CGRect(x: 0, y: 0, width: 200, height: 400))
+        func pick(_ intended: [CGWindowID: CGRect]) -> HyprWindow? {
+            accessibility.windowInDirection(.right, from: first, among: [first, second],
+                                            frameFor: {
+                DirectionalGeometry.frame(for: $0.windowID, intended: intended, actual: $0.frame)
+            })
         }
 
-        let target = accessibility.windowInDirection(.right, from: left, among: [left, right],
-                                                     frameFor: frameFor)
-        XCTAssertEqual(target?.windowID, 42)
+        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+        let verified = f.engine.intendedTileRects()
+        XCTAssertNotNil(verified[first.windowID], "an accepted layout offers rects")
+        XCTAssertEqual(pick(verified)?.windowID, second.windowID,
+                       "the tree puts the second window to the right")
+
+        f.trace.rejectNextRead = true
+        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+        let unverified = f.engine.intendedTileRects()
+
+        XCTAssertTrue(unverified.isEmpty)
+        XCTAssertNil(pick(unverified),
+                     "on the live frames there is nothing to the right of the first window")
     }
 
     func testVisibleTreeAbsentWindowStaysAFocusCandidate() {

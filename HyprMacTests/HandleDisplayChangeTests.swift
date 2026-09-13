@@ -37,6 +37,37 @@ final class HandleDisplayChangeTests: XCTestCase {
         XCTAssertNil(engine.existingTree(forWorkspace: 1, screen: screen))
     }
 
+    func testAMigratedTreeCarriesItsUnverifiedMark() throws {
+        let trace = MigrationTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let windows = (961...962).map {
+            HyprWindow(element: AXUIElementCreateApplication(99996), windowID: CGWindowID($0),
+                       ownerPID: 99996)
+        }
+        let usable = engine.displayManager.cgRect(for: screen)
+        for (index, window) in windows.enumerated() {
+            trace.frames[window.windowID] = CGRect(x: usable.minX + 20 + CGFloat(index) * 150,
+                                                   y: usable.minY + 20, width: 120, height: 120)
+        }
+        engine.tileWindows(windows, onWorkspace: 1, screen: screen)
+        XCTAssertFalse(engine.intendedTileRects().isEmpty)
+
+        trace.rejectNextRead = true
+        engine.tileWindows(windows, onWorkspace: 1, screen: screen)
+        XCTAssertTrue(engine.intendedTileRects().isEmpty)
+
+        // the workspace's home moves to a screen that is not in the manager's
+        // live list, so the tree migrates and the claim has to go with it
+        let destination = MigrationScreen()
+        engine.handleDisplayChange(currentScreens: [screen, destination],
+                                   homeScreenForWorkspace: { _ in destination })
+
+        XCTAssertNotNil(engine.existingTree(forWorkspace: 1, screen: destination))
+        XCTAssertEqual(engine.unverifiedGeometryWindowIDs, Set(windows.map(\.windowID)),
+                       "a migrated tree has still never had a layout accepted")
+    }
+
     func testHandleDisplayChangeIsNoopWhenTreeOnItsHome() {
         engine.prepareTileLayout([makeWindow(id: 1), makeWindow(id: 2)],
                                  onWorkspace: 1, screen: screen)
@@ -50,5 +81,30 @@ final class HandleDisplayChangeTests: XCTestCase {
 
         XCTAssertNotNil(engine.existingTree(forWorkspace: 1, screen: screen))
         XCTAssertEqual(engine.existingTree(forWorkspace: 1, screen: screen)?.allWindows.count, countBefore)
+    }
+}
+
+private final class MigrationScreen: NSScreen {
+    override var frame: NSRect { NSRect(x: 6000, y: 0, width: 1400, height: 900) }
+    override var visibleFrame: NSRect { frame }
+}
+
+private final class MigrationTrace {
+    var frames: [CGWindowID: CGRect] = [:]
+    var rejectNextRead = false
+    private var wrote = false
+    private var now: TimeInterval = 0
+
+    func io(_ generation: @escaping () -> UInt64) -> FrameSizingIO {
+        FrameSizingIO(setMessagingTimeout: { _, _ in .success },
+                      writeSize: { [self] id, size, _ in wrote = true; frames[id]?.size = size; return .success },
+                      writePosition: { [self] id, position, _ in frames[id]?.origin = position; return .success },
+                      readPosition: { [self] id, _ in
+                          if wrote && rejectNextRead { rejectNextRead = false; return (.cannotComplete, nil) }
+                          return (.success, frames[id]?.origin)
+                      },
+                      readSize: { [self] id, _ in (.success, frames[id]?.size) },
+                      now: { [self] in now }, sleep: { [self] in now += $0 },
+                      currentGeneration: generation)
     }
 }

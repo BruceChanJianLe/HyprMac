@@ -85,12 +85,16 @@ class MinSizeMemory {
     /// A seeded hint is not a floor, so real evidence replaces it instead of
     /// merging with it: the axis this readback did not refuse goes back to
     /// unknown rather than keeping a guess under an `observed` label.
+    ///
+    /// - Returns: `true` when an entry was written, so the caller can stamp
+    ///   when the evidence arrived.
+    @discardableResult
     func recordObserved(_ window: HyprWindow,
                         target: CGSize,
                         actual: CGSize,
                         widthConflict: Bool,
                         heightConflict: Bool,
-                        phase: FrameSizingPhase) {
+                        phase: FrameSizingPhase) -> Bool {
         let existing = known[window.windowID]
         let base = existing?.provenance == .observed ? (existing?.size ?? .zero) : CGSize.zero
         let updated = CGSize(
@@ -103,7 +107,7 @@ class MinSizeMemory {
             hyprLog(.debug, .lifecycle, "min-size record: wid=\(window.windowID) "
                     + "old=\(old) target=\(Self.text(target)) actual=\(Self.text(actual)) "
                     + "axis=\(axis) phase=\(phase.rawValue) source=readback refused=unusable")
-            return
+            return false
         }
         let entry = Entry(size: updated, provenance: .observed)
         known[window.windowID] = entry
@@ -112,6 +116,7 @@ class MinSizeMemory {
                 + "old=\(old) new=\(Self.text(updated)) target=\(Self.text(target)) "
                 + "actual=\(Self.text(actual)) axis=\(axis) phase=\(phase.rawValue) "
                 + "source=readback")
+        return true
     }
 
     /// An accepted readback at least `lowerMinSizeAcceptedDeltaPx` smaller than

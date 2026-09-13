@@ -1204,4 +1204,27 @@ final class FrameSizingTransactionTests: XCTestCase {
         XCTAssertTrue(result.progress.readbackComplete)
         XCTAssertTrue(result.progress.readbackStable)
     }
+
+    // the one predicate behind every publication decision — the tiling trees
+    // and the drag commit both ask it, so they cannot drift apart
+    func testCandidateVerifiedNeedsEveryTargetWrittenAndACompleteStableReadback() {
+        var report = FrameSizingProgressReport()
+        XCTAssertTrue(report.candidateVerified,
+                      "a layout with no targets wrote nothing and has nothing to verify")
+
+        report.candidate.targetIDs = [1, 2]
+        report.candidate.writesCompleted = [1]
+        report.candidate.readbackComplete = true
+        report.candidate.readbackStable = true
+        XCTAssertFalse(report.candidateVerified, "one target never finished its setters")
+
+        report.candidate.writesCompleted = [1, 2]
+        XCTAssertTrue(report.candidateVerified)
+
+        report.candidate.readbackComplete = false
+        XCTAssertFalse(report.candidateVerified)
+        report.candidate.readbackComplete = true
+        report.candidate.readbackStable = false
+        XCTAssertFalse(report.candidateVerified)
+    }
 }

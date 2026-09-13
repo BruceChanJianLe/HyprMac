@@ -703,6 +703,18 @@ struct FrameSizingProgressReport: Equatable {
             && candidate.targetIDs.allSatisfy(candidate.writesCompleted.contains)
             && candidate.readbackComplete && candidate.readbackStable
     }
+
+    /// Whether a candidate may become live geometry.
+    ///
+    /// One predicate for every publication decision — the tiling trees and
+    /// the drag commit both ask this, so an accepted verdict cannot mean
+    /// "publish" in one place and "publish if the writes finished" in the
+    /// other. A layout with no targets wrote nothing and has nothing to
+    /// verify; it publishes because that is how a workspace that lost its
+    /// last window empties its tree.
+    var candidateVerified: Bool {
+        candidate.targetIDs.isEmpty || candidateFullyWritten
+    }
 }
 
 struct FrameSizingTransaction {
