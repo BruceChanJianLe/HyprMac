@@ -24,7 +24,7 @@ final class TilingEngineVerifiedLayoutTests: XCTestCase {
         let generation = engine.beginLayoutGeneration()
         let outcome = engine.applyVerifiedLayout(tree, in: usable, generation: generation)
 
-        guard case let .accepted(actualFrames) = outcome else {
+        guard case let .accepted(actualFrames, _) = outcome else {
             return XCTFail("expected accepted quantized layout, got \(outcome)")
         }
         let targets = Dictionary(uniqueKeysWithValues: tree.layout(
@@ -58,7 +58,7 @@ final class TilingEngineVerifiedLayoutTests: XCTestCase {
         let generation = engine.beginLayoutGeneration()
         let outcome = engine.applyVerifiedLayout(tree, in: usable, generation: generation)
 
-        guard case let .accepted(actualFrames) = outcome else {
+        guard case let .accepted(actualFrames, _) = outcome else {
             return XCTFail("expected accepted rounded-up layout, got \(outcome)")
         }
         let targets = Dictionary(uniqueKeysWithValues: tree.layout(
@@ -127,6 +127,64 @@ final class TilingEngineVerifiedLayoutTests: XCTestCase {
         XCTAssertEqual(reasons.candidate, .writeFailed(1, .cannotComplete))
         XCTAssertEqual(reasons.restoration, .writeFailed(1, .notImplemented))
         XCTAssertTrue(reasons.attempted)
+    }
+
+    func testAcceptedLayoutCarriesCompleteWritesAndAStableReadback() {
+        let first = makeWindow(id: 571)
+        let second = makeWindow(id: 572)
+        let tree = BSPTree()
+        XCTAssertTrue(tree.insert(first, maxDepth: 3))
+        XCTAssertTrue(tree.insert(second, maxDepth: 3))
+        let engine = TilingEngine(displayManager: DisplayManager(),
+                                  frameSizingIOFactory: acceptingFrameSizingIOFactory())
+
+        let generation = engine.beginLayoutGeneration()
+        let outcome = engine.applyVerifiedLayout(tree, in: CGRect(x: 0, y: 0, width: 1000, height: 700),
+                                                 generation: generation)
+
+        guard case let .accepted(_, progress) = outcome else {
+            return XCTFail("expected accepted layout, got \(outcome)")
+        }
+        // this is what the publication gate reads
+        XCTAssertEqual(Set(progress.candidate.targetIDs), [571, 572])
+        XCTAssertEqual(progress.candidate.writesCompleted, [571, 572])
+        XCTAssertTrue(progress.candidate.readbackComplete)
+        XCTAssertTrue(progress.candidate.readbackStable)
+        XCTAssertTrue(progress.candidateFullyWritten)
+        XCTAssertNil(progress.restoration)
+    }
+
+    func testRestoredOverlappingOriginalsAreVerifiedAndReportedSeparately() {
+        let first = makeWindow(id: 581)
+        let second = makeWindow(id: 582)
+        let tree = BSPTree()
+        XCTAssertTrue(tree.insert(first, maxDepth: 3))
+        XCTAssertTrue(tree.insert(second, maxDepth: 3))
+
+        let usable = CGRect(x: 0, y: 0, width: 1000, height: 700)
+        // both windows sit on the same spot, the way an untiled newcomer sits
+        // over the incumbent it was admitted next to
+        let stacked = CGRect(x: 40, y: 40, width: 400, height: 300)
+        let trace = CappedSizingTrace(frames: [581: stacked, 582: stacked],
+                                      cappedWindowID: 581,
+                                      cap: CGSize(width: 400, height: 300))
+        let engine = TilingEngine(
+            displayManager: DisplayManager(),
+            frameSizingIOFactory: { _, generation in trace.io(generation: generation) }
+        )
+
+        let generation = engine.beginLayoutGeneration()
+        let outcome = engine.applyVerifiedLayout(tree, in: usable, generation: generation)
+
+        guard case let .rejectedRestored(_, actualFrames, progress) = outcome else {
+            return XCTFail("expected verified restoration, got \(outcome)")
+        }
+        XCTAssertEqual(actualFrames[581], stacked)
+        XCTAssertEqual(actualFrames[582], stacked)
+        XCTAssertEqual(progress.restorationOverlaps,
+                       [FrameSizingOverlap(first: 581, second: 582)],
+                       "the overlap is reported, not treated as a failed rollback")
+        XCTAssertEqual(progress.restoration?.writesCompleted, [581, 582])
     }
 
     func testKeyboardSwapReturnsFalseAndRestoresTreeAfterUnknownRead() throws {
@@ -530,7 +588,7 @@ private enum OrdinaryEntryPoint: CaseIterable {
 private func degradedReasons(
     _ outcome: TilingEngine.LayoutApplicationOutcome
 ) -> (candidate: FrameSizingFailure?, restoration: FrameSizingFailure?, attempted: Bool) {
-    guard case let .degraded(candidateReason, restorationReason, attempted, _) = outcome else {
+    guard case let .degraded(candidateReason, restorationReason, attempted, _, _) = outcome else {
         return (nil, nil, false)
     }
     return (candidateReason, restorationReason, attempted)
@@ -837,6 +895,48 @@ private final class ReentrantMutationTrace {
                 }
                 return (.success, frames[id]?.origin)
             },
+            readSize: { [self] id, _ in (.success, frames[id]?.size) },
+            now: { [self] in now },
+            sleep: { [self] interval in now += interval },
+            currentGeneration: generation
+        )
+    }
+}
+
+/// Writes always land, except that one window refuses to grow past a cap.
+/// The candidate therefore reads back short of its target while every
+/// original still fits, so the restoration pass writes each window back
+/// exactly where it was.
+private final class CappedSizingTrace {
+    var frames: [CGWindowID: CGRect]
+    private var now: TimeInterval = 0
+    private let cappedWindowID: CGWindowID
+    private let cap: CGSize
+
+    init(frames: [CGWindowID: CGRect], cappedWindowID: CGWindowID, cap: CGSize) {
+        self.frames = frames
+        self.cappedWindowID = cappedWindowID
+        self.cap = cap
+    }
+
+    func io(generation: @escaping () -> UInt64) -> FrameSizingIO {
+        FrameSizingIO(
+            setMessagingTimeout: { _, _ in .success },
+            writeSize: { [self] id, size, _ in
+                var frame = frames[id] ?? .zero
+                frame.size = id == cappedWindowID
+                    ? CGSize(width: min(size.width, cap.width), height: min(size.height, cap.height))
+                    : size
+                frames[id] = frame
+                return .success
+            },
+            writePosition: { [self] id, position, _ in
+                var frame = frames[id] ?? .zero
+                frame.origin = position
+                frames[id] = frame
+                return .success
+            },
+            readPosition: { [self] id, _ in (.success, frames[id]?.origin) },
             readSize: { [self] id, _ in (.success, frames[id]?.size) },
             now: { [self] in now },
             sleep: { [self] interval in now += interval },

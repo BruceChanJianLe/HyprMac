@@ -398,7 +398,9 @@ final class ActionDispatcher {
         // stateCache.tiledPositions can't be used here — it stores the
         // *live* AX frame for tiled windows, not the layout-intended rect.
         let intended = tilingEngine.intendedTileRects()
-        let frameFor: (HyprWindow) -> CGRect? = { intended[$0.windowID] ?? $0.frame }
+        let frameFor: (HyprWindow) -> CGRect? = {
+            DirectionalGeometry.frame(for: $0.windowID, intended: intended, actual: $0.frame)
+        }
         // diag: source rect (intended vs live) + physical screen. see directional-focus bug.
         hyprLog(.debug, .orchestration, "focus \(direction): src '\(focused.title ?? "?")' (\(focused.windowID)) intended=\(intended[focused.windowID].map { "\($0)" } ?? "nil") live=\(focused.frame.map { "\($0)" } ?? "nil") screen=\(displayManager.screen(for: focused)?.localizedName ?? "?")")
         if let target = accessibility.windowInDirection(direction, from: focused, among: windows, frameFor: frameFor) {
@@ -441,7 +443,9 @@ final class ActionDispatcher {
 
         // intended tile rects — see focusInDirection for rationale.
         let intended = tilingEngine.intendedTileRects()
-        let frameFor: (HyprWindow) -> CGRect? = { intended[$0.windowID] ?? $0.frame }
+        let frameFor: (HyprWindow) -> CGRect? = {
+            DirectionalGeometry.frame(for: $0.windowID, intended: intended, actual: $0.frame)
+        }
         guard let target = accessibility.windowInDirection(direction, from: focused, among: windows, frameFor: frameFor) else { return }
         guard tilingEngine.canSwapWindows(focused, target, onWorkspace: workspace, screen: screen) else {
             rejectSwap(focused, reason: "swap would violate min-size constraints")
@@ -577,5 +581,21 @@ final class ActionDispatcher {
 
         tilingEngine.toggleSplit(focused, onWorkspace: workspace, screen: screen)
         updatePositionCache()
+    }
+}
+
+/// Which rect a directional pick should judge a window by.
+///
+/// The tree's intended rect when the engine still stands behind it: a
+/// crammed window's live frame can push past a neighbour's far edge and
+/// exclude that neighbour from the candidate set. Otherwise the window's
+/// own frame. A window with no intended rect is never dropped from the
+/// candidate set for that — a newcomer that never entered a tree, and
+/// every member of a key whose geometry is unverified, stay reachable on
+/// their actual frames.
+enum DirectionalGeometry {
+    static func frame(for windowID: CGWindowID, intended: [CGWindowID: CGRect],
+                      actual: CGRect?) -> CGRect? {
+        intended[windowID] ?? actual
     }
 }

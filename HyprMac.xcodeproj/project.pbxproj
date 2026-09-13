@@ -156,6 +156,7 @@
 		ACF3A959B5C8C979F7C9169F /* MinSizeMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80DEDE87B2D877B2B57C6767 /* MinSizeMemory.swift */; };
 		AE97C7D10FC0365E361E7ACE /* KeybindEditorViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17ABB08FA82CF475A82AB3C5 /* KeybindEditorViewModel.swift */; };
 		AEF86DF37CEB73E37D222EBA /* RuntimeVariant.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE740E91A8A260E9F899EB51 /* RuntimeVariant.swift */; };
+		B1ACB629A1DDE243422217A9 /* DirectionalFocusGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D4C2638F2735ACBB733C2C4 /* DirectionalFocusGeometryTests.swift */; };
 		B44C416E3958C82361083048 /* KeybindOverlayController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7BD70717FD497B0899FBCE5 /* KeybindOverlayController.swift */; };
 		B6C40B2479058C399AD8153B /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5627CA2ADE2AA85B3372EB81 /* SettingsView.swift */; };
 		B7B452BA5C221D28C3A8CA4E /* TiledDragTransaction.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC27FADCFF305913BD49A6CA /* TiledDragTransaction.swift */; };
@@ -260,6 +261,7 @@
 		2BA2DB7604ABD064933A5F4C /* DestroyRecheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestroyRecheck.swift; sourceTree = "<group>"; };
 		2CD84800A82DD5466833975C /* MouseTrackingManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MouseTrackingManager.swift; sourceTree = "<group>"; };
 		2CFEA8374C63AC2FDFCAC4AE /* WindowManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowManager.swift; sourceTree = "<group>"; };
+		2D4C2638F2735ACBB733C2C4 /* DirectionalFocusGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectionalFocusGeometryTests.swift; sourceTree = "<group>"; };
 		301C7EDAAD234FC3DDCBAADC /* DirectionPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectionPicker.swift; sourceTree = "<group>"; };
 		306A7B2B7B3F09F08F953F35 /* SuppressionRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SuppressionRegistryTests.swift; sourceTree = "<group>"; };
 		31EF3D85D0E0F9BCD33F6455 /* HyprWindowAXReadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HyprWindowAXReadTests.swift; sourceTree = "<group>"; };
@@ -581,6 +583,7 @@
 				6B23E3313247FD77173D35DD /* DefaultKeybindsTests.swift */,
 				728568405C25B4DD6E5EDD9B /* DestroyRecheckTests.swift */,
 				556C506B51F8050F6F5E22A4 /* DimmingOverlayTests.swift */,
+				2D4C2638F2735ACBB733C2C4 /* DirectionalFocusGeometryTests.swift */,
 				B9C3A29473C9D3ECD870EB22 /* DragSwapHandlerInsertionTests.swift */,
 				26E5C6E3F03B5BD56771D741 /* DwindleLayoutTests.swift */,
 				084CC77D9BC9594A5E7DE366 /* FocusStateControllerTests.swift */,
@@ -995,6 +998,7 @@
 				2A235468195A778CCCA51C70 /* DefaultKeybindsTests.swift in Sources */,
 				27A937379F4BEF149A4F626F /* DestroyRecheckTests.swift in Sources */,
 				74EB88ADC96D2ACBC690C836 /* DimmingOverlayTests.swift in Sources */,
+				B1ACB629A1DDE243422217A9 /* DirectionalFocusGeometryTests.swift in Sources */,
 				8A7450A0AEBA21F9865B5BEA /* DragSwapHandlerInsertionTests.swift in Sources */,
 				7A66C97726B539669E56D8DD /* DwindleLayoutTests.swift in Sources */,
 				EDF1F6BE9094C220921182DC /* FocusStateControllerTests.swift in Sources */,

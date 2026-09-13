@@ -42,24 +42,69 @@ extension TiledDragTargetResolver {
     }
 }
 
+/// What a finished drag says about each member's cached geometry.
+///
+/// One decision per window, shared by every cache that holds drag
+/// geometry, so `tiledPositions` and `cachedFrame` cannot disagree.
+enum TiledDragCacheAction: Equatable {
+    /// a verified current readback — take this frame
+    case refresh(CGRect)
+    /// possibly written, or the dragged window after a native drag, and
+    /// nothing verified where it ended up
+    case invalidate
+    /// provably untouched and still current
+    case preserve
+}
+
+struct TiledDragCachePolicy {
+    /// - Parameters:
+    ///   - draggedID: always uncertain after a native drag. macOS moved it,
+    ///     not us, so an unverified outcome says nothing about where it is.
+    ///   - affectedIDs: the drag's members.
+    static func actions(for outcome: TiledDragDropOutcome,
+                        draggedID: CGWindowID,
+                        affectedIDs: Set<CGWindowID>) -> [CGWindowID: TiledDragCacheAction] {
+        var actions: [CGWindowID: TiledDragCacheAction] = [:]
+        switch outcome {
+        case let .committed(_, actualFrames), let .rejectedRestored(_, actualFrames):
+            // both verdicts are verified: the candidate landed, or every
+            // original was written back and read back within a point
+            for id in affectedIDs {
+                actions[id] = actualFrames[id].map { .refresh($0) } ?? .invalidate
+            }
+        case let .degraded(_, _, _, progress):
+            guard let progress else {
+                // no provenance, so nothing is provably untouched
+                for id in affectedIDs { actions[id] = .invalidate }
+                return actions
+            }
+            // a restoration writes every captured original, including
+            // windows the candidate never reached, so clearing only the
+            // dragged id would leave the rest of the members lying
+            let written = progress.possiblyWritten
+            for id in affectedIDs {
+                actions[id] = (written.contains(id) || id == draggedID) ? .invalidate : .preserve
+            }
+        case .superseded, .ignored:
+            break
+        }
+        return actions
+    }
+}
+
 struct TiledDragCacheUpdate {
     static func applying(_ outcome: TiledDragDropOutcome,
+                         draggedID: CGWindowID,
                          affectedIDs: Set<CGWindowID>,
                          to existing: [CGWindowID: CGRect]) -> [CGWindowID: CGRect] {
         var updated = existing
-        switch outcome {
-        case let .committed(_, actualFrames), let .rejectedRestored(_, actualFrames):
-            for id in affectedIDs {
-                if let frame = actualFrames[id] {
-                    updated[id] = frame
-                } else {
-                    updated.removeValue(forKey: id)
-                }
+        for (id, action) in TiledDragCachePolicy.actions(for: outcome, draggedID: draggedID,
+                                                         affectedIDs: affectedIDs) {
+            switch action {
+            case let .refresh(frame): updated[id] = frame
+            case .invalidate: updated.removeValue(forKey: id)
+            case .preserve: break
             }
-        case .degraded:
-            for id in affectedIDs { updated.removeValue(forKey: id) }
-        case .superseded, .ignored:
-            break
         }
         return updated
     }
@@ -220,6 +265,7 @@ final class TiledDragHandler {
                 }
                 let updated = TiledDragCacheUpdate.applying(
                     result.outcome,
+                    draggedID: result.snapshot.draggedID,
                     affectedIDs: result.snapshot.context.memberIDs,
                     to: readCache()
                 )

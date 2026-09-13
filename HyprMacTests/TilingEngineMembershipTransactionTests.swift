@@ -96,6 +96,7 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
 
         XCTAssertEqual(f.engine.existingTree(forWorkspace: 0, screen: f.screen)?.structuralFingerprint(), before)
         XCTAssertNil(f.engine.existingTree(forWorkspace: 0, screen: destination))
+        XCTAssertFalse(unverifiedIDs(f.engine, workspace: TilingEngine.scratchpadWorkspace).isEmpty)
     }
 
     func testDegradedLayoutWithFailedRestorationKeepsPriorMembership() throws {
@@ -111,24 +112,26 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertEqual(f.engine.existingTree(forWorkspace: 1, screen: f.screen)?.structuralFingerprint(), before)
     }
 
-    func testDegradedLayoutWithoutAttemptedRestorationPublishesCandidateMembership() throws {
+    func testSecondTargetFailureWithParkedOriginalsPublishesNothingAndWritesNoParkedFrame() throws {
         let f = try fixture()
-        // originals parked off the usable frame, so restoration cannot be
-        // attempted after the candidate readback fails — the writes stand
+        // originals parked off the usable frame, so they are not restoration
+        // targets. every target is written, then the second one will not read
         let usable = f.engine.displayManager.cgRect(for: f.screen)
-        for window in f.windows {
-            f.trace.frames[window.windowID] = CGRect(x: usable.maxX + 200, y: usable.minY + 20,
-                                                     width: 120, height: 120)
-        }
-        f.trace.rejectNextRead = true
+        let parked = CGRect(x: usable.maxX + 200, y: usable.minY + 20, width: 120, height: 120)
+        for window in f.windows { f.trace.frames[window.windowID] = parked }
+        f.trace.rejectReadsFor = [f.windows[1].windowID]
+        let before = f.tree.structuralFingerprint()
 
         f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
 
-        let published = f.engine.existingTree(forWorkspace: 1, screen: f.screen)
-        XCTAssertEqual(Set(published?.allWindows.map(\.windowID) ?? []), Set(f.windows.map(\.windowID)))
+        XCTAssertEqual(f.engine.existingTree(forWorkspace: 1, screen: f.screen)?.structuralFingerprint(), before)
+        XCTAssertEqual(f.trace.written, Set(f.windows.map(\.windowID)))
+        XCTAssertFalse(f.trace.requested.values.contains { $0.origin == parked.origin },
+                       "a parked original is never written back")
+        XCTAssertEqual(unverifiedIDs(f.engine, workspace: 1), Set(f.windows.map(\.windowID)))
     }
 
-    func testDegradedLayoutWithoutRestorationPublishesTheAdjustedRatios() throws {
+    func testParkedOriginalsKeepThePriorRatiosAsWellAsTheMembership() throws {
         let f = try fixture()
         let usable = f.engine.displayManager.cgRect(for: f.screen)
         // one window refuses to shrink, so pass 1 conflicts and pass 2
@@ -145,12 +148,105 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         // what sends the transaction into the adjusted second pass
         XCTAssertNotNil(f.windows[0].observedMinSize)
         let published = try XCTUnwrap(f.engine.existingTree(forWorkspace: 1, screen: f.screen))
-        XCTAssertEqual(Set(published.allWindows.map(\.windowID)), Set(f.windows.map(\.windowID)))
-        let layout = Dictionary(uniqueKeysWithValues: published.layout(
-            in: usable, gap: f.engine.gapSize, padding: f.engine.outerPadding
-        ).map { ($0.0.windowID, $0.1) })
-        XCTAssertEqual(layout, f.trace.requested,
-                       "the published tree must reproduce the frames left on screen")
+        XCTAssertEqual(Set(published.allWindows.map(\.windowID)),
+                       Set(f.windows.prefix(2).map(\.windowID)))
+        XCTAssertEqual(published.root.splitRatio, 0.6, accuracy: 0.0001,
+                       "an unverified adjusted pass does not get to rewrite the live ratios")
+    }
+
+    func testCleanupFailureDoesNotPublishEvenThoughTheFramesReadBackFine() throws {
+        let f = try fixture()
+        // every setter succeeds and the frames land exactly where they were
+        // asked to; only the EnhancedUI cleanup errors
+        f.trace.endError = .cannotComplete
+        let before = f.tree.structuralFingerprint()
+
+        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+
+        XCTAssertEqual(f.engine.existingTree(forWorkspace: 1, screen: f.screen)?.structuralFingerprint(), before)
+        XCTAssertFalse(unverifiedIDs(f.engine, workspace: 1).isEmpty)
+    }
+
+    func testIncompleteReadbackDoesNotPublish() throws {
+        let f = try fixture()
+        // one window never reads back, so the final readback is incomplete
+        // whatever the others say
+        f.trace.rejectReadsFor = [f.windows[2].windowID]
+        let before = f.tree.structuralFingerprint()
+
+        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+
+        XCTAssertEqual(f.engine.existingTree(forWorkspace: 1, screen: f.screen)?.structuralFingerprint(), before)
+        XCTAssertFalse(unverifiedIDs(f.engine, workspace: 1).isEmpty)
+    }
+
+    func testWindowThatStopsShortOfItsTargetKeepsThePriorMembership() throws {
+        let f = try fixture()
+        // the portrait Terminal: asked for the full slot height, answers 340
+        // points short, every time
+        f.trace.heightShortfall[f.windows[0].windowID] = 340
+        let before = f.tree.structuralFingerprint()
+
+        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+
+        XCTAssertEqual(f.engine.existingTree(forWorkspace: 1, screen: f.screen)?.structuralFingerprint(), before)
+        XCTAssertEqual(f.engine.existingTree(forWorkspace: 1, screen: f.screen)?.root.splitRatio, 0.6)
+        XCTAssertFalse(unverifiedIDs(f.engine, workspace: 1).isEmpty)
+    }
+
+    func testAcceptedRetryPublishesAndClearsTheUnverifiedMark() throws {
+        let f = try fixture()
+        f.trace.rejectNextRead = true
+        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+        XCTAssertFalse(unverifiedIDs(f.engine, workspace: 1).isEmpty)
+
+        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+
+        XCTAssertEqual(Set(f.engine.windowIDs(inTreeForWorkspace: 1, screen: f.screen)),
+                       Set(f.windows.map(\.windowID)))
+        XCTAssertTrue(unverifiedIDs(f.engine, workspace: 1).isEmpty)
+    }
+
+    func testSupersededLayoutLeavesNoUnverifiedMarkBehindForANewerAcceptedOne() throws {
+        let f = try fixture()
+        var bumped = false
+        f.trace.onWrite = {
+            guard !bumped else { return }
+            bumped = true
+            f.engine.beginLayoutGeneration()
+        }
+
+        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+
+        XCTAssertTrue(bumped)
+        XCTAssertTrue(unverifiedIDs(f.engine, workspace: 1).isEmpty,
+                      "a superseded generation does not get to mark a key a newer owner holds")
+        // and nothing was rolled back over the newer operation
+        XCTAssertEqual(f.trace.written.count, 1)
+    }
+
+    func testOverlappingOriginalsRestoreWithoutPublishingThemAsATiledLayout() throws {
+        let f = try fixture()
+        // the originals sit on top of each other, the way an untiled newcomer
+        // and an incumbent do
+        let usable = f.engine.displayManager.cgRect(for: f.screen)
+        let stacked = CGRect(x: usable.minX + 40, y: usable.minY + 40, width: 400, height: 300)
+        for window in f.windows { f.trace.frames[window.windowID] = stacked }
+        f.trace.rejectNextRead = true
+        let before = f.tree.structuralFingerprint()
+
+        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+
+        XCTAssertEqual(f.engine.existingTree(forWorkspace: 1, screen: f.screen)?.structuralFingerprint(), before)
+        for window in f.windows {
+            XCTAssertEqual(f.trace.frames[window.windowID], stacked,
+                           "every original goes back exactly where it was")
+        }
+    }
+
+    private func unverifiedIDs(_ engine: TilingEngine, workspace: Int) -> Set<CGWindowID> {
+        engine.unverifiedLayouts.filter { $0.workspace == workspace }
+            .reduce(into: Set<CGWindowID>()) { $0.formUnion($1.windowIDs) }
     }
 
     func testDegradedLayoutWithoutWritesKeepsPriorMembership() throws {
@@ -191,36 +287,54 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
 private final class MembershipTrace {
     var frames: [CGWindowID: CGRect] = [:]
     var rejectNextRead = false
+    /// windows whose reads fail from the first write onwards, so a failure
+    /// can be aimed at one target instead of whichever is read first
+    var rejectReadsFor: Set<CGWindowID> = []
     var onWrite: (() -> Void)?
     /// floor a window refuses to shrink below, the way a real min-size app behaves
     var minSize: [CGWindowID: CGSize] = [:]
+    /// how far short of the height it is asked for a window settles — the
+    /// portrait Terminal case, which answers short whatever the ask
+    var heightShortfall: [CGWindowID: CGFloat] = [:]
+    /// error the EnhancedUI cleanup returns after the setters have all
+    /// succeeded, so a clean-looking frame still ends in a failure
+    var endError: AXError?
     /// the frames the engine asked for, before any floor is applied
     var requested: [CGWindowID: CGRect] = [:]
+    /// every window a setter went out for
+    var written: Set<CGWindowID> = []
     private var wrote = false
     private var now: TimeInterval = 0
 
     func io(_ generation: @escaping () -> UInt64) -> FrameSizingIO {
-        FrameSizingIO(setMessagingTimeout: { _, _ in .success },
+        var io = FrameSizingIO(setMessagingTimeout: { _, _ in .success },
                       writeSize: { [self] id, size, _ in
-                          onWrite?(); wrote = true
+                          onWrite?(); wrote = true; written.insert(id)
                           requested[id, default: .zero].size = size
                           let floor = minSize[id] ?? .zero
+                          let short = heightShortfall[id] ?? 0
                           frames[id]?.size = CGSize(width: max(size.width, floor.width),
-                                                    height: max(size.height, floor.height))
+                                                    height: max(size.height - short, floor.height))
                           return .success
                       },
                       writePosition: { [self] id, position, _ in
-                          onWrite?()
+                          onWrite?(); written.insert(id)
                           requested[id, default: .zero].origin = position
                           frames[id]?.origin = position
                           return .success
                       },
                       readPosition: { [self] id, _ in
+                          if wrote && rejectReadsFor.contains(id) { return (.cannotComplete, nil) }
                           if wrote && rejectNextRead { rejectNextRead = false; return (.cannotComplete, nil) }
                           return (.success, frames[id]?.origin)
                       },
                       readSize: { [self] id, _ in (.success, frames[id]?.size) },
                       now: { [self] in now }, sleep: { [self] in now += $0 }, currentGeneration: generation)
+        io.endFrameWrite = { [self] _, _, _ -> AXFrameWriteBatch.EndResult in
+            guard let endError else { return .restored }
+            return .failed(endError)
+        }
+        return io
     }
 }
 

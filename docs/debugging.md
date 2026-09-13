@@ -231,6 +231,10 @@ travelled less than the threshold. A completed tiled drag adds
 `tiled drag result: dragged=<id> members=[…] outcome=<…>` under
 `category: tiling`.
 
+A degraded drop adds `written=[...]`, the ids either the candidate or the
+rollback issued a setter for. Those, plus the dragged id, are the entries
+every drag cache drops; the members not listed keep their cached frames.
+
 `AXFrameWriteBatch` logs its AXEnhancedUserInterface toggle at the same
 tier, and only when it fails: `enhanced ui: pid=<pid> begin disable
 err=<raw>`, plus the `begin timeout`, `begin toggle timeout`, `begin
@@ -260,7 +264,7 @@ ws1 home=Built-in Retina Display visible=true assigned=[104, 118] hidden=[] rese
 ws2 home=S34C65xT visible=true assigned=[221] hidden=[] reserved=[] floating=[] tree(S34C65xT)=[221]
 scratchpad=[319]
 minima=[104:400x260(seeded), 221:1496x841(observed)]
-recovery pending=[] unverified=[]
+recovery pending=[] unverified=[221]
 known=4 hidden=0 reserved=0 floating=1
 ```
 
@@ -278,11 +282,21 @@ shrink below, `seeded` a hint from `AXMinimumSize` or a per-bundle-id
 guess that nothing has tested. A window refused by a fit check should
 have an entry here explaining why, and the source says how much that
 entry is worth. Zero on an axis means nothing has refused anything
-there. `recovery pending` and `unverified`
-report windows waiting on a bounded recovery attempt and windows whose
-on-screen geometry was never verified. Nothing produces either yet, so
-both are always empty today — the lines are here so the shape does not
-move when they do.
+there.
+
+`unverified` lists every window under a `(workspace, screen)` whose last
+layout attempt did not end accepted — a partial write, an unreadable or
+unsettled readback, a cleanup error, a window that stopped short of its
+slot, or a tiled drag that did not commit. Those windows advertise no
+intended rect, so directional focus and swap judge them by their live
+frames instead. The mark clears when a layout for that key is accepted, or
+when the key itself goes away. A window listed here is one the tree cannot
+speak for; compare it against `tree(...)` to see whether the tree even
+holds it.
+
+`recovery pending` reports windows waiting on a bounded recovery attempt.
+Nothing produces those yet, so it is always empty today — the field is here
+so the shape does not move when it fills.
 
 ## `--probe-frame` (debug builds)
 

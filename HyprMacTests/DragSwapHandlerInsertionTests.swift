@@ -19,7 +19,7 @@ final class DragSwapHandlerInsertionTests: XCTestCase {
         XCTAssertEqual(TiledDragFeedbackPolicy.feedback(for: .degraded(
             candidateReason: .preflight(.noTarget),
             restorationReason: .deadlineExceeded,
-            actualFrames: [:])), .degraded)
+            actualFrames: [:], progress: nil)), .degraded)
     }
 
     func testFeedbackPolicyStaysSilentForNonFailures() {
@@ -301,7 +301,7 @@ final class DragSwapHandlerInsertionTests: XCTestCase {
 
         let committed = TiledDragCacheUpdate.applying(
             .committed(candidate: candidate, actualFrames: verified),
-            affectedIDs: [1, 2], to: existing
+            draggedID: 1, affectedIDs: [1, 2], to: existing
         )
         XCTAssertEqual(committed[1], verified[1])
         XCTAssertEqual(committed[2], verified[2])
@@ -309,14 +309,112 @@ final class DragSwapHandlerInsertionTests: XCTestCase {
 
         let restored = TiledDragCacheUpdate.applying(
             .rejectedRestored(reason: .preflight(.noTarget), actualFrames: verified),
-            affectedIDs: [1, 2], to: existing
+            draggedID: 1, affectedIDs: [1, 2], to: existing
         )
         XCTAssertEqual(restored[1], verified[1])
         XCTAssertEqual(restored[2], verified[2])
         XCTAssertEqual(restored[99], existing[99])
     }
 
-    func testCachePolicyClearsEveryAffectedFrameOnDegraded() {
+    func testCachePolicyInvalidatesOnlyTheDraggedWindowWhenNothingWasWritten() {
+        let existing: [CGWindowID: CGRect] = [
+            1: CGRect(x: 1, y: 1, width: 10, height: 10),
+            2: CGRect(x: 2, y: 2, width: 20, height: 20),
+            3: CGRect(x: 3, y: 3, width: 30, height: 30)
+        ]
+        // the classification read failed before any setter went out. macOS
+        // moved the dragged window, nobody moved the others
+        let outcome = TiledDragDropOutcome.degraded(
+            candidateReason: .sizing(.readFailed(1, .cannotComplete)),
+            restorationReason: .readFailed(1, .cannotComplete),
+            actualFrames: [:],
+            progress: FrameSizingProgressReport())
+
+        let actions = TiledDragCachePolicy.actions(for: outcome, draggedID: 1,
+                                                   affectedIDs: [1, 2, 3])
+        XCTAssertEqual(actions[1], .invalidate)
+        XCTAssertEqual(actions[2], .preserve)
+        XCTAssertEqual(actions[3], .preserve)
+
+        let updated = TiledDragCacheUpdate.applying(outcome, draggedID: 1,
+                                                    affectedIDs: [1, 2, 3], to: existing)
+        XCTAssertNil(updated[1])
+        XCTAssertEqual(updated[2], existing[2])
+        XCTAssertEqual(updated[3], existing[3])
+    }
+
+    func testCachePolicyInvalidatesEveryWindowTheRestorationTouched() {
+        let existing: [CGWindowID: CGRect] = [
+            1: CGRect(x: 1, y: 1, width: 10, height: 10),
+            2: CGRect(x: 2, y: 2, width: 20, height: 20),
+            3: CGRect(x: 3, y: 3, width: 30, height: 30)
+        ]
+        // the candidate reached window 1, the rollback reached 1 and 2, and
+        // nothing reached 3
+        var progress = FrameSizingProgressReport()
+        progress.candidate.possiblyWritten = [1]
+        var restoration = FrameSizingAttempt.Progress()
+        restoration.possiblyWritten = [1, 2]
+        progress.restoration = restoration
+        let outcome = TiledDragDropOutcome.degraded(
+            candidateReason: .sizing(.geometryMismatch(1)),
+            restorationReason: .writeFailed(2, .cannotComplete),
+            actualFrames: [:],
+            progress: progress)
+
+        let actions = TiledDragCachePolicy.actions(for: outcome, draggedID: 1,
+                                                   affectedIDs: [1, 2, 3])
+        XCTAssertEqual(actions[1], .invalidate)
+        XCTAssertEqual(actions[2], .invalidate)
+        XCTAssertEqual(actions[3], .preserve)
+
+        let updated = TiledDragCacheUpdate.applying(outcome, draggedID: 1,
+                                                    affectedIDs: [1, 2, 3], to: existing)
+        XCTAssertNil(updated[1])
+        XCTAssertNil(updated[2])
+        XCTAssertEqual(updated[3], existing[3])
+    }
+
+    func testEveryCacheGetsTheSameDecisionPerWindow() {
+        let existing: [CGWindowID: CGRect] = [
+            1: CGRect(x: 1, y: 1, width: 10, height: 10),
+            2: CGRect(x: 2, y: 2, width: 20, height: 20),
+            3: CGRect(x: 3, y: 3, width: 30, height: 30)
+        ]
+        var progress = FrameSizingProgressReport()
+        progress.candidate.possiblyWritten = [2]
+        let verified: [CGWindowID: CGRect] = [
+            1: CGRect(x: 100, y: 0, width: 10, height: 10),
+            2: CGRect(x: 200, y: 0, width: 10, height: 10),
+            3: CGRect(x: 300, y: 0, width: 10, height: 10)
+        ]
+        let outcomes: [TiledDragDropOutcome] = [
+            .committed(candidate: BSPTree(), actualFrames: verified),
+            .rejectedRestored(reason: .preflight(.noTarget), actualFrames: verified),
+            .degraded(candidateReason: .sizing(.geometryMismatch(2)), restorationReason: nil,
+                      actualFrames: [:], progress: progress),
+            .degraded(candidateReason: nil, restorationReason: nil, actualFrames: [:],
+                      progress: nil)
+        ]
+
+        for outcome in outcomes {
+            let actions = TiledDragCachePolicy.actions(for: outcome, draggedID: 1,
+                                                       affectedIDs: [1, 2, 3])
+            let updated = TiledDragCacheUpdate.applying(outcome, draggedID: 1,
+                                                        affectedIDs: [1, 2, 3], to: existing)
+            // whatever the tiled-position cache did for a window is exactly
+            // what the frame cache is told to do for it
+            for id in [CGWindowID(1), 2, 3] {
+                switch actions[id] {
+                case let .refresh(frame): XCTAssertEqual(updated[id], frame)
+                case .invalidate: XCTAssertNil(updated[id])
+                case .preserve, .none: XCTAssertEqual(updated[id], existing[id])
+                }
+            }
+        }
+    }
+
+    func testCachePolicyWipesEveryAffectedFrameWhenProvenanceIsMissing() {
         let existing: [CGWindowID: CGRect] = [
             1: CGRect(x: 1, y: 1, width: 10, height: 10),
             2: CGRect(x: 2, y: 2, width: 20, height: 20),
@@ -327,8 +425,9 @@ final class DragSwapHandlerInsertionTests: XCTestCase {
         ]
         let updated = TiledDragCacheUpdate.applying(
             .degraded(candidateReason: .sizing(.attemptsExhausted),
-                      restorationReason: .deadlineExceeded, actualFrames: partial),
-            affectedIDs: [1, 2], to: existing
+                      restorationReason: .deadlineExceeded, actualFrames: partial,
+                      progress: nil),
+            draggedID: 1, affectedIDs: [1, 2], to: existing
         )
 
         XCTAssertNil(updated[1])
@@ -345,7 +444,7 @@ final class DragSwapHandlerInsertionTests: XCTestCase {
         ]
 
         XCTAssertEqual(TiledDragCacheUpdate.applying(
-            .superseded, affectedIDs: [1, 2], to: newer
+            .superseded, draggedID: 1, affectedIDs: [1, 2], to: newer
         ), newer)
     }
 

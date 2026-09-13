@@ -417,7 +417,7 @@ final class TiledDragTransactionTests: XCTestCase {
             currentContext: { context }) else { return XCTFail("capture failed") }
         fake.writeErrors = [.cannotComplete]
         fake.readError = .cannotComplete
-        guard case let .degraded(candidate, restoration, _) = transaction.drop(
+        guard case let .degraded(candidate, restoration, _, _) = transaction.drop(
             snapshot, mode: .insert(targetID: 2, edge: .right), currentContext: { context }) else {
             return XCTFail("expected degraded restoration")
         }
@@ -439,7 +439,7 @@ final class TiledDragTransactionTests: XCTestCase {
             [originals[$0.windowID]!.size, originals[$0.windowID]!.size]
         }
         fake.callAdvance = 0.02
-        guard case let .degraded(_, restoration, _) = transaction.drop(
+        guard case let .degraded(_, restoration, _, _) = transaction.drop(
             snapshot, mode: .insert(targetID: 2, edge: .right), currentContext: { context }) else {
             return XCTFail("expected degraded restoration")
         }
@@ -569,7 +569,7 @@ final class TiledDragTransactionTests: XCTestCase {
             currentContext: { context }) else { return XCTFail("capture failed") }
         fake.readDrift = 2
         fake.readNumber = 0
-        guard case let .degraded(_, restoration, _) = transaction.drop(
+        guard case let .degraded(_, restoration, _, _) = transaction.drop(
             snapshot, mode: nil, currentContext: { context }) else {
             return XCTFail("unsettled restoration must degrade")
         }
@@ -584,7 +584,7 @@ final class TiledDragTransactionTests: XCTestCase {
             draggedID: 1, tree: tree, context: context, generation: 1,
             currentContext: { context }) else { return XCTFail("capture failed") }
         fake.frames.removeValue(forKey: 2)
-        guard case let .degraded(candidate, restoration, _) = transaction.drop(
+        guard case let .degraded(candidate, restoration, _, _) = transaction.drop(
             snapshot, mode: .insert(targetID: 2, edge: .left), currentContext: { context }) else {
             return XCTFail("missing window must degrade")
         }
@@ -671,7 +671,7 @@ final class TiledDragTransactionTests: XCTestCase {
         fake.frames[1] = moved
         fake.sizeUndershoot = 6
 
-        guard case let .degraded(candidateReason, restorationReason, actualFrames) =
+        guard case let .degraded(candidateReason, restorationReason, actualFrames, _) =
                 transaction.dropRelease(snapshot, mode: nil, currentContext: { context }) else {
             return XCTFail("inexact restoration must be degraded")
         }

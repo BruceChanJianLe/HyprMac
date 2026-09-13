@@ -648,7 +648,8 @@ Corrections:
   so a rollback still has to land exactly.
 - A min-size conflict is measured against the overshoot tolerance, so cell
   rounding no longer teaches a bogus minimum.
-- A degraded layout publishes its candidate membership only when the candidate
+- **Superseded by the step 3 publication gate below (2026-09-13).** A degraded
+  layout publishes its candidate membership only when the candidate
   was written and restoration was never tried — the parked-originals pre-check.
   Those frames are still on screen, so keeping the prior tree hid the windows
   from focus navigation and replayed the failure on every retile. Once
@@ -656,9 +657,9 @@ Corrections:
   its verdict, so the prior tree is kept; the outcome carries
   `restorationAttempted` rather than inferring this from the reason. A degraded
   layout that wrote nothing keeps the prior tree as before.
-- The pre-check branch also copies the adjusted pass's split ratios onto the
-  live tree before returning, because those are the ratios that produced the
-  frames left on screen.
+- **Superseded with it.** The pre-check branch also copies the adjusted pass's
+  split ratios onto the live tree before returning, because those are the
+  ratios that produced the frames left on screen.
 
 Containment is bounded the same way, at the far edges only. The actual
 origin must sit inside the usable frame within the one-point position
@@ -824,3 +825,100 @@ from a partial attempt. An attempt with no targets reports a complete,
 stable readback of nothing; no window is in `writesCompleted`, so it cannot
 satisfy the guards either. What does real filtering in production is
 `originMismatch` and the 20-point overshoot boundary.
+
+## Publication, restoration correspondence and cache recovery (2026-09-13)
+
+Step 3 of the sizing and recovery plan. No timeout, tolerance, settle floor,
+write order or learning rule changed. What changed is which layouts are
+allowed to become the live tree, what a rollback is judged on, what the
+engine says about geometry it could not verify, and how much of the drag
+cache a failure throws away.
+
+### Only an accepted layout publishes
+
+The `2569a38` parked-originals exception is gone, and so is the ratio copy
+that went with it. A degraded candidate now keeps the prior membership and
+the prior ratios whatever is on screen, because nothing verified what is on
+screen. Acceptance is the one verdict that carries all five conditions at
+once — every target's three setters returned success, the final readback was
+complete and stable, every window matched its target within the per-window
+tolerances, the aggregate geometry passed `validateFrames`, and the caller's
+generation still owns the key — so `publishes` is a check for acceptance plus
+the progress that proves the first three. A cleanup error after frames that
+read back fine is still a failure, and it still does not publish.
+
+An attempt with no targets reports a complete, stable readback of nothing.
+That cannot satisfy the write check, so the gate names the empty case
+explicitly and lets it through as lifecycle: it is how a workspace that lost
+its last window empties its tree.
+
+### A rollback is judged per window
+
+`FrameSizingConfiguration.correspondenceOnly` is set on both restoration
+paths. The strict one-point size and position match still decides, and
+containment still applies, but the pairwise overlap and gap checks stop being
+verdicts. Two originals that overlapped before the candidate ran — an
+incumbent and the untiled newcomer admitted over it, which is item 6's exact
+shape — still overlap after it, and rejecting the rollback for that said
+something false about correspondence. The overlaps are collected on the
+result, ride along on the outcome as `restorationOverlaps`, and print in the
+`verified layout ...` line as `originalOverlap=`. They cannot be mistaken for
+a tiled layout, because only a candidate can publish.
+
+### Unverified geometry
+
+`TilingEngine` keys an unverified mark on `(workspace, screen)`. An accepted
+layout clears it; every other outcome sets it, a superseded one records
+nothing, and the mark dies with its key on display-change pruning or empty
+tree removal. A tiled drag follows the same rule. `intendedTileRects` omits
+every window under a marked key, so directional focus and swap fall back to
+actual frames for all of them at once through `DirectionalGeometry.frame`,
+the one expression both dispatcher paths build their `frameFor` closure from.
+A visible window that is in no tree keeps its place in the candidate set on
+its actual frame; that is what item 3 needed.
+
+`unverifiedLayouts` carries the keys, their window ids and the ids the failed
+attempt had just inserted, and `clearUnverifiedGeometry(forWorkspace:screen:)`
+drops one. Nothing schedules a retry — that is step 4. The state dump's
+`unverified=` field is now populated; `recovery pending=` is still empty.
+
+### Progress-based drag cache invalidation
+
+`FrameSizingTransaction.apply` returns a `Report`: the outcome plus a
+`FrameSizingProgressReport` holding the candidate's progress, the
+restoration's, and the restoration overlaps. The two written sets are
+different sets — a rollback writes every captured original, including
+windows the candidate never reached — so both travel.
+
+`TiledDragCachePolicy.actions` makes one decision per member: refresh from a
+verified readback, invalidate, or preserve. A committed drop and a verified
+rollback refresh every member. A degraded drop invalidates every id either
+attempt may have written plus the dragged id, and preserves the rest; with no
+provenance it clears every member. The dragged id is always uncertain because
+macOS moved it, not HyprMac. Clearing only the dragged id was rejected for
+the opposite reason: a rollback touches the others. `tiledPositions` and the
+per-window `cachedFrame`, plus the focus border and brackets, all read the
+same decisions, so they cannot disagree. Degraded drops no longer hide the
+dimming overlay wholesale; it is refreshed from the surviving entries.
+
+Feedback is unchanged. The red rejection flash on a classification
+`readFailed` stays until the batch-2 evidence gate.
+
+Evidence logs, both under `build/sizing/recovery/`:
+
+- Red: `red-step3-publication-and-recovery.log`, taken with the six behaviour
+  switches reverted and the new API in place. Eleven cases fail on
+  assertions: the parked-originals candidate publishes its membership and its
+  adjusted ratios, a cleanup failure and an incomplete readback leave no
+  unverified mark, a window 340 points short publishes anyway, an accepted
+  retry has no mark to clear, a failed scratchpad migration leaves the
+  destination unmarked, an overlapping rollback is reported as a failure
+  rather than a verified restoration with `restorationOverlaps`, both narrowed
+  cache cases wipe every member, and `intendedTileRects` still hands out rects
+  for a tree that could not verify its layout.
+- Green: `green-step3.log`.
+
+Four of the new tests pass in both runs on purpose. They pin behaviour that
+must not move: a superseded generation marks nothing, an accepted layout's
+progress is what the gate reads, the fallback expression prefers an intended
+rect when there is one, and a tree-absent window stays a focus candidate.

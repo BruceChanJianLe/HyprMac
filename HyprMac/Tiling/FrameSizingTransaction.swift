@@ -73,6 +73,22 @@ struct FrameSizingConfiguration {
     var requiredStableSamples: Int = 2
     var minimumMismatchSettle: TimeInterval = 0.24
     var perCallTimeout: TimeInterval = 0.1
+    /// Restoration only. A rollback asks every window to go back where it
+    /// was, so the question is per-window correspondence, not whether the
+    /// result is a valid tiled arrangement. Originals that overlapped each
+    /// other before the candidate ran still overlap after it, and that is
+    /// not a failed rollback — the overlap is reported on the result
+    /// instead of rejecting it.
+    var correspondenceOnly = false
+}
+
+/// Two windows that sit on top of each other. Only the restoration phase
+/// produces these, as a diagnostic: restored originals are never published
+/// as a tiled layout, so an overlap between them is a fact about where the
+/// windows were, not a verdict.
+struct FrameSizingOverlap: Equatable {
+    let first: CGWindowID
+    let second: CGWindowID
 }
 
 /// Which pass produced a sizing result. `capture` only reads; `candidate`
@@ -126,6 +142,9 @@ struct FrameSizingAttempt {
         let verdict: Verdict
         let actualFrames: [CGWindowID: CGRect]
         var progress = Progress()
+        /// restored originals that overlap each other. diagnostic only —
+        /// see `FrameSizingConfiguration.correspondenceOnly`.
+        var overlaps: [FrameSizingOverlap] = []
     }
 
     let io: FrameSizingIO
@@ -254,7 +273,7 @@ struct FrameSizingAttempt {
                 stableCounts[$0.windowID, default: 0] >= configuration.requiredStableSamples
             }
             return (Result(verdict: result.verdict, actualFrames: result.actualFrames,
-                           progress: stamped), timings)
+                           progress: stamped, overlaps: result.overlaps), timings)
         }
 
         guard io.currentGeneration() == generation else {
@@ -603,6 +622,12 @@ struct FrameSizingAttempt {
     /// genuinely stacked on top of each other overlap by far more than a cell
     /// on both axes and are still rejected. Containment is relaxed the same
     /// bounded way at the far edges only — see `contained(_:in:)`.
+    ///
+    /// Under `correspondenceOnly` the pairwise checks stop being verdicts.
+    /// A rollback asks each window to go back where it was; whether those
+    /// places overlap or sit gap-less is a fact about the originals, not
+    /// about the rollback. Overlaps are collected on the result and the
+    /// per-window match still decides.
     func validateFrames(targets: [Target], actualFrames: [CGWindowID: CGRect],
                         usableFrame: CGRect, gap: CGFloat) -> Result {
         let tol = configuration.sizeOvershootTolerance
@@ -617,14 +642,25 @@ struct FrameSizingAttempt {
                 return Result(verdict: .rejected(.geometryMismatch(target.windowID)), actualFrames: actualFrames)
             }
         }
+        var overlaps: [FrameSizingOverlap] = []
         for i in targets.indices {
             for j in targets.indices where j > i {
                 let first = targets[i]
                 let second = targets[j]
                 guard let actualA = actualFrames[first.windowID], let actualB = actualFrames[second.windowID] else { continue }
                 if actualA.intersection(actualB).width > tol && actualA.intersection(actualB).height > tol {
+                    // a rollback put each window back where it was. two
+                    // originals that overlapped still overlap, and saying
+                    // the rollback failed because of that would be a lie
+                    // about correspondence — record it and carry on.
+                    if configuration.correspondenceOnly {
+                        overlaps.append(FrameSizingOverlap(first: first.windowID,
+                                                           second: second.windowID))
+                        continue
+                    }
                     return Result(verdict: .rejected(.overlap(first.windowID, second.windowID)), actualFrames: actualFrames)
                 }
+                if configuration.correspondenceOnly { continue }
                 let xSeparation = max(actualA.minX, actualB.minX) - min(actualA.maxX, actualB.maxX)
                 let ySeparation = max(actualA.minY, actualB.minY) - min(actualA.maxY, actualB.maxY)
                 if max(xSeparation, ySeparation) + 0.0001 < gap - tol {
@@ -632,9 +668,41 @@ struct FrameSizingAttempt {
                 }
             }
         }
-        return Result(verdict: .accepted, actualFrames: actualFrames)
+        return Result(verdict: .accepted, actualFrames: actualFrames, overlaps: overlaps)
     }
 
+}
+
+/// What the two attempts behind one transaction are known to have done.
+///
+/// The candidate's written set and the restoration's are different sets: a
+/// restoration writes every captured original, including windows the
+/// candidate never reached, and the candidate can have written a window the
+/// restoration then failed to reach. A consumer deciding what is still
+/// trustworthy needs both, so both travel together.
+struct FrameSizingProgressReport: Equatable {
+    var candidate = FrameSizingAttempt.Progress()
+    /// nil when no rollback ran: it was not needed, or the originals were
+    /// not usable targets.
+    var restoration: FrameSizingAttempt.Progress?
+    /// restored originals that overlap each other. diagnostic only.
+    var restorationOverlaps: [FrameSizingOverlap] = []
+
+    /// every id either attempt issued a setter for. evidence of possible
+    /// mutation, never proof a frame landed.
+    var possiblyWritten: Set<CGWindowID> {
+        candidate.possiblyWritten.union(restoration?.possiblyWritten ?? [])
+    }
+
+    /// Every target had all three setters return success and the final
+    /// readback was complete and stable. An empty target set satisfies the
+    /// write and readback conditions vacuously and is not evidence of
+    /// anything, so it does not count as verified.
+    var candidateFullyWritten: Bool {
+        !candidate.targetIDs.isEmpty
+            && candidate.targetIDs.allSatisfy(candidate.writesCompleted.contains)
+            && candidate.readbackComplete && candidate.readbackStable
+    }
 }
 
 struct FrameSizingTransaction {
@@ -646,6 +714,14 @@ struct FrameSizingTransaction {
                       actualFrames: [CGWindowID: CGRect])
     }
 
+    /// An outcome plus what the attempts behind it did. Publication and
+    /// cache recovery both need the provenance, so `apply` hands back one
+    /// value carrying each.
+    struct Report: Equatable {
+        let outcome: Outcome
+        var progress = FrameSizingProgressReport()
+    }
+
     let attempt: FrameSizingAttempt
 
     func restore(originalFrames: [CGWindowID: CGRect], usableFrame: CGRect,
@@ -655,40 +731,50 @@ struct FrameSizingTransaction {
         var strictAttempt = attempt
         strictAttempt.configuration.sizeOvershootTolerance = strictAttempt.configuration.sizeTolerance
         strictAttempt.configuration.sizeUndershootTolerance = strictAttempt.configuration.sizeTolerance
+        strictAttempt.configuration.correspondenceOnly = true
         return strictAttempt.apply(targets: targets, usableFrame: usableFrame,
                                    gap: gap, generation: generation, phase: .restoration)
     }
 
     func apply(targets: [FrameSizingAttempt.Target], originalFrames: [CGWindowID: CGRect],
                usableFrame: CGRect, gap: CGFloat, generation: UInt64,
-               phase: FrameSizingPhase = .candidate) -> Outcome {
+               phase: FrameSizingPhase = .candidate) -> Report {
         guard Set(targets.map(\.windowID)) == Set(originalFrames.keys) else {
-            return .degraded(candidateReason: .windowUnavailable(
+            return Report(outcome: .degraded(candidateReason: .windowUnavailable(
                 targets.first(where: { originalFrames[$0.windowID] == nil })?.windowID ?? 0),
                 restorationReason: nil,
-                actualFrames: [:])
+                actualFrames: [:]))
         }
         let candidate = attempt.apply(targets: targets, usableFrame: usableFrame,
                                       gap: gap, generation: generation, phase: phase)
+        let candidateOnly = FrameSizingProgressReport(candidate: candidate.progress)
+        func report(_ outcome: Outcome, restored: FrameSizingAttempt.Result? = nil) -> Report {
+            var progress = candidateOnly
+            progress.restoration = restored?.progress
+            progress.restorationOverlaps = restored?.overlaps ?? []
+            return Report(outcome: outcome, progress: progress)
+        }
         switch candidate.verdict {
         case .accepted:
-            return .accepted(actualFrames: candidate.actualFrames)
+            return report(.accepted(actualFrames: candidate.actualFrames))
         case .unknown(.superseded):
-            return .degraded(candidateReason: .superseded, restorationReason: nil,
-                             actualFrames: candidate.actualFrames)
+            return report(.degraded(candidateReason: .superseded, restorationReason: nil,
+                                    actualFrames: candidate.actualFrames))
         case let .rejected(reason), let .unknown(reason):
             guard attempt.io.currentGeneration() == generation else {
-                return .degraded(candidateReason: reason, restorationReason: nil,
-                                 actualFrames: candidate.actualFrames)
+                return report(.degraded(candidateReason: reason, restorationReason: nil,
+                                        actualFrames: candidate.actualFrames))
             }
             let restored = restore(originalFrames: originalFrames, usableFrame: usableFrame,
                                    gap: gap, generation: generation)
             switch restored.verdict {
             case .accepted:
-                return .rejectedRestored(reason: reason, actualFrames: restored.actualFrames)
+                return report(.rejectedRestored(reason: reason, actualFrames: restored.actualFrames),
+                              restored: restored)
             case let .rejected(restoreReason), let .unknown(restoreReason):
-                return .degraded(candidateReason: reason, restorationReason: restoreReason,
-                                 actualFrames: restored.actualFrames)
+                return report(.degraded(candidateReason: reason, restorationReason: restoreReason,
+                                        actualFrames: restored.actualFrames),
+                              restored: restored)
             }
         }
     }

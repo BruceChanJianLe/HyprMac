@@ -203,7 +203,7 @@ final class FrameSizingTransactionTests: XCTestCase {
         let outcome = FrameSizingTransaction(attempt: attempt).apply(
             targets: [.init(windowID: 14, frame: candidate)], originalFrames: [14: original],
             usableFrame: CGRect(x: 0, y: 0, width: 1000, height: 800), gap: 8, generation: 1)
-        XCTAssertEqual(outcome, .rejectedRestored(reason: .geometryMismatch(14), actualFrames: [14: original]))
+        XCTAssertEqual(outcome.outcome, .rejectedRestored(reason: .geometryMismatch(14), actualFrames: [14: original]))
     }
 
     func testSupersededAttemptNeverRollsBack() {
@@ -222,7 +222,7 @@ final class FrameSizingTransactionTests: XCTestCase {
             targets: [.init(windowID: 15, frame: CGRect(x: 0, y: 0, width: 300, height: 800))],
             originalFrames: [15: CGRect(x: 0, y: 0, width: 500, height: 800)],
             usableFrame: CGRect(x: 0, y: 0, width: 1000, height: 800), gap: 8, generation: 1)
-        XCTAssertEqual(outcome, .degraded(candidateReason: .superseded,
+        XCTAssertEqual(outcome.outcome, .degraded(candidateReason: .superseded,
                                           restorationReason: nil, actualFrames: [:]))
         XCTAssertEqual(fake.operations, ["timeout:15", "size:15"])
     }
@@ -344,7 +344,7 @@ final class FrameSizingTransactionTests: XCTestCase {
         let outcome = FrameSizingTransaction(attempt: FrameSizingAttempt(io: fake.io())).apply(
             targets: [.init(windowID: 25, frame: target)], originalFrames: [25: original],
             usableFrame: CGRect(x: 0, y: 0, width: 1000, height: 800), gap: 8, generation: 1)
-        XCTAssertEqual(outcome, .degraded(candidateReason: .geometryMismatch(25),
+        XCTAssertEqual(outcome.outcome, .degraded(candidateReason: .geometryMismatch(25),
                                           restorationReason: .geometryMismatch(25),
                                           actualFrames: [25: restoreRefusal]))
     }
@@ -661,7 +661,7 @@ final class FrameSizingTransactionTests: XCTestCase {
                 usableFrame: CGRect(x: 0, y: 0, width: 1200, height: 900),
                 gap: 8,
                 generation: 1
-            )
+            ).outcome
         }
 
         // both directions the candidate pass would have accepted
@@ -881,7 +881,7 @@ final class FrameSizingTransactionTests: XCTestCase {
             targets: [.init(windowID: 53, frame: CGRect(x: 0, y: 0, width: 300, height: 400))],
             originalFrames: [53: original],
             usableFrame: CGRect(x: 0, y: 0, width: 1000, height: 800), gap: 8, generation: 1)
-        XCTAssertEqual(outcome, .degraded(candidateReason: .writeFailed(53, .cannotComplete),
+        XCTAssertEqual(outcome.outcome, .degraded(candidateReason: .writeFailed(53, .cannotComplete),
                                           restorationReason: .readFailed(53, .cannotComplete),
                                           actualFrames: [:]))
     }
@@ -959,7 +959,7 @@ final class FrameSizingTransactionTests: XCTestCase {
             targets: [.init(windowID: id, frame: CGRect(x: 0, y: 0, width: 300, height: 400))],
             originalFrames: [id: original],
             usableFrame: CGRect(x: 0, y: 0, width: 1000, height: 800), gap: 8, generation: 1)
-        XCTAssertEqual(outcome, .degraded(
+        XCTAssertEqual(outcome.outcome, .degraded(
             candidateReason: .cleanupFailed(id, primary: .superseded, error: .cannotComplete),
             restorationReason: nil, actualFrames: [:]))
         XCTAssertEqual(fake.operations.filter { $0 == "size:57" }.count, 1)
@@ -993,7 +993,7 @@ final class FrameSizingTransactionTests: XCTestCase {
             targets: [.init(windowID: first, frame: originalA), .init(windowID: second, frame: originalB)],
             originalFrames: [first: originalA, second: originalB],
             usableFrame: CGRect(x: 0, y: 0, width: 1000, height: 800), gap: 8, generation: 1)
-        XCTAssertEqual(outcome, .degraded(candidateReason: .writeFailed(first, .cannotComplete),
+        XCTAssertEqual(outcome.outcome, .degraded(candidateReason: .writeFailed(first, .cannotComplete),
                                           restorationReason: .superseded, actualFrames: [:]))
         XCTAssertEqual(sizeCalls, 2)
         XCTAssertFalse(fake.operations.contains("position:58"))
@@ -1013,7 +1013,7 @@ final class FrameSizingTransactionTests: XCTestCase {
             targets: [.init(windowID: id, frame: CGRect(x: 0, y: 0, width: 300, height: 400))],
             originalFrames: [id: original],
             usableFrame: CGRect(x: 0, y: 0, width: 1000, height: 800), gap: 8, generation: 1)
-        XCTAssertEqual(outcome, .degraded(candidateReason: .writeFailed(id, .cannotComplete),
+        XCTAssertEqual(outcome.outcome, .degraded(candidateReason: .writeFailed(id, .cannotComplete),
                                           restorationReason: .attemptsExhausted,
                                           actualFrames: [id: unsettled.last!]))
     }

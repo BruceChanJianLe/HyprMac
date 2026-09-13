@@ -44,6 +44,10 @@ struct FrameReadbackPoller {
         let observations: [Observation]
         let accepted: [(HyprWindow, CGSize)]
         var progress = FrameSizingAttempt.Progress()
+        /// restored originals that overlap each other. restoration only,
+        /// and a diagnostic rather than a failure — see
+        /// `FrameSizingConfiguration.correspondenceOnly`.
+        var overlaps: [FrameSizingOverlap] = []
     }
 
     private let configuration: FrameSizingConfiguration
@@ -70,6 +74,7 @@ struct FrameReadbackPoller {
         var strictConfiguration = configuration
         strictConfiguration.sizeOvershootTolerance = strictConfiguration.sizeTolerance
         strictConfiguration.sizeUndershootTolerance = strictConfiguration.sizeTolerance
+        strictConfiguration.correspondenceOnly = true
         return applyLayout(layouts, usableFrame: usableFrame, gap: gap,
                            generation: requestedGeneration, configuration: strictConfiguration,
                            phase: .restoration)
@@ -176,7 +181,7 @@ struct FrameReadbackPoller {
         }
         return Result(verdict: raw.verdict, actualFrames: raw.actualFrames,
                       conflicts: conflicts, observations: observations,
-                      accepted: accepted, progress: raw.progress)
+                      accepted: accepted, progress: raw.progress, overlaps: raw.overlaps)
     }
 
     /// Whether this window's oversize may teach a minimum, and if not, why

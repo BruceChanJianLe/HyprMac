@@ -154,6 +154,56 @@ accepted geometry, rejected geometry with verified restoration, and a
 degraded state whose restoration could not be verified. Superseded work
 does not restore frames over a newer operation.
 
+### What may publish
+
+Only an accepted layout becomes the live tree. Acceptance is the one state
+that carries every condition at once: all three setters returned success for
+every target, the final readback was complete and stable, every window
+matched its target within the per-window tolerances, and the aggregate
+geometry passed. The caller's generation check is the ownership half of the
+gate. There is no exception for a candidate whose originals were parked:
+those frames are on screen, but nothing verified them, so the prior
+membership and the prior ratios stay. A partial write, an unreadable or
+unsettled readback, a cleanup error after frames that read back fine, and a
+window that stops hundreds of points short of its slot all keep the prior
+tree. A layout with no targets publishes, because that is how a workspace
+that lost its last window empties its tree; an empty target set is never
+treated as evidence that writes completed.
+
+### Restoration correspondence is not tiled validity
+
+A rollback asks every window to go back exactly where it was. It is verified
+per window against the strict one-point size and position bound. The
+pairwise checks are not verdicts on it: two originals that overlapped before
+the candidate ran still overlap after it, and calling that a failed rollback
+would be a lie about correspondence. The overlap is reported separately on
+the result and in the `verified layout ...` log line as `originalOverlap=`.
+Restored originals are never published as a tiled layout — the publication
+gate only accepts a candidate — so a verified rollback onto overlapping
+frames says the windows are back where they were, and nothing more.
+
+### Unverified geometry
+
+Every layout attempt records, per `(workspace, screen)`, whether it left
+verified geometry behind. An accepted layout clears the mark; every other
+outcome sets it, including a rejection whose rollback verified, because the
+frames the tree describes are not the frames the screen ended up with. A
+superseded attempt records nothing: a newer generation already owns the key.
+A key's mark is dropped when the key is, on display-change pruning or when
+an empty tree is removed.
+
+`intendedTileRects` omits every window under a marked key. Directional focus
+and directional swap then fall back to the window's own frame for all of
+them together, which is the only consistent thing to do when the tree and the
+screen disagree. A visible nonfloating window that is in no tree at all — a
+newcomer stranded by a discarded candidate — is never dropped from the
+candidate set for having no intended rect; it is picked on its actual frame.
+
+`TilingEngine.unverifiedLayouts` exposes the marked keys with their window
+ids and the ids the failed attempt had just inserted, and
+`clearUnverifiedGeometry(forWorkspace:screen:)` drops one. The state dump
+prints the ids as `unverified=`. Nothing schedules a retry yet.
+
 Normal smart insertion can still auto-float a new window when no leaf fits.
 Before that existing scratchpad fallback, a rejected new window is offered to
 the next fitting workspace anchored to the same monitor. Each destination is
@@ -299,7 +349,19 @@ The engine applies the candidate through the verified sizing transaction
 and replaces the mapped tree only after all resulting frames are accepted.
 Failure leaves the old topology in place and verifies actual pre-drag frame
 restoration. Failed restoration is reported as degraded; stale work stops
-without overwriting newer geometry. The finishing flag suppresses polling
+without overwriting newer geometry. Anything short of a committed drop marks
+the `(workspace, screen)` geometry unverified.
+
+A finished drag decides, per member, what its cached geometry is worth, and
+every cache holding drag geometry takes the same decision, so the tiled
+positions and the per-window frame cache cannot drift apart. A committed drop
+and a verified rollback refresh every member from the readback. A degraded
+drop invalidates every id either attempt may have written, plus the dragged
+id — macOS moved that one, so an unverified outcome says nothing about where
+it is — and preserves the members nothing touched. A degraded drop that
+carries no provenance clears every member, because then nothing is provably
+untouched. Clearing only the dragged id would be wrong: a rollback writes
+every captured original. The finishing flag suppresses polling
 through the settle delay and transaction, without a fixed expiry timer.
 
 ## `prepareTileLayout` / `prepareSwapLayout` / `prepareToggleSplitLayout`

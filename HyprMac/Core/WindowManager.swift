@@ -727,7 +727,9 @@ class WindowManager {
             trees: trees,
             scratchpad: scratchpad.members,
             knownCount: stateCache.knownWindowIDs.count,
-            minima: tilingEngine.knownMinimumSizes
+            minima: tilingEngine.knownMinimumSizes,
+            pendingRecovery: tilingEngine.pendingRecoveryWindowIDs,
+            unverifiedGeometry: tilingEngine.unverifiedGeometryWindowIDs
         )
 
         hyprLog(.notice, .lifecycle, "state dump (\(reason))")
@@ -2565,33 +2567,45 @@ private extension WindowManager {
         switch completion.outcome {
         case let .rejectedRestored(reason, frames):
             hyprLog(.notice, .tiling, "tiled drag rejected and restored: reason=\(reason) actual=\(frames)")
-        case let .degraded(candidateReason, restorationReason, frames):
+        case let .degraded(candidateReason, restorationReason, frames, progress):
             let candidate = String(describing: candidateReason)
             let restoration = String(describing: restorationReason)
-            hyprLog(.notice, .tiling, "tiled drag degraded: candidate=\(candidate) restoration=\(restoration) actual=\(frames)")
+            let written = (progress?.possiblyWritten ?? []).sorted()
+            hyprLog(.notice, .tiling, "tiled drag degraded: candidate=\(candidate) restoration=\(restoration) "
+                    + "written=\(written) actual=\(frames)")
         case .committed, .superseded, .ignored: break
         }
         switch completion.outcome {
-        case let .committed(_, frames), let .rejectedRestored(_, frames):
-            for id in affected {
-                stateCache.cachedWindows[id]?.cachedFrame = frames[id]
-            }
-            if let id = focusBorder.trackedWindowID, let frame = frames[id] {
-                focusBorder.updatePosition(frame)
-            }
-            if focusBrackets.isVisible, let id = focusBrackets.trackedWindowID,
-               let frame = frames[id] {
-                focusBrackets.updatePosition(frame)
-            }
-            refreshDimming(tiledRectsOverride: stateCache.tiledPositions)
-        case .degraded:
-            for id in affected { stateCache.cachedWindows[id]?.cachedFrame = nil }
-            if let id = focusBorder.trackedWindowID, affected.contains(id) { focusBorder.hide() }
-            if let id = focusBrackets.trackedWindowID, affected.contains(id) { focusBrackets.hide() }
-            dimmingOverlay.hideAll()
-        case .superseded, .ignored:
-            return
+        case .superseded, .ignored: return
+        case .committed, .rejectedRestored, .degraded: break
         }
+        // the same per-window decisions the tiled-position cache just
+        // applied, so the two cannot drift apart
+        let actions = TiledDragCachePolicy.actions(for: completion.outcome,
+                                                   draggedID: completion.snapshot.draggedID,
+                                                   affectedIDs: affected)
+        for (id, action) in actions {
+            switch action {
+            case let .refresh(frame): stateCache.cachedWindows[id]?.cachedFrame = frame
+            case .invalidate: stateCache.cachedWindows[id]?.cachedFrame = nil
+            case .preserve: break
+            }
+        }
+        if let id = focusBorder.trackedWindowID, let action = actions[id] {
+            switch action {
+            case let .refresh(frame): focusBorder.updatePosition(frame)
+            case .invalidate: focusBorder.hide()
+            case .preserve: break
+            }
+        }
+        if let id = focusBrackets.trackedWindowID, let action = actions[id] {
+            switch action {
+            case let .refresh(frame): if focusBrackets.isVisible { focusBrackets.updatePosition(frame) }
+            case .invalidate: focusBrackets.hide()
+            case .preserve: break
+            }
+        }
+        refreshDimming(tiledRectsOverride: stateCache.tiledPositions)
         switch TiledDragFeedbackPolicy.feedback(for: completion.outcome) {
         case .rejected:
             NSSound.beep()

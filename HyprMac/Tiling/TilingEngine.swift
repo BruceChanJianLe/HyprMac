@@ -35,17 +35,40 @@ private struct TiledDragOccluderContext: Equatable {
 class TilingEngine {
     /// Result of applying a verified layout. Mirrors
     /// `FrameSizingTransaction.Outcome` but carries `restorationAttempted`,
-    /// which membership publication turns on: a degraded outcome that never
-    /// tried to restore is the only one that leaves the candidate frames on
-    /// screen. Once restoration has run, whatever its verdict, the windows
-    /// are back at or near their originals.
+    /// which says whether a rollback ran at all, and the progress of both
+    /// attempts. Publication and cache recovery read the progress: the
+    /// candidate's written set and the restoration's are different sets.
     enum LayoutApplicationOutcome: Equatable {
-        case accepted(actualFrames: [CGWindowID: CGRect])
-        case rejectedRestored(reason: FrameSizingFailure, actualFrames: [CGWindowID: CGRect])
+        case accepted(actualFrames: [CGWindowID: CGRect],
+                      progress: FrameSizingProgressReport)
+        case rejectedRestored(reason: FrameSizingFailure,
+                              actualFrames: [CGWindowID: CGRect],
+                              progress: FrameSizingProgressReport)
         case degraded(candidateReason: FrameSizingFailure,
                       restorationReason: FrameSizingFailure?,
                       restorationAttempted: Bool,
-                      actualFrames: [CGWindowID: CGRect])
+                      actualFrames: [CGWindowID: CGRect],
+                      progress: FrameSizingProgressReport)
+    }
+
+    /// One `(workspace, screen)` whose last layout attempt did not leave
+    /// verified geometry behind, with the ids involved. Step 4's
+    /// orchestrator reads this to schedule its one bounded retry.
+    struct UnverifiedLayout {
+        let workspace: Int
+        /// nil when the screen that owned the key is gone.
+        let screen: NSScreen?
+        /// every id the failed attempt targeted, plus whatever the live
+        /// tree still holds for that key.
+        let windowIDs: Set<CGWindowID>
+        /// ids the failed attempt had just inserted into its candidate.
+        /// Empty for a retile, a swap or a drag.
+        let insertedIDs: Set<CGWindowID>
+    }
+
+    private struct UnverifiedRecord {
+        var windowIDs: Set<CGWindowID>
+        var insertedIDs: Set<CGWindowID>
     }
 
     /// Pseudo-workspace the scratchpad layer's tree lives on. Matches
@@ -55,6 +78,10 @@ class TilingEngine {
 
     private var trees: [TilingKey: BSPTree] = [:]
     private var pendingInsertedWindowIDs: [TilingKey: [CGWindowID]] = [:]
+    /// Keys whose last layout attempt did not produce verified geometry.
+    /// Set by any non-accepted attempt, cleared by an accepted one or by
+    /// lifecycle cleanup. Nothing in here advertises an intended rect.
+    private var unverified: [TilingKey: UnverifiedRecord] = [:]
     let displayManager: DisplayManager
 
     /// Gap between adjacent tiles, in pixels. Default from
@@ -314,14 +341,31 @@ class TilingEngine {
         let outcome = transaction.dropRelease(snapshot, mode: mode,
                                               currentContext: currentContext)
         guard currentContext() == snapshot.context else { return .superseded }
-        guard case let .committed(candidate, actualFrames) = outcome else { return outcome }
+        guard case let .committed(candidate, actualFrames) = outcome else {
+            noteDragGeometry(outcome, snapshot: snapshot)
+            return outcome
+        }
         guard let state = currentState(), state.context == snapshot.context else {
             return .superseded
         }
         let key = TilingKey(workspace: state.location.workspace, screen: state.location.screen)
         guard trees[key] === snapshot.sourceTree else { return .superseded }
         trees[key] = candidate
+        unverified.removeValue(forKey: key)
         return .committed(candidate: candidate, actualFrames: actualFrames)
+    }
+
+    /// A drag is a layout attempt too. Anything short of a committed drop
+    /// leaves the dragged tile somewhere the tree did not put it, or the
+    /// originals written back over it, so the key stops speaking for its
+    /// geometry until a layout is accepted again.
+    private func noteDragGeometry(_ outcome: TiledDragDropOutcome, snapshot: TiledDragSnapshot) {
+        switch outcome {
+        case .ignored, .superseded, .committed: return
+        case .rejectedRestored, .degraded: break
+        }
+        guard let key = trees.first(where: { $0.value === snapshot.sourceTree })?.key else { return }
+        unverified[key] = UnverifiedRecord(windowIDs: snapshot.context.memberIDs, insertedIDs: [])
     }
 
     private func tiledDragContext(workspace: Int, screen: NSScreen,
@@ -444,6 +488,11 @@ class TilingEngine {
             trees.removeValue(forKey: key)
             hyprLog(.debug, .lifecycle, "display change: pruned orphaned tree for ws \(key.workspace) (\(count) windows)")
         }
+
+        // a mark belongs to a key. once the key is gone — pruned, or
+        // migrated to a screen that will be laid out fresh — so is the
+        // claim it was making.
+        unverified = unverified.filter { trees[$0.key] != nil }
     }
 
     private var layoutEngine: LayoutEngine {
@@ -456,6 +505,22 @@ class TilingEngine {
         ioFactory: frameSizingIOFactory
     )
 
+    /// `applyVerifiedLayout` plus the unverified-geometry bookkeeping for
+    /// the key that owns the tree. Every production path goes through
+    /// this; the plain call stays for tests that hand it a loose tree.
+    private func applyTrackedLayout(_ tree: BSPTree, in rect: CGRect,
+                                    generation: UInt64,
+                                    key: TilingKey,
+                                    inserted: [CGWindowID] = [],
+                                    originalFrames: [CGWindowID: CGRect]? = nil,
+                                    restorationUsableFrame: CGRect? = nil) -> LayoutApplicationOutcome {
+        let outcome = applyVerifiedLayout(tree, in: rect, generation: generation,
+                                          originalFrames: originalFrames,
+                                          restorationUsableFrame: restorationUsableFrame)
+        noteGeometry(outcome, for: key, generation: generation, inserted: inserted)
+        return outcome
+    }
+
     internal func applyVerifiedLayout(_ tree: BSPTree, in rect: CGRect,
                                       generation: UInt64,
                                       originalFrames suppliedOriginalFrames: [CGWindowID: CGRect]? = nil,
@@ -465,37 +530,92 @@ class TilingEngine {
                                                   restorationUsableFrame: suppliedRestorationFrame)
         switch outcome {
         case .accepted: break
-        case let .rejectedRestored(reason, frames):
-            hyprLog(.notice, .tiling, "verified layout rejected and restored: reason=\(reason) actual=\(frames)")
-        case let .degraded(candidateReason, restorationReason, attempted, frames):
+        case let .rejectedRestored(reason, frames, progress):
+            hyprLog(.notice, .tiling, "verified layout rejected and restored: reason=\(reason) actual=\(frames)"
+                    + Self.overlapTrace(progress))
+        case let .degraded(candidateReason, restorationReason, attempted, frames, progress):
             hyprLog(.notice, .tiling,
-                    "verified layout degraded: candidate=\(candidateReason) restoration=\(String(describing: restorationReason)) attempted=\(attempted) actual=\(frames)")
+                    "verified layout degraded: candidate=\(candidateReason) restoration=\(String(describing: restorationReason)) attempted=\(attempted) actual=\(frames)"
+                    + Self.overlapTrace(progress))
         }
         return outcome
     }
 
-    /// Whether a membership candidate may become the live tree.
+    private static func overlapTrace(_ progress: FrameSizingProgressReport) -> String {
+        guard !progress.restorationOverlaps.isEmpty else { return "" }
+        return " originalOverlap=" + progress.restorationOverlaps
+            .map { "\($0.first)/\($0.second)" }.joined(separator: ",")
+    }
+
+    /// Whether a candidate may become the live tree.
     ///
-    /// An accepted layout obviously publishes. A degraded one publishes only
-    /// when the candidate was written and restoration was never tried, which
-    /// is the parked-originals pre-check: those candidate frames are still on
-    /// screen, so keeping the prior tree would hide the windows from focus
-    /// navigation. Once restoration has run the windows are back at or near
-    /// their originals whatever its verdict, so publishing the candidate would
-    /// make the tree disagree with the screen the other way around.
+    /// Only an accepted layout publishes. Acceptance is the one state that
+    /// carries every condition at once: all three setters returned success
+    /// for every target, the final readback was complete and stable, every
+    /// window matched its target within the per-window tolerances, and the
+    /// aggregate geometry passed `validateFrames`. Anything else — a
+    /// partial write, an unreadable or unsettled readback, a cleanup error
+    /// after clean-looking frames, a window that stopped 340 points short —
+    /// keeps the prior membership and ratios and leaves the key unverified.
+    /// The caller's `layoutGeneration == generation` check is the ownership
+    /// half of the gate.
     ///
-    /// A nil restoration reason with nothing attempted means the transaction
-    /// gave up before there was anything to undo — the originals could not be
-    /// captured, or the supplied set was incomplete. The superseded case also
-    /// lands there after writes, but a newer generation owns the screen by
-    /// then and the caller's generation guard blocks publication anyway.
+    /// A layout with no targets writes nothing and has nothing to verify.
+    /// It publishes because that is how a workspace that lost its last
+    /// window empties its tree, not because an empty set satisfied a test.
     private func publishes(_ outcome: LayoutApplicationOutcome) -> Bool {
-        switch outcome {
-        case .accepted: return true
-        case .rejectedRestored: return false
-        case let .degraded(_, restorationReason, attempted, _):
-            return !attempted && restorationReason != nil
+        guard case let .accepted(_, progress) = outcome else { return false }
+        return progress.candidate.targetIDs.isEmpty || progress.candidateFullyWritten
+    }
+
+    /// Record whether `key`'s geometry is still something the tree can
+    /// speak for. An accepted layout clears the mark; anything else sets
+    /// it, because the frames the tree describes were not the frames the
+    /// screen ended up with. Superseded work touches nothing: a newer
+    /// generation already owns the key.
+    private func noteGeometry(_ outcome: LayoutApplicationOutcome, for key: TilingKey,
+                              generation: UInt64, inserted: [CGWindowID]) {
+        guard layoutGeneration == generation else { return }
+        if publishes(outcome) {
+            unverified.removeValue(forKey: key)
+            return
         }
+        var ids = Set(inserted)
+        ids.formUnion(outcome.progress.candidate.targetIDs)
+        unverified[key] = UnverifiedRecord(windowIDs: ids, insertedIDs: Set(inserted))
+    }
+
+    /// Every `(workspace, screen)` whose geometry the engine cannot speak
+    /// for, for the state dump and for step 4's bounded recovery.
+    var unverifiedLayouts: [UnverifiedLayout] {
+        unverified.keys.sorted { ($0.workspace, $0.screenID) < ($1.workspace, $1.screenID) }
+            .map { key in
+                let screen = displayManager.screens.first {
+                    TilingKey(workspace: key.workspace, screen: $0) == key
+                }
+                let treeIDs = Set(trees[key]?.allWindows.map(\.windowID) ?? [])
+                return UnverifiedLayout(workspace: key.workspace, screen: screen,
+                                        windowIDs: (unverified[key]?.windowIDs ?? []).union(treeIDs),
+                                        insertedIDs: unverified[key]?.insertedIDs ?? [])
+            }
+    }
+
+    /// Every window living under an unverified key. The state dump's
+    /// `unverified=` field.
+    var unverifiedGeometryWindowIDs: Set<CGWindowID> {
+        unverifiedLayouts.reduce(into: Set<CGWindowID>()) { $0.formUnion($1.windowIDs) }
+    }
+
+    /// Windows waiting on a bounded recovery attempt. Step 4 fills this;
+    /// the accessor is here so the state dump's shape is already settled.
+    var pendingRecoveryWindowIDs: Set<CGWindowID> { [] }
+
+    /// Drop the unverified mark for `(workspace, screen)` without laying
+    /// anything out. For step 4's orchestrator, which gives up on a key
+    /// once it has floated the newcomer in place. Ordinary clearing
+    /// happens on its own, when a layout for the key is accepted.
+    func clearUnverifiedGeometry(forWorkspace workspace: Int, screen: NSScreen) {
+        unverified.removeValue(forKey: TilingKey(workspace: workspace, screen: screen))
     }
 
     private func applyVerifiedLayoutAttempt(_ tree: BSPTree, in rect: CGRect, generation: UInt64,
@@ -510,7 +630,8 @@ class TilingEngine {
                 let missing = windows.first { suppliedOriginalFrames[$0.windowID] == nil }
                 return .degraded(candidateReason: .windowUnavailable(missing?.windowID ?? 0),
                                  restorationReason: nil, restorationAttempted: false,
-                                 actualFrames: suppliedOriginalFrames)
+                                 actualFrames: suppliedOriginalFrames,
+                                 progress: FrameSizingProgressReport())
             }
             originalFrames = suppliedOriginalFrames
         } else {
@@ -521,7 +642,8 @@ class TilingEngine {
                 return .degraded(
                     candidateReason: captured.verdict.failure ?? .windowUnavailable(missing?.windowID ?? 0),
                     restorationReason: nil, restorationAttempted: false,
-                    actualFrames: captured.actualFrames
+                    actualFrames: captured.actualFrames,
+                    progress: FrameSizingProgressReport(candidate: captured.progress)
                 )
             }
             originalFrames = captured.actualFrames
@@ -531,7 +653,8 @@ class TilingEngine {
         let firstLayouts = candidate.layout(in: rect, gap: gapSize, padding: outerPadding)
         let first = applyLayout(firstLayouts, usableFrame: rect, generation: generation)
         if case .accepted = first.verdict {
-            return .accepted(actualFrames: first.actualFrames)
+            return .accepted(actualFrames: first.actualFrames,
+                             progress: FrameSizingProgressReport(candidate: first.progress))
         }
 
         var terminal = first
@@ -543,39 +666,48 @@ class TilingEngine {
             terminal = applyLayoutFinal(adjusted, usableFrame: rect, generation: generation)
             if case .accepted = terminal.verdict {
                 copyVerifiedRatios(from: candidate.root, to: tree.root)
-                return .accepted(actualFrames: terminal.actualFrames)
+                return .accepted(actualFrames: terminal.actualFrames,
+                                 progress: FrameSizingProgressReport(candidate: terminal.progress))
             }
         }
 
+        let candidateProgress = FrameSizingProgressReport(candidate: terminal.progress)
         guard layoutGeneration == generation else {
             return .degraded(candidateReason: .superseded, restorationReason: nil,
                              restorationAttempted: false,
-                             actualFrames: terminal.actualFrames)
+                             actualFrames: terminal.actualFrames,
+                             progress: candidateProgress)
         }
         let reason = terminal.verdict.failure ?? .attemptsExhausted
         if let invalidOriginalID = originalFrames.keys.sorted().first(where: { windowID in
             originalFrames[windowID].map { !restorationFrame.contains($0) } ?? true
         }) {
-            // the candidate frames stay on screen, so the tree has to carry
-            // the ratios that produced them — the adjusted pass's, when it ran
-            copyVerifiedRatios(from: candidate.root, to: tree.root)
+            // an original parked off the usable frame is not a restoration
+            // target, so the candidate writes stay where they landed. the
+            // tree keeps its prior ratios: nothing here was verified
             return .degraded(candidateReason: reason,
                              restorationReason: .outsideUsableFrame(invalidOriginalID),
                              restorationAttempted: false,
-                             actualFrames: terminal.actualFrames)
+                             actualFrames: terminal.actualFrames,
+                             progress: candidateProgress)
         }
         let originals = windows.compactMap { window in
             originalFrames[window.windowID].map { (window, $0) }
         }
         let restored = readbackPoller.applyRestoration(originals, usableFrame: restorationFrame,
                                                         gap: gapSize, generation: generation)
+        var progress = candidateProgress
+        progress.restoration = restored.progress
+        progress.restorationOverlaps = restored.overlaps
         if case .accepted = restored.verdict {
-            return .rejectedRestored(reason: reason, actualFrames: restored.actualFrames)
+            return .rejectedRestored(reason: reason, actualFrames: restored.actualFrames,
+                                     progress: progress)
         }
         return .degraded(candidateReason: reason,
                          restorationReason: restored.verdict.failure,
                          restorationAttempted: true,
-                         actualFrames: restored.actualFrames)
+                         actualFrames: restored.actualFrames,
+                         progress: progress)
     }
 
     private func copyVerifiedRatios(from source: BSPNode, to destination: BSPNode) {
@@ -786,8 +918,9 @@ class TilingEngine {
     /// back actual frames; pass 2 (when conflicts are detected)
     /// adjusts split ratios via `MinSizeMemory` and re-applies. If
     /// the adjusted pass fails, restoration is verified and the prior
-    /// topology remains live. Accepted candidates publish membership, and so
-    /// do candidates whose restoration failed — those frames are on screen.
+    /// topology remains live. Only an accepted layout publishes its
+    /// membership and ratios; every other outcome keeps the prior tree and
+    /// leaves the key's geometry marked unverified.
     func tileWindows(_ windows: [HyprWindow], onWorkspace workspace: Int, screen: NSScreen) {
         let generation = beginLayoutGeneration()
         pendingSwapRevert = nil
@@ -799,7 +932,8 @@ class TilingEngine {
         let rect = m.rect
 
         _ = consumePendingInserted(for: key, in: t)
-        let outcome = applyVerifiedLayout(t, in: rect, generation: generation)
+        let outcome = applyTrackedLayout(t, in: rect, generation: generation, key: key,
+                                         inserted: m.insertedWindows.map(\.windowID))
         if publishes(outcome), layoutGeneration == generation {
             if let live { live.root = candidate.root } else { trees[key] = candidate }
         }
@@ -809,6 +943,7 @@ class TilingEngine {
             if !t.allWindows.isEmpty { continue }
             if TilingKey(workspace: workspace, screen: screen) != key {
                 trees.removeValue(forKey: key)
+                unverified.removeValue(forKey: key)
             }
         }
     }
@@ -853,14 +988,15 @@ class TilingEngine {
         t.root.resetSplitRatios()
         t.root.applySavedRatios()
 
-        let outcome = applyVerifiedLayout(t, in: rect, generation: generation,
-                                restorationUsableFrame: displayManager.cgRect(for: screen))
+        let outcome = applyTrackedLayout(t, in: rect, generation: generation, key: key,
+                                         restorationUsableFrame: displayManager.cgRect(for: screen))
         if publishes(outcome), layoutGeneration == generation {
             if let live { live.root = t.root } else { trees[key] = t }
             // discard the old monitor's tree only once the destination holds
             // the candidate frames
             for other in trees.keys where other.workspace == Self.scratchpadWorkspace && other != key {
                 trees.removeValue(forKey: other)
+                unverified.removeValue(forKey: other)
             }
         }
         return rejects
@@ -915,6 +1051,15 @@ class TilingEngine {
         // window living in two trees (stale dup) is loud. see directional-focus bug.
         var sourceTree: [CGWindowID: String] = [:]
         for (key, t) in trees {
+            // a key whose last attempt was not accepted has no rect to
+            // offer. omitting it sends every one of its windows down the
+            // caller's actual-frame fallback, together rather than one at
+            // a time, which is the only consistent thing to do when the
+            // tree and the screen disagree.
+            if unverified[key] != nil {
+                hyprLog(.debug, .tiling, "intendedRects: tree ws\(key.workspace) sid=\(key.screenID) unverified — omitted (\(t.allWindows.count) windows)")
+                continue
+            }
             guard let screen = displayManager.screens.first(where: {
                 TilingKey(workspace: key.workspace, screen: $0) == key
             }) else {
@@ -977,7 +1122,8 @@ class TilingEngine {
 
         t.root.resetSplitRatios()
 
-        return applyVerifiedLayout(t, in: rect, generation: generation)
+        return applyTrackedLayout(t, in: rect, generation: generation, key: key,
+                                  inserted: inserted.map(\.windowID))
     }
 
     /// Apply a manual resize: update the surrounding split ratios so
@@ -1059,7 +1205,7 @@ class TilingEngine {
         t.root.clearUserSetRatios()
         let rect = displayManager.cgRect(for: screen)
         let generation = beginLayoutGeneration()
-        let outcome = applyVerifiedLayout(t, in: rect, generation: generation)
+        let outcome = applyTrackedLayout(t, in: rect, generation: generation, key: key)
         switch outcome {
         case .accepted:
             return true
@@ -1141,8 +1287,8 @@ class TilingEngine {
 
         guard layoutGeneration == pending.generation else { return false }
         let rect = displayManager.cgRect(for: screen)
-        let outcome = applyVerifiedLayout(t, in: rect, generation: pending.generation,
-                                          originalFrames: pending.originalFrames)
+        let outcome = applyTrackedLayout(t, in: rect, generation: pending.generation, key: key,
+                                         originalFrames: pending.originalFrames)
         switch outcome {
         case .accepted:
             return true
@@ -1322,6 +1468,17 @@ class TilingEngine {
         _ = t.insert(evicted, maxDepth: maxDepth(for: screen))
         _ = retile(key: key, screen: screen, generation: generation)
         return nil
+    }
+}
+
+extension TilingEngine.LayoutApplicationOutcome {
+    /// What the attempts behind this outcome are known to have done.
+    var progress: FrameSizingProgressReport {
+        switch self {
+        case let .accepted(_, progress): return progress
+        case let .rejectedRestored(_, _, progress): return progress
+        case let .degraded(_, _, _, _, progress): return progress
+        }
     }
 }
 

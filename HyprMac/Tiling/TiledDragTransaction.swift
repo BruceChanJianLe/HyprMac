@@ -51,8 +51,12 @@ enum TiledDragDropOutcome {
     case ignored
     case committed(candidate: BSPTree, actualFrames: [CGWindowID: CGRect])
     case rejectedRestored(reason: TiledDragFailure, actualFrames: [CGWindowID: CGRect])
+    /// `progress` is nil when nothing knows what was written — provenance
+    /// the cache policy cannot narrow with, so it falls back to clearing
+    /// every member.
     case degraded(candidateReason: TiledDragFailure?, restorationReason: FrameSizingFailure?,
-                  actualFrames: [CGWindowID: CGRect])
+                  actualFrames: [CGWindowID: CGRect],
+                  progress: FrameSizingProgressReport?)
     case superseded
 }
 
@@ -262,7 +266,7 @@ struct TiledDragTransaction {
             gap: snapshot.context.gap,
             generation: snapshot.generation
         )
-        switch result {
+        switch result.outcome {
         case let .accepted(actualFrames):
             guard isCurrent(snapshot, currentContext: currentContext) else { return .superseded }
             return .committed(candidate: candidate, actualFrames: actualFrames)
@@ -272,7 +276,8 @@ struct TiledDragTransaction {
             if candidateReason == .superseded, restorationReason == nil { return .superseded }
             return .degraded(candidateReason: .sizing(candidateReason),
                              restorationReason: restorationReason,
-                             actualFrames: actualFrames)
+                             actualFrames: actualFrames,
+                             progress: result.progress)
         }
     }
 
@@ -338,9 +343,14 @@ struct TiledDragTransaction {
             return .rejectedRestored(reason: reason, actualFrames: result.actualFrames)
         case let .rejected(failure), let .unknown(failure):
             if failure == .superseded { return .superseded }
+            // nothing ran a candidate here, so the only writes on record
+            // are the rollback's own
             return .degraded(candidateReason: reason,
                              restorationReason: failure,
-                             actualFrames: result.actualFrames)
+                             actualFrames: result.actualFrames,
+                             progress: FrameSizingProgressReport(
+                                restoration: result.progress,
+                                restorationOverlaps: result.overlaps))
         }
     }
 
