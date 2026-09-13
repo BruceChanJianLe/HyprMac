@@ -138,11 +138,20 @@ moment to fold both.
 
 When `HyprWindow.setFrame` moves a window across screens, macOS
 clamps the resize against the *current* screen's bounds. The
-resize-move-resize pattern handles this:
+resize-move-resize order is used for that reason:
 
 1. Resize to target dimensions (may be clamped by the source screen).
 2. Move to target position (now on the destination screen).
-3. Resize again (now unclamped by the destination's bounds).
+3. Resize again, this time with the window standing on the destination
+   screen.
+
+Step 3 is an attempt, not a guarantee. It removes the *source* screen's
+clamp; it does not make the app answer. An app with its own idea of a legal
+size answers with that size however many times it is asked: evidence `04`
+shows Terminal answering 1534 to a repeated 1874 request on the portrait
+display, same order, same numbers, every attempt. Treat the third write as
+the best available request and read the frame back to find out what happened
+— `FrameSizingAttempt` does exactly that.
 
 Same-screen tile updates pass `crossMonitor: false` and skip step 3
 to save one AX call per window per retile.

@@ -74,6 +74,7 @@ struct FrameReadbackPoller {
         var strictConfiguration = configuration
         strictConfiguration.sizeOvershootTolerance = strictConfiguration.sizeTolerance
         strictConfiguration.sizeUndershootTolerance = strictConfiguration.sizeTolerance
+        strictConfiguration.aggregateSafetySlack = strictConfiguration.sizeTolerance
         strictConfiguration.correspondenceOnly = true
         return applyLayout(layouts, usableFrame: usableFrame, gap: gap,
                            generation: requestedGeneration, configuration: strictConfiguration,

@@ -749,7 +749,7 @@ final class TiledDragTransactionTests: XCTestCase {
                        .rejected(.geometryMismatch(1)))
     }
 
-    func testValidatorRejectsOverlapBeyondTheCellAllowance() {
+    func testValidatorRejectsOverlapBeyondTheAggregateSlack() {
         let fake = FakeAX(frames: [:])
         let attempt = FrameSizingAttempt(io: fake.factory(windows: [:], current: { 1 }))
         func verdict(secondX: CGFloat) -> FrameSizingAttempt.Verdict {
@@ -764,9 +764,9 @@ final class TiledDragTransactionTests: XCTestCase {
                                           usableFrame: CGRect(x: 0, y: 0, width: 300, height: 100),
                                           gap: 0).verdict
         }
-        // exactly one cell of overlap on both axes is the allowance
-        XCTAssertEqual(verdict(secondX: 80), .accepted)
-        XCTAssertEqual(verdict(secondX: 79.99999), .rejected(.overlap(1, 2)))
+        // one point of overlap on both axes is comparison slack, no more
+        XCTAssertEqual(verdict(secondX: 99), .accepted)
+        XCTAssertEqual(verdict(secondX: 98.99999), .rejected(.overlap(1, 2)))
     }
 
     func testDropReleaseHeightChangeOverThresholdCommitsResize() {

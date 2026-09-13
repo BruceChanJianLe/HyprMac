@@ -638,12 +638,16 @@ fit check routed the window off its workspace.
 Corrections:
 
 - Candidate size matching now allows twenty points in both directions
-  (`TilingConfig.frameToleranceXPx`). Position stays at one point.
+  (`TilingConfig.frameToleranceXPx`). Position stays at one point. **This
+  per-window claim still holds.**
 - The pairwise checks allow the same twenty points. Overlap is rejected only
   when the intersection exceeds it on both axes, and gap erosion only when both
   axes fall more than it below the gap.
+  **Superseded by the step 6 aggregate slack below (2026-09-13):** the
+  pairwise checks no longer borrow the size tolerance.
 - Containment allows the same twenty points past maxX/maxY. The origin keeps
-  the strict one-point rule.
+  the strict one-point rule. **Superseded with it**: the far edges now get one
+  point, the origin rule is unchanged.
 - Restoration pins overshoot, undershoot, and size tolerance back to one point,
   so a rollback still has to land exactly.
 - A min-size conflict is measured against the overshoot tolerance, so cell
@@ -665,21 +669,23 @@ Containment is bounded the same way, at the far edges only. The actual
 origin must sit inside the usable frame within the one-point position
 tolerance, and maxX/maxY may run past it by up to the overshoot tolerance.
 Containment is checked against the unpadded screen rect while targets are
-inset by `outerPadding`, so without this an edge window's headroom would be
-the smaller of twenty points and the configured padding — a user padding
-below the app's cell height would reject the same layout again, as
-`outsideUsableFrame` instead of `geometryMismatch`. Restoration pins the
-overshoot tolerance to one point, so a rollback still has to land inside.
+inset by `outerPadding`, so an edge window that rounds up grows into the
+padding, which is inside the usable frame and costs nothing. Restoration
+pins the overshoot tolerance to one point, so a rollback still has to land
+inside. **The twenty-point far-edge figure here is superseded by step 6;
+the unpadded-rect point is not, and is what keeps ordinary cell rounding at
+an edge acceptable.**
 
-What this deliberately accepts, as the price of tiling cell-quantizing apps:
-a cell-rounded window may overlap its neighbour by up to
+What this deliberately accepted, as the price of tiling cell-quantizing apps:
+a cell-rounded window could overlap its neighbour by up to
 `sizeOvershootTolerance - gap` points, which is twelve at the shipping 8 pt
-gap, and may extend up to `sizeOvershootTolerance` points past the usable
+gap, and could extend up to `sizeOvershootTolerance` points past the usable
 frame at maxX/maxY. At that gap `gap - tol` is negative, so gap erosion on
-its own is never a rejection and `gapViolation` survives only as a tighter
-overlap check firing above twelve points on both axes. This is the behaviour
-the pre-93bfedf build had. Pairwise safety at the shipping gap rests on the
-overlap check and the strict one-point position match.
+its own was never a rejection on its own account and `gapViolation` survived
+only as a tighter overlap check, firing above twelve points on both axes
+while the overlap check fired above twenty — weakened gap protection rather
+than a dead check. This is the behaviour the pre-93bfedf build had.
+**Step 6 replaced all of it.**
 
 ## Diagnostics and write progress (2026-09-13)
 
@@ -1329,3 +1335,112 @@ in flight is
 still describing the truth and is left to finish. The other five reentrant
 changes in that test still supersede, and none of the six may roll back to
 frames the change has already made stale.
+
+## Step 6 — aggregate safety, narrowed away from size rounding, 2026-09-13
+
+Step 6 of the sizing and recovery plan, and the last of them. Nothing about
+per-window size matching changes: a candidate frame may still be twenty
+points off its target in either direction, restoration still pins that to one
+point, the origin still has one point, and no timeout, settle floor, write
+order or learning rule moves.
+
+What changes is that the aggregate checks stop borrowing the size tolerance.
+`FrameSizingConfiguration.aggregateSafetySlack` is one point, independent of
+`sizeOvershootTolerance`, and it is comparison slack — room for a readback
+that lands a fraction off a half-point target — not room to round into.
+
+- **Overlap.** Two actual frames are rejected when their intersection
+  exceeds the slack on *both* axes, so a positive-area overlap of two points
+  is a rejection where twenty used to be the bar. One axis alone is still
+  not an overlap.
+- **Containment.** maxX/maxY may pass the usable frame by the slack, not by
+  a cell. Targets are inset by `outerPadding` and containment is measured
+  against the unpadded screen rect, so a window that rounds up at an edge
+  grows into its own padding and is still inside. What it may no longer do
+  is take a cell off the screen.
+- **Gap erosion.** The budget is
+  `min(sizeOvershootTolerance, max(0, gap - aggregateSafetySlack))`, so a
+  positive gap always keeps the slack as real separation: at the shipping
+  8 pt gap a rounded-up window may eat seven of it and must leave one.
+  Contact is a `gapViolation`; going past contact is an `overlap`. A zero gap
+  asks for no separation at all and the pair is left to the overlap check,
+  which is what lets abutting tiles round by half a point.
+- **Restoration is unchanged.** Both restoration configurations — the one in
+  `FrameSizingTransaction.restore` and the one in
+  `FrameReadbackPoller.applyRestoration` — pin the slack to `sizeTolerance`
+  alongside the two size tolerances, and `correspondenceOnly` still means
+  overlap between restored originals is reported on the result instead of
+  judged. Containment is not correspondence: an original that sits off the
+  screen is still refused.
+
+At gap 8 the old rules accepted up to twelve points of real overlap before
+`gapViolation` and up to twenty before `overlap`; the new ones accept none of
+it. No observation in the evidence needs a window twenty points off the
+screen, and a Terminal beside a Safari that eats the whole gap is the case
+this exists to refuse.
+
+**What it does not do: teach a minimum.** An aggregate rejection names one
+pair, and `FrameReadbackPoller.classify` only records a conflict for a window
+whose own readback is more than `sizeOvershootTolerance` bigger than its
+target. A window that rounded sixteen points wider and ran into its neighbour
+is inside that allowance, so it produces no conflict, no observation, and no
+learned bound — the layout is refused and the memory is left alone.
+`learningRefusal` continues to treat `overlap`, `gapViolation` and
+`outsideUsableFrame` as geometric refusals rather than I/O failures, which is
+right: they are only ever reached for a window that is already oversize on its
+own account.
+
+The other half of that interaction is worth stating plainly, because it is a
+cost. `MinSizeMemory.lowerIfAccepted` runs only on an accepted layout. A pass
+that the screen answered honestly but aggregate safety refused lowers nothing,
+so a window that would have disproved an old bound keeps it until a pass is
+accepted. The step 5 revalidation spends its one bypass on such a pass and
+gets a refusal back. That is the same shape as a real refusal from the app
+and cannot be told apart from one by the caller.
+
+Tests. Aggregate assertions are kept in their own tests, separate from the
+target-size matching ones:
+
+- `FrameSizingTransactionTests.testAggregateOverlapRejectsBeyondTheSlackOnBothAxes`
+  — half a point accepted, two and twelve rejected, twelve on one axis only
+  accepted, every actual size matching its target throughout.
+- `...testGapErosionKeepsOnePointOfSeparationAtAnyPositiveGap` — gaps of 8, 2,
+  30 and 0, each at its accepted and rejected boundary.
+- `...testEdgeOvershootMayFillThePaddingButNotEscapeTheScreen` — flush with the
+  screen edge and one point past it accepted, four points past rejected.
+- `...testHalfPointTargetsPassAggregateSafetyOnIntegerReadback` — the
+  `(8,41,744,416.5)` shape from evidence `05`, answered on the integer.
+- `...testRestorationAggregateRulesAreUnchangedByTheSlack` and
+  `...testRestorationContainmentStaysTightAtOnePoint`.
+- `FrameReadbackPollerTests.testAggregateRejectionOnRoundedFramesTeachesNoMinimum`
+  — sixteen points of rounding through the gap: rejected, and no conflict,
+  observation or accepted size comes out of it.
+- `TilingEngineVerifiedLayoutTests.testRoundedUpWindowThatReachesItsNeighbourIsNotPublished`
+  — the same thing end to end: not published, no bound learned.
+- `...testCellRoundedUpWindowTilesWithoutRestoringSiblings` is unchanged and
+  still passes: one point wider and eight taller, inside the padding and a
+  point clear of the neighbour, is what ordinary cell rounding looks like and
+  it is still accepted.
+
+Existing expectations that encoded the twenty-point aggregate allowance and
+were changed deliberately: the erosion case in
+`testDefaultToleranceRejectsGapErosionBeyondOneCellAndAcceptsSafeShift` and in
+`testQuantizedDeviationBoundsContainmentAndGapErosion` now name `overlap`
+instead of `gapViolation`, because fourteen points through an 8 pt gap is a
+real overlap and the overlap check reaches it first;
+`testBoundedOvershootEatsTheGapButNeverTheNeighbour` (was
+`testBoundedOvershootCrossesTheGapButRealOverlapIsRejected`) now rejects the
+7 pt intrusion it used to accept and keeps an accepted case that stops one
+point short; `testEdgeOvershootMayFillThePaddingButNotEscapeTheScreen` (was
+`testEdgeOvershootIsContainedWithinOneCellButOriginMustStayInside`) moves its
+accepted cases inside the padding; and
+`TiledDragTransactionTests.testValidatorRejectsOverlapBeyondTheAggregateSlack`
+(was `...BeyondTheCellAllowance`) moves its boundary from twenty points of
+overlap to one.
+
+This commit can be reverted on its own. It touches
+`FrameSizingTransaction.swift`, one line of `FrameReadbackPoller.swift`, tests
+and docs, and nothing else. The live check before it is trusted: a Terminal
+beside a Safari docked and undocked, three and four tiles, and windows at the
+screen edges — a layout that used to be published and is now refused will show
+up as a restored rollback, not as a silent overlap.

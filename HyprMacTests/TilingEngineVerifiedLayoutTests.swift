@@ -72,6 +72,38 @@ final class TilingEngineVerifiedLayoutTests: XCTestCase {
         XCTAssertEqual(tree.allWindows.map(\.windowID).sorted(), [511, 512])
     }
 
+    func testRoundedUpWindowThatReachesItsNeighbourIsNotPublished() {
+        let first = makeWindow(id: 521)
+        let second = makeWindow(id: 522)
+        let tree = BSPTree()
+        XCTAssertTrue(tree.insert(first, maxDepth: 3))
+        XCTAssertTrue(tree.insert(second, maxDepth: 3))
+
+        let usable = CGRect(x: 0, y: 0, width: 1000, height: 700)
+        let originals: [CGWindowID: CGRect] = [
+            521: CGRect(x: 40, y: 40, width: 440, height: 620),
+            522: CGRect(x: 520, y: 40, width: 440, height: 620)
+        ]
+        // 16 pt wider than asked: through the 8 pt gap and 8 pt into the
+        // window next door, all of it inside the per-window size allowance
+        let trace = QuantizingSizingTrace(frames: originals, quantizedWindowID: 521,
+                                          quantizationDelta: CGSize(width: 16, height: 0))
+        let engine = TilingEngine(
+            displayManager: DisplayManager(),
+            frameSizingIOFactory: { _, generation in trace.io(generation: generation) }
+        )
+
+        let generation = engine.beginLayoutGeneration()
+        let outcome = engine.applyVerifiedLayout(tree, in: usable, generation: generation)
+
+        guard case let .degraded(candidateReason, _, _, _, _) = outcome else {
+            return XCTFail("expected the overlapping layout to be refused, got \(outcome)")
+        }
+        XCTAssertEqual(candidateReason, .overlap(521, 522))
+        XCTAssertNil(first.observedMinSize, "an aggregate refusal is not a refused size")
+        XCTAssertNil(second.observedMinSize)
+    }
+
     func testAdjustedPassFailureRestoresOriginalFramesAndRatiosOnce() {
         let first = makeWindow(id: 1)
         let second = makeWindow(id: 2)

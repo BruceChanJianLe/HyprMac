@@ -325,6 +325,37 @@ final class FrameReadbackPollerTests: XCTestCase {
         XCTAssertEqual(observations(actualWidth: 321).count, 1)
     }
 
+    func testAggregateRejectionOnRoundedFramesTeachesNoMinimum() {
+        let rounded = makeWindow(id: 66)
+        let neighbour = makeWindow(id: 67)
+        let roundedTarget = CGRect(x: 0, y: 0, width: 500, height: 800)
+        let neighbourTarget = CGRect(x: 508, y: 0, width: 492, height: 800)
+        // 16 pt of cell rounding: inside the per-window allowance, through
+        // the 8 pt gap and 8 pt into the neighbour
+        let actual: [CGWindowID: CGRect] = [
+            66: CGRect(x: 0, y: 0, width: 516, height: 800),
+            67: neighbourTarget
+        ]
+        var time: TimeInterval = 0
+        let io = FrameSizingIO(
+            setMessagingTimeout: { _, _ in .success },
+            writeSize: { _, _, _ in .success },
+            writePosition: { _, _, _ in .success },
+            readPosition: { id, _ in (.success, actual[id]?.origin) },
+            readSize: { id, _ in (.success, actual[id]?.size) },
+            now: { time }, sleep: { time += $0 }, currentGeneration: { 1 }
+        )
+        let result = FrameReadbackPoller(generation: { 1 }, ioFactory: { _, _ in io })
+            .applyLayout([(rounded, roundedTarget), (neighbour, neighbourTarget)],
+                         usableFrame: CGRect(x: 0, y: 0, width: 1200, height: 800),
+                         gap: 8, generation: 1)
+
+        XCTAssertEqual(result.verdict, .rejected(.overlap(66, 67)))
+        XCTAssertTrue(result.conflicts.isEmpty, "no window here refused its own size")
+        XCTAssertTrue(result.observations.isEmpty)
+        XCTAssertTrue(result.accepted.isEmpty, "a rejected layout accepts nothing")
+    }
+
     func testRestorationReadbackIsNeverLearningEvidence() {
         let window = makeWindow(id: 64)
         // the original frame we are rolling back to, answered oversized

@@ -122,11 +122,16 @@ stable samples are required. Position may differ by at most one AX point.
 Candidate size may differ by at most twenty points in either direction, which
 covers apps that round a target to whole character cells, and the observed
 frame is retained. Restoration uses one point in both size directions.
-Usable-screen containment holds the origin to one point but lets the far
-edges run twenty points past. Pairwise overlap and configured gap
-erosion are allowed the same twenty points, so a rounded-up window may eat
-into a gap and a little into its neighbour; two windows genuinely stacked on
-top of each other exceed the allowance on both axes and are still rejected.
+Aggregate safety does not borrow that tolerance. It runs on a separate
+one-point slack, which is room for a readback that lands a fraction off a
+half-point target. Containment holds the origin to one point and the far
+edges to the slack, measured against the unpadded screen rect, so a
+rounded-up window grows into its own outer padding and stops there. Two
+frames that overlap by more than the slack on both axes are rejected however
+well each matched its own target. Gap erosion is capped at
+`min(sizeOvershootTolerance, gap - slack)`: a rounded-up window may eat a
+positive gap down to one point and no further, contact is a `gapViolation`,
+past contact is an `overlap`, and a zero gap asks for no separation at all.
 
 Each attempt has a 0.36-second monotonic deadline and a 12-sample limit.
 Time inside AX calls counts toward that deadline. Individual AX calls use
