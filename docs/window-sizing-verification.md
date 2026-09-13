@@ -747,9 +747,80 @@ unchanged at `0.5`, and window 3 lays out at `(1316,8,596,1064)` — 596 points
 wide against a 1200-point minimum.
 
 Mechanism: the width pass biases the root split so the right column is about
-1400 wide. That makes the inner node's rect wider than tall, and
+1200 wide (`8 + 1904 * 0.36764705882352944 = 708`; `1912 - 708 - 4 = 1200`). That makes the inner node's rect wider than tall, and
 `BSPNode.direction(for:)` picks the longer axis, so the inner split flips
 from vertical to horizontal. The height pass then walks up from the leaf,
 finds no vertical ancestor, and adjusts nothing — and the flipped inner split
 halves the width the first pass had just won. The two passes read geometry
 the first pass has already changed.
+
+## Guarded learning and adjusted-pass reconciliation (2026-09-13)
+
+Step 2 of the sizing and recovery plan. Tolerances, timeouts, the write
+order and the publication policy are unchanged. What changed is which
+readbacks are allowed to become a remembered minimum, and when an accepted
+frame lowers one.
+
+Item 6 is the case: a third Safari window was admitted, inserted into a
+candidate, stranded when that candidate was discarded, and then refused
+forever by a minimum learned from the readback of a window that never
+moved. A window that never moved reads back at its old origin and its old
+size. Nothing about that is a refusal.
+
+- `FrameReadbackPoller.learningRefusal` is the single guard. A window's
+  oversize teaches a minimum only if the pass is a candidate or adjusted
+  one, the attempt ended in a geometric refusal rather than an I/O or
+  cleanup error, that window's three setters all returned success, every
+  target read back and settled, the window is at the origin it was given
+  within the position tolerance, and the actual size exceeds the target by
+  more than the 20-point overshoot tolerance on that axis. Otherwise the
+  `min evidence:` line carries `learn=false` and the guard's name.
+- Evidence is judged per window. An aggregate rejection names one id; the
+  others in the same pass are still evaluated on their own, and a window
+  that fails a guard is skipped without blocking its neighbours.
+- A restoration readback is never evidence. It rolls back to the frames
+  the windows already had, so it produces no conflicts, no observations
+  and no accepted sizes. That also removes a live mismatch: `classify`
+  used the caller's configuration, so on the restoration path the
+  conflict threshold had quietly become `target + 1`. The threshold is
+  the candidate overshoot tolerance, and only tiling passes classify.
+- Entries carry provenance. `seeded` is an `AXMinimumSize` value or a
+  per-bundle-id guess; `observed` is a bound the app refused. Real
+  evidence replaces a seeded hint instead of merging with it, so the axis
+  nothing refused returns to unknown rather than riding along as if it
+  had been observed. Fit checks read both; the state dump and the logs
+  name the source.
+- Per-axis evidence is kept per axis and zero means unknown. Minima are
+  not capped against the screen and are not cleared by a whole-slot
+  accept; both would throw away a real constraint. `MinSizeMemory.clear`,
+  which had no callers, is gone rather than left as an invitation.
+- `applyLayoutFinal` now reconciles against the memory like the first
+  pass. The adjusted pass is exactly where a window that was given a
+  bigger tile accepts a frame smaller than the one it refused, and the
+  bound follows that accepted readback, not the tile it was asked for.
+
+Evidence logs, both under `build/sizing/recovery/`:
+
+- Red: `red-step2-learning-guards.log` (`testOversizeAtTheWrongOriginTeachesNoMinimum`
+  fails, and `testWrongOriginWindowDoesNotBlockAGoodNeighboursEvidence` reports
+  observations `[61, 62]` where only 62 earned one),
+  `red-step2-minsize.log` (`testObservedEvidenceReplacesASeededHintInsteadOfMergingWithIt`
+  reports `1200x360`, the seeded height merged into an observed entry), and
+  `red-step2-adjusted-lowering.log`
+  (`testAdjustedPassLowersTheBoundToTheSizeItActuallyAccepted` keeps the 588
+  the candidate pass refused instead of the 573 the adjusted pass accepted).
+- Green: `green-step2.log`.
+
+Four of the refusals cannot be reached through the poller today.
+`writesIncomplete` and `readbackIncomplete` are structurally excluded: a
+write or cleanup error returns before anything is read, and a read error
+returns `unknown`, which was already skipped, so an attempt that reaches
+`validateFrames` has written and read everything. `restorationPhase` and
+`notRejected` are excluded by where the call sits — `classify` skips a
+restoration pass outright and only consults the guard inside a rejection.
+All four are pinned directly, through `learningRefusal`, so a later change
+to the transaction or to the call site cannot quietly start teaching minima
+from a partial attempt. An attempt with no targets reports a complete,
+stable readback of nothing; no window is in `writesCompleted`, so it cannot
+satisfy the guards either. What does real filtering in production is
+`originMismatch` and the 20-point overshoot boundary.

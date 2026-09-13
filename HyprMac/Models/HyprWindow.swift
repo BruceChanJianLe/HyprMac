@@ -51,6 +51,11 @@ class HyprWindow: Equatable, Hashable {
     /// app's refusal to shrink past a tighter bound.
     var observedMinSize: CGSize?
 
+    /// What kind of evidence `observedMinSize` is. A window starts out with
+    /// a hint at best, so this stays `.seeded` until `MinSizeMemory` mirrors
+    /// a bound the app actually refused to shrink below.
+    var minSizeProvenance: MinSizeProvenance = .seeded
+
     init(element: AXUIElement, windowID: CGWindowID, ownerPID: pid_t) {
         self.element = element
         self.windowID = windowID
@@ -79,15 +84,20 @@ class HyprWindow: Equatable, Hashable {
     /// fallback) when AX exposes a usable value. No-op when neither
     /// source produces one — `MinSizeMemory` will learn from readback
     /// later.
+    ///
+    /// Both sources are hints, so both are marked `.seeded`: nothing here
+    /// has watched the app refuse anything.
     func seedMinimumSize(bundleIdentifier: String?) {
         if let axSize = axMinimumSize() {
             observedMinSize = axSize
+            minSizeProvenance = .seeded
             return
         }
 
         if let bundleIdentifier,
            let heuristic = Self.heuristicMinimumSizes[bundleIdentifier] {
             observedMinSize = heuristic
+            minSizeProvenance = .seeded
         }
     }
 

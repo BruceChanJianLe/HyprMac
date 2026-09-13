@@ -35,8 +35,10 @@ struct StateDumpFormatter {
     let trees: [Int: [CGWindowID]]
     let scratchpad: Set<CGWindowID>
     let knownCount: Int
-    /// Window → learned or seeded min size, from `MinSizeMemory`.
-    var minima: [CGWindowID: CGSize] = [:]
+    /// Window → remembered min size and the evidence behind it, from
+    /// `MinSizeMemory`. The source is printed because a seeded hint and a
+    /// bound the app actually refused are not the same claim.
+    var minima: [CGWindowID: MinSizeMemory.Entry] = [:]
     /// Windows waiting on a bounded recovery attempt. Nothing produces
     /// these yet — the line is here so the shape is stable once
     /// admission recovery lands.
@@ -69,7 +71,8 @@ struct StateDumpFormatter {
 
         out.append("scratchpad=\(Self.list(scratchpad.sorted()))")
         out.append("minima=" + "[" + minima.keys.sorted().map {
-            "\($0):" + Self.size(minima[$0]!)
+            let entry = minima[$0]!
+            return "\($0):" + Self.size(entry.size) + "(\(entry.provenance.rawValue))"
         }.joined(separator: ", ") + "]")
         out.append("recovery pending=\(Self.list(pendingRecovery.sorted()))"
             + " unverified=\(Self.list(unverifiedGeometry.sorted()))")

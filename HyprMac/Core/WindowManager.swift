@@ -874,7 +874,8 @@ class WindowManager {
                 let travel = TiledDragEvent.travel(from: self.mouseDownPointCG, to: releasePoint)
                 hyprLog(.debug, .mouse, "gesture: sawDragEvent=\(shouldDetectDrag) "
                         + "travel=\(travel.map { String(format: "%.1f", Double($0)) } ?? "?") "
-                        + "threshold=\(TilingConfig.dragThresholdPx) drag=\(isDrag)")
+                        + "threshold=\(String(format: "%g", Double(TilingConfig.dragThresholdPx))) "
+                        + "drag=\(isDrag)")
                 let release = TiledDragEvent.release(
                     event: event,
                     primaryHeight: primaryHeight,

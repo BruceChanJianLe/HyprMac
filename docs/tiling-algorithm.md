@@ -137,7 +137,10 @@ never become accepted geometry.
 
 Only a known, stable size conflict permits a second pass.
 `BSPTree.adjustForMinSizes` adjusts constrained ratios, and the final
-adjusted layout goes through the same complete verification. Membership and
+adjusted layout goes through the same complete verification. The second
+pass runs on the apparent conflict; what the memory is allowed to learn
+from it is a narrower question, decided per window under "Min-size
+memory" below. Membership and
 adjusted ratios are prepared privately and publish only after acceptance.
 Failed first tiles do not create a live tree; failed scratchpad migrations keep
 the source tree. The engine checks captured
@@ -176,24 +179,74 @@ ratio adjustment, eviction, or automatic floating.
 
 `MinSizeMemory` is the per-window record of the lowest accepted
 size. macOS apps do not expose reliable `AXMinimumSize`; the engine
-learns the floor from pass-1 readback.
+learns the floor from readback.
+
+**What may teach a minimum.** `FrameReadbackPoller.learningRefusal`
+decides, per window, whether a readback is evidence at all. All of the
+following must hold, or the window teaches nothing and the `min
+evidence:` line says which guard stopped it:
+
+- the pass is a candidate or adjusted tiling pass, never a restoration;
+- the attempt ended in a geometric refusal, not a write, cleanup or read
+  error, a supersession or a deadline;
+- all three frame setters for *this* window returned success;
+- every target read back, and every target reached its stable sample
+  count;
+- this window sits at the origin it was given, within the one-point
+  position tolerance;
+- its actual size exceeds its target by more than the overshoot
+  tolerance (20 px) on that axis.
+
+The verdict is judged per window. An aggregate rejection names one id,
+but another window in the same pass may still have refused its own size,
+and a window that fails a guard is skipped without silencing the rest. A
+window that never moved is the case this exists for: its size is whatever
+it already was, and reading it as a minimum is how a stale full-screen
+bound gets invented.
+
+**Provenance.** Each entry records whether it is `seeded` — an
+`AXMinimumSize` value or a per-bundle-id guess, which nothing has
+refused — or `observed`, a bound the app actually refused to shrink
+below. Fit checks read both the same way; the state dump and the logs
+print the source, and the bypass in a later explicit-revalidation path
+is meant to key on it. Real evidence *replaces* a seeded hint rather
+than merging with it, so the axis a readback did not refuse goes back to
+unknown instead of inheriting a guess under an `observed` label.
+
+Per-axis evidence stays per axis, and zero means unknown: a window with a
+1200-point width floor and no height evidence is remembered as `1200x0`,
+and a fit check reads the zero as no constraint.
 
 Hysteresis on both ends:
 
-- **Record (raise the floor):** when an oversize is observed, the
-  recorded min is `max` of the existing value and the observed size
-  on the affected axis. Sentinels above
+- **Record (raise the floor):** when a guarded oversize is observed, the
+  recorded min is `max` of the existing *observed* value and the observed
+  size, on the affected axis only. Sentinels above
   `usableMinSizeMaxPx` (10 000 px) are rejected — apps occasionally
   report `INT_MAX` when AX cannot resolve.
-- **Lower (relax the floor):** an accepted size at least
-  `lowerMinSizeAcceptedDeltaPx` (10 px) below the current bound
-  becomes the new floor. Sub-pixel accepts cannot ratchet the floor
-  down — without this, a one-time tight resize would over-eagerly
-  relax our memory.
+- **Lower (relax the floor):** the 10 px
+  `lowerMinSizeAcceptedDeltaPx` gate is an *either-axis* trigger. When
+  one axis comes at least that far below the bound, the new floor is the
+  per-axis `min` of the bound and the accepted size, so the other axis
+  can come down by less than the delta in the same step. That is not the
+  hysteresis it looks like, but it is not wrong either: the window did
+  accept that size, so a floor above it was false. What the gate stops is
+  a purely sub-pixel accept relaxing anything at all. Lowering keeps the
+  entry's provenance: relaxing an estimate is not the same as watching
+  the app refuse something.
 
-The memory mirrors back onto each `HyprWindow.observedMinSize` so
-other subsystems (drag-swap fit check, floating toggle) read
-consistent values.
+Both tiling passes reconcile against the memory. The adjusted pass is
+where a window that was given a bigger tile finally accepts a frame
+smaller than the one it refused, so its accepted readback lowers the
+bound — the readback, never the tile that was asked for. A whole-slot
+accept changes nothing: a window that only ever fits its whole slot
+accepts its whole slot, which is not evidence it can be smaller. A
+minimum is never capped against the screen either; a constraint wider
+than most of a display still fits above or below something.
+
+The memory mirrors back onto each `HyprWindow.observedMinSize` and
+`HyprWindow.minSizeProvenance` so other subsystems (drag-swap fit check,
+floating toggle) read consistent values.
 
 ## Swap
 

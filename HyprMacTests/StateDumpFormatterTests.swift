@@ -22,7 +22,8 @@ final class StateDumpFormatterTests: XCTestCase {
             trees: [1: [10], 4: [40]],
             scratchpad: [99],
             knownCount: 5,
-            minima: [20: CGSize(width: 520, height: 360), 10: CGSize(width: 400, height: 260)]
+            minima: [20: .init(size: CGSize(width: 520, height: 360), provenance: .seeded),
+                     10: .init(size: CGSize(width: 400, height: 260), provenance: .observed)]
         )
     }
 
@@ -34,7 +35,7 @@ final class StateDumpFormatterTests: XCTestCase {
             "ws2 home=Display B visible=true assigned=[20] hidden=[] reserved=[] floating=[20] tree(Display B)=[]",
             "ws4 home=Display B visible=false assigned=[40] hidden=[40] reserved=[40] floating=[] tree(Display B)=[40]",
             "scratchpad=[99]",
-            "minima=[10:400x260, 20:520x360]",
+            "minima=[10:400x260(observed), 20:520x360(seeded)]",
             "recovery pending=[] unverified=[]",
             "known=5 hidden=2 reserved=1 floating=1"
         ])
@@ -75,15 +76,15 @@ final class StateDumpFormatterTests: XCTestCase {
             screens: [], homeScreenNames: [:], visibleWorkspaces: [],
             assignments: [:], hidden: [], reserved: [], floating: [],
             trees: [:], scratchpad: [], knownCount: 3,
-            minima: [77: CGSize(width: 1496, height: 841.5),
-                     12: CGSize(width: 0, height: 360)]
+            minima: [77: .init(size: CGSize(width: 1496, height: 841.5), provenance: .observed),
+                     12: .init(size: CGSize(width: 0, height: 360), provenance: .observed)]
         )
         formatter.pendingRecovery = [77, 12]
         formatter.unverifiedGeometry = [12]
 
         XCTAssertEqual(formatter.lines(), [
             "scratchpad=[]",
-            "minima=[12:0x360, 77:1496x841.5]",
+            "minima=[12:0x360(observed), 77:1496x841.5(observed)]",
             "recovery pending=[12, 77] unverified=[12]",
             "known=3 hidden=0 reserved=0 floating=0"
         ])

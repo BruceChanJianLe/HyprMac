@@ -402,6 +402,42 @@ final class TilingEngineVerifiedLayoutTests: XCTestCase {
         XCTAssertTrue(fixture.trace.hiddenPositionWrites.isEmpty)
     }
 
+    func testAdjustedPassLowersTheBoundToTheSizeItActuallyAccepted() {
+        let first = makeWindow(id: 601)
+        let second = makeWindow(id: 602)
+        let tree = BSPTree()
+        XCTAssertTrue(tree.insert(first, maxDepth: 3))
+        XCTAssertTrue(tree.insert(second, maxDepth: 3))
+
+        let usable = CGRect(x: 0, y: 0, width: 1000, height: 700)
+        let trace = TwoPassSizingTrace(frames: [
+            601: CGRect(x: 40, y: 40, width: 440, height: 620),
+            602: CGRect(x: 520, y: 40, width: 440, height: 620)
+        ], conflictedWindowID: 601, candidateOvershoot: 100, adjustedUndershoot: 15)
+        let engine = TilingEngine(
+            displayManager: DisplayManager(),
+            frameSizingIOFactory: { _, generation in trace.io(generation: generation) }
+        )
+        let candidateTargets = Dictionary(uniqueKeysWithValues: tree.layout(
+            in: usable, gap: engine.gapSize, padding: engine.outerPadding
+        ).map { ($0.0.windowID, $0.1) })
+        let refusedWidth = candidateTargets[601]!.width + 100
+
+        let generation = engine.beginLayoutGeneration()
+        let outcome = engine.applyVerifiedLayout(tree, in: usable, generation: generation)
+
+        guard case .accepted = outcome else {
+            return XCTFail("expected the adjusted pass to be accepted, got \(outcome)")
+        }
+        let accepted = trace.frames[601]!.width
+        XCTAssertLessThan(accepted, refusedWidth - TilingConfig.lowerMinSizeAcceptedDeltaPx,
+                          "the fake must accept a width the candidate pass refused")
+        XCTAssertEqual(first.observedMinSize?.width, accepted,
+                       "the bound must follow the accepted readback, not the tile we asked for")
+        XCTAssertEqual(first.observedMinSize?.height, 0,
+                       "nothing refused a height, so the height stays unknown")
+    }
+
     private func assertHiddenOriginalsAreNotRestored(
         mode: HiddenOriginalTrace.Mode,
         expectedReason: FrameSizingFailure
@@ -550,6 +586,60 @@ private final class SizingTrace {
                 if sizeWrites == 4, id == 1 { size.width += 100 }
                 return (.success, size)
             },
+            now: { [self] in now },
+            sleep: { [self] interval in now += interval },
+            currentGeneration: generation
+        )
+    }
+}
+
+/// One window refuses the candidate tile by `candidateOvershoot` points of
+/// width, then accepts the adjusted tile `adjustedUndershoot` points short
+/// of what it was asked for. Everything lands at the origin it was given.
+private final class TwoPassSizingTrace {
+    var frames: [CGWindowID: CGRect]
+    private var now: TimeInterval = 0
+    private let conflictedWindowID: CGWindowID
+    private let candidateOvershoot: CGFloat
+    private let adjustedUndershoot: CGFloat
+    private var hasWritten = false
+    private var sawRead = false
+    private var pass = 1
+
+    init(frames: [CGWindowID: CGRect], conflictedWindowID: CGWindowID,
+         candidateOvershoot: CGFloat, adjustedUndershoot: CGFloat) {
+        self.frames = frames
+        self.conflictedWindowID = conflictedWindowID
+        self.candidateOvershoot = candidateOvershoot
+        self.adjustedUndershoot = adjustedUndershoot
+    }
+
+    func io(generation: @escaping () -> UInt64) -> FrameSizingIO {
+        FrameSizingIO(
+            setMessagingTimeout: { _, _ in .success },
+            writeSize: { [self] id, size, _ in
+                // a write after a readback means the next pass has started
+                if sawRead { pass += 1; sawRead = false }
+                hasWritten = true
+                var frame = frames[id] ?? .zero
+                frame.size = size
+                if id == conflictedWindowID {
+                    frame.size.width += pass == 1 ? candidateOvershoot : -adjustedUndershoot
+                }
+                frames[id] = frame
+                return .success
+            },
+            writePosition: { [self] id, position, _ in
+                var frame = frames[id] ?? .zero
+                frame.origin = position
+                frames[id] = frame
+                return .success
+            },
+            readPosition: { [self] id, _ in
+                if hasWritten { sawRead = true }
+                return (.success, frames[id]?.origin)
+            },
+            readSize: { [self] id, _ in (.success, frames[id]?.size) },
             now: { [self] in now },
             sleep: { [self] interval in now += interval },
             currentGeneration: generation

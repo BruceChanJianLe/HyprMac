@@ -125,8 +125,9 @@ class TilingEngine {
     /// Called before any layout pass so size constraints are fresh.
     func primeMinimumSizes(_ windows: [HyprWindow]) { minSizes.prime(windows) }
 
-    /// Everything `MinSizeMemory` currently believes, for the state dump.
-    var knownMinimumSizes: [CGWindowID: CGSize] { minSizes.snapshot }
+    /// Everything `MinSizeMemory` currently believes, with the evidence
+    /// behind each entry, for the state dump.
+    var knownMinimumSizes: [CGWindowID: MinSizeMemory.Entry] { minSizes.snapshot }
 
     /// Drop any stored min-size memory for `windowID`. Called when a
     /// window is forgotten by the discovery layer.
@@ -592,23 +593,31 @@ class TilingEngine {
     // BSPTree.adjustForMinSizes.
     private func applyLayout(_ layouts: [(HyprWindow, CGRect)], usableFrame: CGRect,
                              generation: UInt64) -> FrameReadbackPoller.Result {
-        let result = readbackPoller.applyLayout(layouts, usableFrame: usableFrame,
-                                                gap: gapSize, generation: generation)
+        reconcile(readbackPoller.applyLayout(layouts, usableFrame: usableFrame,
+                                             gap: gapSize, generation: generation))
+    }
+
+    private func applyLayoutFinal(_ layouts: [(HyprWindow, CGRect)], usableFrame: CGRect,
+                                  generation: UInt64) -> FrameReadbackPoller.Result {
+        reconcile(readbackPoller.applyFinal(layouts, usableFrame: usableFrame,
+                                            gap: gapSize, generation: generation))
+    }
+
+    // both passes teach the same memory. the adjusted pass is where a
+    // window that was given a bigger tile finally accepts a smaller frame
+    // than the one it refused, and that accepted readback is the only
+    // honest thing to lower the bound to.
+    private func reconcile(_ result: FrameReadbackPoller.Result) -> FrameReadbackPoller.Result {
         for obs in result.observations {
-            minSizes.recordObserved(obs.window, actual: obs.actual,
+            minSizes.recordObserved(obs.window, target: obs.target, actual: obs.actual,
                                     widthConflict: obs.widthConflict,
-                                    heightConflict: obs.heightConflict)
+                                    heightConflict: obs.heightConflict,
+                                    phase: result.progress.phase)
         }
         for (window, size) in result.accepted {
             minSizes.lowerIfAccepted(window, actual: size)
         }
         return result
-    }
-
-    private func applyLayoutFinal(_ layouts: [(HyprWindow, CGRect)], usableFrame: CGRect,
-                                  generation: UInt64) -> FrameReadbackPoller.Result {
-        readbackPoller.applyFinal(layouts, usableFrame: usableFrame,
-                                  gap: gapSize, generation: generation)
     }
 
     private func overflowingWindows(in layouts: [(HyprWindow, CGRect)]) -> [HyprWindow] {

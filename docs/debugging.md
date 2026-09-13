@@ -151,10 +151,11 @@ silently — one `.notice` says so and the app runs unchanged.
 `FrameSizingAttempt` traces every AX frame write and every readback at
 `.debug` under `category: tiling`, so the file log shows what was asked
 for and what actually came back — not just the final `verified layout`
-verdict. Every line carries `phase=`, one of `capture`, `candidate`,
-`adjusted` or `restoration`: `candidate` is the first try at a layout,
-`adjusted` the retry after min-size ratio adjustment, `restoration` the
-rollback to captured original frames. Four line names:
+verdict. Every line carries `phase=`, one of `candidate`, `adjusted` or
+`restoration`: `candidate` is the first try at a layout, `adjusted` the
+retry after min-size ratio adjustment, `restoration` the rollback to
+captured original frames. The fourth phase, `capture`, writes nothing and
+logs no trace line; it appears only in typed results. Four line names:
 
 - `frame write: wid=<id> phase=<…> target=(x,y,w,h)` — once per window,
   before its writes. The target is the frame the layout asked for.
@@ -189,12 +190,38 @@ rollback to captured original frames. Four line names:
 as a min-size conflict, under the same category and tier:
 `min evidence: wid=<id> phase=<…> target=<w>x<h> actual=<w>x<h>
 axis=<width|height|width+height> written=<bool> complete=<bool>
-stable=<bool> source=readback`. `MinSizeMemory` then logs what it did
-with that evidence under `category: lifecycle`: `min-size record:
-wid=<id> old=<w>x<h> new=<w>x<h> actual=<w>x<h> axis=<…> source=<readback|seeded>`
-(with `refused=unusable` and no `new=` when the value fails the sanity
-check) and `min-size lower: wid=<id> old=… new=… actual=… axis=…
-source=accepted`.
+stable=<bool> learn=<bool> refused=<reason> source=readback`. `learn`
+is the whole point of the line: `false` means the oversize taught
+nothing, and `refused` names the guard — `ioFailure`,
+`writesIncomplete`, `readbackIncomplete` or `originMismatch`.
+`originMismatch` is the common one: the window is not where it was told
+to go, so its size is whatever it already was. `refused=none`
+accompanies `learn=true`. The enum has two more cases,
+`restorationPhase` and `notRejected`, that this line can never carry:
+the line is only reached inside a rejected candidate or adjusted pass,
+and a restoration pass classifies nothing, so it logs no `min evidence:`
+lines at all.
+
+`MinSizeMemory` then logs what it did with that evidence under
+`category: lifecycle`, in three shapes:
+
+- `min-size record: wid=<id> old=none new=<w>x<h> axis=width+height
+  source=<seeded|observed>` — the mirror on a window being picked up as
+  a starting estimate. No `target=` or `actual=`: nothing was measured
+  in this step. `source` is whatever provenance that window carries,
+  which is `seeded` in every ordinary case (`AXMinimumSize` or a
+  per-bundle-id guess); it could only read `observed` for a window
+  object that outlived the memory being told to forget it.
+- `min-size record: wid=<id> old=<none|<w>x<h> source=<seeded|observed>>
+  new=<w>x<h> target=<w>x<h> actual=<w>x<h> axis=<…> phase=<…>
+  source=readback` — guarded refusal evidence. The `old=` field names
+  the provenance of the entry being replaced, because observed evidence
+  replaces a seeded hint rather than merging with it. When the new value
+  fails the sanity check the line ends `refused=unusable` and carries no
+  `new=`.
+- `min-size lower: wid=<id> old=<w>x<h> new=<<w>x<h>|none> actual=<w>x<h>
+  axis=<…> source=accepted was=<seeded|observed>` — an accepted readback
+  relaxing a bound. `was=` is the provenance the entry keeps.
 
 `WindowManager` logs one `gesture:` line per left-mouse release under
 `category: mouse`: `gesture: sawDragEvent=<bool> travel=<n>
@@ -232,7 +259,7 @@ screen=S34C65xT visible=ws2
 ws1 home=Built-in Retina Display visible=true assigned=[104, 118] hidden=[] reserved=[] floating=[118] tree(Built-in Retina Display)=[104]
 ws2 home=S34C65xT visible=true assigned=[221] hidden=[] reserved=[] floating=[] tree(S34C65xT)=[221]
 scratchpad=[319]
-minima=[104:400x260, 221:1496x841]
+minima=[104:400x260(seeded), 221:1496x841(observed)]
 recovery pending=[] unverified=[]
 known=4 hidden=0 reserved=0 floating=1
 ```
@@ -245,9 +272,13 @@ against `assigned` minus `floating` minus `hidden` to spot a window that
 holds a workspace slot but is missing from the tree. Window ids only;
 titles never enter the dump.
 
-`minima` is everything `MinSizeMemory` believes, learned from readback
-or seeded from `AXMinimumSize`; a window refused by a fit check should
-have an entry here explaining why. `recovery pending` and `unverified`
+`minima` is everything `MinSizeMemory` believes, with the evidence
+behind each entry in brackets: `observed` is a bound the app refused to
+shrink below, `seeded` a hint from `AXMinimumSize` or a per-bundle-id
+guess that nothing has tested. A window refused by a fit check should
+have an entry here explaining why, and the source says how much that
+entry is worth. Zero on an axis means nothing has refused anything
+there. `recovery pending` and `unverified`
 report windows waiting on a bounded recovery attempt and windows whose
 on-screen geometry was never verified. Nothing produces either yet, so
 both are always empty today — the lines are here so the shape does not
