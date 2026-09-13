@@ -77,6 +77,13 @@ class WindowManager {
     // constructed in init() so the closure can capture self weakly.
     private var pollingScheduler: PollingScheduler!
 
+    // SIGUSR1 → dumpState. armed in start(), cancelled in stop().
+    private var dumpStateSignalSource: DispatchSourceSignal?
+
+    // wall clock of the last poll, so the file log can show the gap
+    // between a destroy notification and the poll that acted on it.
+    private var lastPollAt: Date?
+
     // mouse tracking
     private var mouseMoveMonitor: Any?
     private var mouseDownMonitor: Any?
@@ -405,6 +412,7 @@ class WindowManager {
         // the 0.2s default.
         axNotifications.onEvent = { [weak self] kind, pid in
             guard let self else { return }
+            hyprLog(.debug, .discovery, "ax event: \(kind) pid=\(pid)")
             switch kind {
             case .windowDestroyed:
                 self.destroyRecheck.noteDestroy(pid: pid)
@@ -452,7 +460,17 @@ class WindowManager {
             // initial distribution. the timer is now a slow (10s) safety net;
             // AX notifications above are the primary trigger.
             self.pollingScheduler.start()
+            self.dumpState(reason: "startup")
         }
+
+        // SIGUSR1 dumps state on demand over ssh. the default handler
+        // kills the process, so ignore it first and let the dispatch
+        // source pick it up on the main thread.
+        signal(SIGUSR1, SIG_IGN)
+        let dumpSignal = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+        dumpSignal.setEventHandler { [weak self] in self?.dumpState(reason: "SIGUSR1") }
+        dumpSignal.resume()
+        dumpStateSignalSource = dumpSignal
 
         startMouseTracking()
 
@@ -645,6 +663,9 @@ class WindowManager {
                 self?.scratchpad.tileNewMembers = on
             }.store(in: &configObservers)
 
+        if LogConfig.persistentFileLog {
+            hyprLog(.notice, .lifecycle, "file log: \(DebugLogFile.shared.fileURL.path)")
+        }
         hyprLog(.debug, .lifecycle, "started")
     }
 
@@ -657,6 +678,8 @@ class WindowManager {
     /// and hides every focus indicator. Safe to call when not running.
     func stop() {
         isRunning = false
+        dumpStateSignalSource?.cancel()
+        dumpStateSignalSource = nil
         tiledDragHandler.cancel()
         _ = tilingEngine.beginLayoutGeneration()
         restoreAllWindows()
@@ -671,6 +694,45 @@ class WindowManager {
         focusBorder.hideFloatingBorders()
         dimmingOverlay.hideAll()
         hyprLog(.debug, .lifecycle, "stopped")
+    }
+
+    /// Log a snapshot of workspace, cache and tree state at `.notice`
+    /// so it survives in `log show` as well as the debug log file.
+    ///
+    /// Fired once after the initial tile and on every `SIGUSR1`
+    /// (`kill -USR1 $(pgrep -x 'HyprMac Debug')`). Ids only — no window
+    /// titles ever enter these lines.
+    func dumpState(reason: String) {
+        let enabled = workspaceManager.enabledScreensLeftToRight()
+        var homes: [Int: String] = [:]
+        var trees: [Int: [CGWindowID]] = [:]
+        var visible: Set<Int> = []
+        for ws in 1...workspaceManager.workspaceCount {
+            if workspaceManager.isWorkspaceVisible(ws) { visible.insert(ws) }
+            guard let home = workspaceManager.homeScreenForWorkspace(ws) else { continue }
+            homes[ws] = home.localizedName
+            trees[ws] = tilingEngine.windowIDs(inTreeForWorkspace: ws, screen: home)
+        }
+
+        let dump = StateDumpFormatter(
+            screens: enabled.map {
+                .init(name: $0.localizedName, visibleWorkspace: workspaceManager.workspaceForScreen($0))
+            },
+            homeScreenNames: homes,
+            visibleWorkspaces: visible,
+            assignments: workspaceManager.allWindowWorkspaces(),
+            hidden: stateCache.hiddenWindowIDs,
+            reserved: stateCache.reservedHiddenWindowIDs,
+            floating: stateCache.floatingWindowIDs,
+            trees: trees,
+            scratchpad: scratchpad.members,
+            knownCount: stateCache.knownWindowIDs.count
+        )
+
+        hyprLog(.notice, .lifecycle, "state dump (\(reason))")
+        for line in dump.lines() {
+            hyprLog(.notice, .lifecycle, line)
+        }
     }
 
     /// Restore every window assigned to a non-visible workspace to a sane
@@ -2087,6 +2149,10 @@ class WindowManager {
         guard !mouseButtonDown else { return }
 
         let allWindows = accessibility.getAllWindows()
+        let now = Date()
+        let gap = lastPollAt.map { "\(Int(now.timeIntervalSince($0) * 1000))ms since last" } ?? "first poll"
+        lastPollAt = now
+        hyprLog(.debug, .discovery, "poll: \(allWindows.count) windows, \(gap)")
         // add window-level AX subscriptions (destroy / miniaturize) for any
         // new windows in this snapshot — deduped by CGWindowID inside.
         axNotifications.ensureWindowSubscriptions(for: allWindows)

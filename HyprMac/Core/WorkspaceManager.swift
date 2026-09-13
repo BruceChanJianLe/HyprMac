@@ -73,7 +73,7 @@ class WorkspaceManager {
     }
 
     /// Enabled screens left-to-right. Drives `homeScreenForWorkspace`.
-    private func enabledScreensLeftToRight() -> [NSScreen] {
+    func enabledScreensLeftToRight() -> [NSScreen] {
         screensLeftToRight().filter { !isMonitorDisabled($0) }
     }
 

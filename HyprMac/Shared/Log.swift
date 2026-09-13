@@ -11,6 +11,18 @@ import os
 enum LogLevel: Int, Comparable {
     case debug = 0, info, notice, warning, error, fault
     static func < (a: LogLevel, b: LogLevel) -> Bool { a.rawValue < b.rawValue }
+
+    /// Stable name used in the debug log file's `[level]` field.
+    var label: String {
+        switch self {
+        case .debug:   return "debug"
+        case .info:    return "info"
+        case .notice:  return "notice"
+        case .warning: return "warning"
+        case .error:   return "error"
+        case .fault:   return "fault"
+        }
+    }
 }
 
 /// Routing category for `hyprLog`. Each maps to an `os.Logger`
@@ -46,6 +58,17 @@ enum LogConfig {
     static var verboseInRelease: Bool {
         UserDefaults.standard.bool(forKey: "HyprMacVerboseLogging")
     }
+
+    /// Mirror every `hyprLog` call into `DebugLogFile`, at every level
+    /// and category, ignoring the trace-tier gating above. On by default
+    /// in DEBUG because os_log discards `.debug` before it persists, so
+    /// the file is the only evidence left after a bug. In Release it
+    /// follows the same `HyprMacVerboseLogging` toggle as trace output.
+    #if DEBUG
+    static var persistentFileLog = true
+    #else
+    static var persistentFileLog: Bool { verboseInRelease }
+    #endif
 }
 
 /// Emit a log line.
@@ -55,6 +78,9 @@ enum LogConfig {
 /// `.debug`/`.info` are gated by `LogConfig` in DEBUG and by
 /// `verboseInRelease` in Release.
 ///
+/// Independently of all that, every call is appended to
+/// `DebugLogFile` while `LogConfig.persistentFileLog` is on.
+///
 /// `privacy: .public` is applied across the board because the only
 /// metadata that enters log strings is safe (window IDs, workspace
 /// numbers, screen names, action names, durations). Free-text user
@@ -62,9 +88,18 @@ enum LogConfig {
 func hyprLog(_ level: LogLevel = .debug,
              _ category: LogCategory,
              _ message: @autoclosure () -> String) {
+    // file log takes every line regardless of tier or category — it is
+    // the only copy of the trace tier that outlives the process.
+    var rendered: String?
+    if LogConfig.persistentFileLog {
+        let m = message()
+        rendered = m
+        DebugLogFile.shared.append(level: level, category: category, message: m)
+    }
+
     // diagnostic tier — always emits, visible in Console.app for support.
     if level >= .notice {
-        let m = message()
+        let m = rendered ?? message()
         let logger = loggers[category]!
         switch level {
         case .notice:  logger.notice("\(m, privacy: .public)")
@@ -79,12 +114,12 @@ func hyprLog(_ level: LogLevel = .debug,
     #if DEBUG
     let allowed = level >= LogConfig.traceMinimum && LogConfig.enabledCategories.contains(category)
     if allowed {
-        let m = message()
+        let m = rendered ?? message()
         loggers[category]!.debug("\(m, privacy: .public)")
     }
     #else
     if LogConfig.verboseInRelease && LogConfig.enabledCategories.contains(category) {
-        let m = message()
+        let m = rendered ?? message()
         loggers[category]!.debug("\(m, privacy: .public)")
     }
     #endif

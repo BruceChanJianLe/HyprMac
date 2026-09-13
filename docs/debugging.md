@@ -98,6 +98,85 @@ Predicate variants:
 --predicate 'subsystem == "com.zachgray.HyprMac"' --level warning
 ```
 
+## Debug builds keep a file log
+
+macOS never persists os_log `.debug` lines. By the time you run `log
+show` after a bug, only `.notice` and above survive — every `retile:
+workspace=`, `workspace N full`, `window gone:` and poll-timing line
+is already gone. So debug builds also append every `hyprLog` call, at
+every level and every category, to a plain text file.
+
+Path (one file per bundle id, so the debug app and a release build
+never share):
+
+```
+~/Library/Logs/HyprMac/com.zachgray.HyprMac.debug.log
+```
+
+One line per call, format stable:
+
+```
+2026-09-12T19:41:02.123-0500 [notice] [discovery] window gone: 1304
+```
+
+Timestamp, then `[level]`, then `[category]`, then the message.
+Levels are `debug info notice warning error fault`; categories are the
+`LogCategory` names listed above.
+
+The file rotates at 20 MB: the current file is renamed to
+`<name>.log.1` (replacing any previous `.1`) and a fresh one starts.
+So the log costs at most ~40 MB on disk.
+
+Tail it from another machine:
+
+```bash
+tail -f ~/Library/Logs/HyprMac/com.zachgray.HyprMac.debug.log
+```
+
+`WindowManager.start()` logs the exact path at `.notice`, so
+`log show` tells you which file the running instance is writing to:
+
+```bash
+/usr/bin/log show --predicate 'subsystem BEGINSWITH "com.zachgray.HyprMac"' --last 5m | rg 'file log:'
+```
+
+The switch is `LogConfig.persistentFileLog` in `Shared/Log.swift`. It
+defaults to `true` under `#if DEBUG`; in Release it follows the same
+`HyprMacVerboseLogging` user default as trace logging (below). If the
+directory or the file cannot be created the log disables itself
+silently — one `.notice` says so and the app runs unchanged.
+
+## On-demand state dump
+
+`WindowManager.dumpState(reason:)` logs a `.notice` block under
+`category: lifecycle` describing workspace, cache and tree state. It
+runs once at startup right after the initial tile (`reason: startup`)
+and on every `SIGUSR1`:
+
+```bash
+kill -USR1 $(pgrep -x 'HyprMac Debug')
+```
+
+Then read the file log. The block looks like:
+
+```
+state dump (SIGUSR1)
+screen=Built-in Retina Display visible=ws1
+screen=S34C65xT visible=ws2
+ws1 home=Built-in Retina Display visible=true assigned=[104, 118] hidden=[] reserved=[] floating=[118] tree(Built-in Retina Display)=[104]
+ws2 home=S34C65xT visible=true assigned=[221] hidden=[] reserved=[] floating=[] tree(S34C65xT)=[221]
+scratchpad=[319]
+known=4 hidden=0 reserved=0 floating=1
+```
+
+Screens first, then each workspace 1–9 that has at least one window
+(empty workspaces are omitted), then the scratchpad, then cache
+totals. `tree(...)` is the leaf membership of that workspace's BSP
+tree on its home screen — compare it against `assigned` minus
+`floating` minus `hidden` to spot a window that holds a workspace slot
+but is missing from the tree. Window ids only; titles never enter the
+dump.
+
 ## Verbose logging in Release
 
 Trace-tier logs (`.debug`, `.info`) are gated off by default in
@@ -182,6 +261,15 @@ tracks the "seen since launch" set; a window appearing as `new`
 when the user un-hides it usually means it was forgotten too
 aggressively (e.g. on app terminate before the visibility change
 flowed through).
+
+Two trace lines measure the gap between "the OS told us" and "we
+looked", which only the file log keeps:
+
+- `ax event: windowDestroyed pid=1304` — one per AX notification, kind
+  and pid only.
+- `poll: 14 windows, 213ms since last` — at the top of every
+  `pollWindowChanges`, with the snapshot size and the elapsed wall
+  clock since the previous poll.
 
 ## Retile churn / full-screen flicker
 

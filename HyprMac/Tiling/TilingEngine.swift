@@ -151,6 +151,13 @@ class TilingEngine {
         trees[TilingKey(workspace: workspace, screen: screen)]
     }
 
+    /// Leaf window ids of the live tree for `(workspace, screen)`, in
+    /// tree order. Read-only — never creates a tree. Used by the state
+    /// dump to show tree membership without exposing the tree itself.
+    func windowIDs(inTreeForWorkspace workspace: Int, screen: NSScreen) -> [CGWindowID] {
+        existingTree(forWorkspace: workspace, screen: screen)?.allWindows.map(\.windowID) ?? []
+    }
+
     func captureTiledDrag(draggedID: CGWindowID, workspace: Int, screen: NSScreen,
                           floatingIDs: Set<CGWindowID>) -> TiledDragCaptureResult {
         let key = TilingKey(workspace: workspace, screen: screen)
