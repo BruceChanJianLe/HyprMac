@@ -442,6 +442,49 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
                        "previous evidence is preserved exactly")
     }
 
+    func testARefusedRevalidationStillRaisesABoundTheAppRefusedAgain() throws {
+        let f = try fixture()
+        let newcomer = f.windows[2]
+        let usable = f.engine.displayManager.cgRect(for: f.screen)
+        f.trace.minSize[newcomer.windowID] = CGSize(width: usable.width * 1.2, height: 0)
+        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+        let learned = try XCTUnwrap(f.engine.knownMinimumSizes[newcomer.windowID])
+        // the app refuses the attempt, and from higher up than last time
+        f.trace.minSize[newcomer.windowID] = CGSize(width: usable.width * 1.2 + 200, height: 0)
+
+        let result = f.engine.revalidateAdmission(f.windows, incoming: [newcomer.windowID],
+                                                  onWorkspace: 1, screen: f.screen)
+
+        XCTAssertFalse(result.published)
+        let after = try XCTUnwrap(f.engine.knownMinimumSizes[newcomer.windowID])
+        XCTAssertEqual(after.provenance, .observed)
+        XCTAssertGreaterThan(after.size.width, learned.size.width,
+                             "a refusal the learning guards let through is new evidence,"
+                             + " not the bound the attempt set aside")
+    }
+
+    func testABoundTheMemoryNeverTookIsNamedSeededNotStructural() throws {
+        let f = try fixture()
+        let newcomer = f.windows[2]
+        // an app-declared minimum priming refuses: above usableMinSizeMaxPx,
+        // so no entry is written and the fit check reads the window's own
+        newcomer.observedMinSize = CGSize(width: TilingConfig.usableMinSizeMaxPx + 1000, height: 0)
+        newcomer.minSizeProvenance = .seeded
+
+        let outlook = f.engine.admissionOutlook(newcomer, onWorkspace: 1, screen: f.screen)
+
+        XCTAssertNil(f.engine.knownMinimumSizes[newcomer.windowID],
+                     "the memory refused the value, so there is no entry to read provenance off")
+        guard case let .refused(refusals) = outlook else {
+            return XCTFail("expected a refusal, got \(outlook)")
+        }
+        XCTAssertFalse(refusals.isEmpty)
+        XCTAssertTrue(refusals.contains { $0.source == .seeded },
+                      "the app's own declared minimum is what said no")
+        XCTAssertFalse(refusals.contains { $0.source == .structural },
+                       "nothing here is a slot too small for the gap alone")
+    }
+
     func testTheBypassIsSpentOnTheOneAttemptItWraps() throws {
         let f = try fixture()
         let newcomer = f.windows[2]

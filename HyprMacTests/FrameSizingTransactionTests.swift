@@ -687,7 +687,8 @@ final class FrameSizingTransactionTests: XCTestCase {
         XCTAssertEqual(verdict(firstWidth: 101), .accepted)
         XCTAssertEqual(verdict(firstWidth: 102), .rejected(.overlap(74, 75)))
         XCTAssertEqual(verdict(firstWidth: 112), .rejected(.overlap(74, 75)))
-        // 12 pt along x but one point along y is not positive-area overlap
+        // 12 pt along x, but the y overlap is within the slack, and a
+        // rejection needs both axes past it
         XCTAssertEqual(verdict(firstWidth: 112, secondY: 99), .accepted)
     }
 
@@ -766,6 +767,33 @@ final class FrameSizingTransactionTests: XCTestCase {
             targets: [.init(windowID: 82, frame: escaping)],
             actualFrames: [82: escaping], usableFrame: usable, gap: 8
         ).verdict, .rejected(.outsideUsableFrame(82)))
+
+        // and the strictness is the rollback's own, not the caller's: a
+        // candidate slack of 12 would swallow those 2 pt, and both rollback
+        // paths build their configuration from sizeTolerance instead
+        var loose = FrameSizingConfiguration()
+        loose.aggregateSafetySlack = 12
+        let fake = Fake()
+        fake.frames[83] = escaping
+        let rolledBack = FrameSizingTransaction(
+            attempt: FrameSizingAttempt(io: fake.io(), configuration: loose)
+        ).restore(originalFrames: [83: escaping], usableFrame: usable, gap: 8, generation: 1)
+        XCTAssertEqual(rolledBack.verdict, .rejected(.outsideUsableFrame(83)))
+
+        let window = makeWindow(id: 84)
+        var pollerTime: TimeInterval = 0
+        let pollerIO = FrameSizingIO(
+            setMessagingTimeout: { _, _ in .success },
+            writeSize: { _, _, _ in .success },
+            writePosition: { _, _, _ in .success },
+            readPosition: { _, _ in (.success, escaping.origin) },
+            readSize: { _, _ in (.success, escaping.size) },
+            now: { pollerTime }, sleep: { pollerTime += $0 }, currentGeneration: { 1 }
+        )
+        let polled = FrameReadbackPoller(configuration: loose, generation: { 1 },
+                                         ioFactory: { _, _ in pollerIO })
+            .applyRestoration([(window, escaping)], usableFrame: usable, gap: 8, generation: 1)
+        XCTAssertEqual(polled.verdict, .rejected(.outsideUsableFrame(84)))
     }
 
     func testRestorationRequiresExactSizeDespiteCandidateQuantizationAllowance() {

@@ -1688,32 +1688,6 @@ class TilingEngine {
         return t.layout(in: rect, gap: gapSize, padding: outerPadding)
     }
 
-    /// `true` when the `(workspace, screen)` tree has room for an
-    /// additional window without violating min-size constraints.
-    ///
-    /// `window` is optional — passing it primes its size for the
-    /// pair-fit check; passing `nil` checks generic capacity.
-    /// Empty trees are always fittable.
-    func canFitWindow(_ window: HyprWindow? = nil,
-                      onWorkspace workspace: Int,
-                      screen: NSScreen) -> Bool {
-        let key = TilingKey(workspace: workspace, screen: screen)
-        let t = tree(for: key)
-        if t.root.isEmpty { return true }
-        // prime tree tenants AND incoming window — pairFits reads
-        // minimumSize for both leaf occupant and incoming, so both must be
-        // synced against the latest known/observed values.
-        var toPrime = t.allWindows
-        if let window { toPrime.append(window) }
-        primeMinimumSizes(toPrime)
-
-        let rect = displayManager.cgRect(for: screen)
-        return fittingLeaf(for: window,
-                           in: t,
-                           maxDepth: maxDepth(for: screen),
-                           rect: rect) != nil
-    }
-
     /// What an explicit user request should expect from `(workspace, screen)`.
     ///
     /// Runs the ordinary fit check first. If it refuses, runs it again with
@@ -1771,14 +1745,23 @@ class TilingEngine {
     /// first check said no. A minimum of zero on the refusing side
     /// contributes nothing, so a slot too small for the gap alone reads as
     /// structural rather than blaming a bound that is not there.
+    ///
+    /// A nonzero bound with no entry behind it came from the window's own
+    /// `AXMinimumSize` mirror, which the memory reads when it holds nothing.
+    /// Priming refused that value — at or above `usableMinSizeMaxPx`, or not
+    /// finite — and kept no entry for it, but the fit check still honoured
+    /// it. It is a hint nothing has tested, so it reads as seeded; calling it
+    /// structural would hide an app-declared minimum behind the geometry.
     private func refusal(_ slot: LayoutEngine.SlotRefusal, incoming: HyprWindow) -> FitRefusal {
         var source = FitRefusal.Source.structural
         if !slot.depthExhausted {
             var provenances: [MinSizeProvenance] = []
-            if slot.incomingMinimum != .zero,
-               let entry = minSizes.entry(for: incoming.windowID) { provenances.append(entry.provenance) }
-            if slot.tenantMinimum != .zero, let tenant = slot.tenantID,
-               let entry = minSizes.entry(for: tenant) { provenances.append(entry.provenance) }
+            if slot.incomingMinimum != .zero {
+                provenances.append(minSizes.entry(for: incoming.windowID)?.provenance ?? .seeded)
+            }
+            if slot.tenantMinimum != .zero, let tenant = slot.tenantID {
+                provenances.append(minSizes.entry(for: tenant)?.provenance ?? .seeded)
+            }
             if provenances.contains(.observed) {
                 source = .learned
             } else if provenances.contains(.seeded) {
@@ -1849,7 +1832,10 @@ class TilingEngine {
     /// Otherwise an ordinary tiling pass: fresh generation, private
     /// candidate, same publication gate, same reconcile path. An accepted
     /// layout lowers the bounds it disproved; a refused one publishes nothing
-    /// and leaves the memory exactly as it found it.
+    /// and changes the memory only through the guarded learning path — a
+    /// window that really refused its slot under the readback guards raises
+    /// its own entry, which is fresh evidence rather than the bound this pass
+    /// set aside. Nothing here clears an entry.
     ///
     /// `restorationReach` widens the rect a rollback is allowed to write
     /// into. A window being moved from another screen is still standing on

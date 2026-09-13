@@ -498,8 +498,11 @@ Confirmed and corrected:
   per axis, with position and overshoot still limited to one point.
   (Superseded on 2026-09-12: both size directions now allow twenty points, and
   the aggregate checks allow the same. See "Cell-rounded overshoot acceptance"
-  below.) Every rollback uses the original one-point size tolerance, including
-  drag preflight rollback.
+  below. The aggregate half is superseded again on 2026-09-13: the pairwise
+  and containment checks use `aggregateSafetySlack`, one point, and no longer
+  borrow the size tolerance. Per-window twenty stands. See "Step 6 — aggregate
+  safety" below.) Every rollback uses the original one-point size tolerance,
+  including drag preflight rollback.
 - Ordinary membership changes and adjusted ratios could become live before AX
   acceptance. Normal tiling now applies a private candidate and publishes it
   only after acceptance. Failed attempts keep the prior tree. Unknown/degraded
@@ -1160,6 +1163,10 @@ it cannot refuse anything.
 
 The workspace-full check keeps its own line, with the same vocabulary:
 `workspace 2 full: incoming=26016 tiled=4 max=4 axis=count source=structural`.
+That check is not part of the outlook. It lives in
+`WorkspaceOrchestrator.moveToWorkspace`, after the outlook has answered, and
+only for a hidden destination — a visible one is settled by laying the
+window out, which is its own answer to whether the workspace is full.
 
 ### A visible destination is settled on the spot
 
@@ -1237,7 +1244,8 @@ Both under `build/sizing/recovery/`:
 
 - Red: `red-step5-explicit-revalidation.log`, taken with the new API in
   place and seven behaviour switches reverted — `admissionOutlook` answers
-  `.fits` or `.refused([])` the way `canFitWindow` did, `fittingLeaf`
+  `.fits` or `.refused([])` the way `canFitWindow` did (since deleted,
+  below), `fittingLeaf`
   reports no refusals, `revalidateAdmission` runs an ordinary pass,
   `bypassingLearnedMinima` is ignored, a bypassed pass routes through
   `onAutoFloat` as before, `canFitWindows` inherits the caller's bypass, the
@@ -1291,6 +1299,24 @@ Tests with no red entry, named rather than counted:
 - `testBypassingLearnedMinimaLeavesASeededHintStanding` passes in both: a
   seeded bound refuses whether or not the bypass exists, which is the point
   of the test.
+- Five more have no red entry and were counted rather than named until now:
+  `testAFitProbeRunInsideABypassedPassStillSeesTheRealBound`,
+  `testTheOutlookLeavesTheMemoryAndTheTreeAlone`,
+  `testTheBypassIsSpentOnTheOneAttemptItWraps`,
+  `testAWindowThatFitsNeedsNoRevalidation` and
+  `testFittingLeafReportsNothingWhenALeafTakesTheWindow`. Three of them pin
+  that a check writes nothing, mutates nothing and does not outlive the one
+  attempt it wraps, all of which held under the switches too. The
+  `fittingLeaf` one asserts an empty refusal list, and the reverted
+  `fittingLeaf` reported no refusals at all, so it passes there for the
+  wrong reason: it is real coverage only alongside the tests that assert a
+  refusal *is* reported.
+- The first of those five is the only test that touches the
+  `canFitWindows`-inherits-the-caller's-bypass switch, and it passes in the
+  red run, so no failure in that log demonstrates the switch. The same run
+  reverted `revalidateAdmission` to an ordinary pass, which leaves no bypass
+  in place for the probe to inherit, so the probe answers on the real bound
+  either way. The switch is covered by reading, not by a red failure.
 
 `testWithoutTheReachTheSameRollbackIsCancelledWhole` passes in both: it pins
 the behaviour the reach exists to work around, which the fix does not
@@ -1336,6 +1362,87 @@ still describing the truth and is left to finish. The other five reentrant
 changes in that test still supersede, and none of the six may roll back to
 frames the change has already made stale.
 
+### Known residuals
+
+A refused visible-destination revalidation can still leave the window
+standing on the destination screen while it is assigned to the source. The
+reach closes one cause of that, not the condition itself. Two ways remain.
+The rollback can degrade on its own account: a restoration write or its
+readback fails, `applyVerifiedLayoutAttempt` returns `.degraded`, and
+whatever the candidate wrote stays on the screen. And the mover's captured
+original can lie outside the union of the destination rect and the reach —
+the rect the rollback is allowed to write into is `rect.union(reach)`, so an
+original parked off both screens still cancels the rollback whole. Either
+way the next poll reads the window as drift on the destination screen. The
+bounded admission recovery is what picks the window up.
+
+A refused visible revalidation also leaves the destination key marked
+unverified with the mover in `insertedIDs`, even when the rollback verified
+and every incumbent is provably back. `.rejectedRestored` marks the key with
+`restored: true`, so the mark is droppable — the admission recovery's
+`clearUnverifiedGeometry` will drop it, and an accepted layout for the key
+clears it outright — but until one of those happens the mover is listed in
+the state dump's `unverified=` field for a key it is no longer on. That is
+conservative on purpose: the engine wrote frames there and took them back,
+so it does not claim the geometry. Noted here so nobody reads the mark as a
+failed rollback.
+
+### Corrections after the step-5 review
+
+A fresh-context review of `d224eb5` found these, fixed in one commit on top
+of step 6. The five unnamed no-red-entry tests are named in the evidence
+list above, and the residuals are the section before this one.
+
+- **`revalidateAdmission`'s comment claimed too much.** It said a refused
+  attempt "leaves the memory exactly as it found it". `applyLayout` wraps the
+  readback in `reconcile`, which calls `recordObserved` when the app genuinely
+  refused under the learning guards, so a refusal can raise an entry or turn a
+  seeded one into an observed one. That is right — a guarded refusal is new
+  evidence — and the comment now says a refused attempt publishes nothing and
+  changes the memory only through the guarded learning path, never by
+  clearing. `testARefusedRevalidationStillRaisesABoundTheAppRefusedAgain`
+  pins the raise; `testATrueLargeMinimumIsRefusedAndKeepsItsEvidenceExactly`
+  keeps pinning the same-size case, where the raise is a no-op.
+- **`canFitWindow` (singular) was dead.** Step 5 replaced its last caller with
+  `admissionOutlook`, and it read `minimumSize(for:)` without the
+  `withoutMinimaBypass` guard `canFitWindows` got, so the next caller would
+  have inherited whatever bypass it ran inside. Deleted; no test used it.
+- **Refusal diagnostics mislabelled an app-declared bound.** `refusal()`
+  looked up provenance only when `MinSizeMemory` held an entry, but
+  `minimumSize` falls back to the window's own `observedMinSize` when it
+  holds none, which through `admissionOutlook` means one thing: priming
+  refused the value, at or above `usableMinSizeMaxPx` or not finite, and the
+  fit check honoured it anyway. Such a
+  refusal logged `source=structural` while an `AXMinimumSize` was what said
+  no. A nonzero bound with no entry behind it now reads as `seeded`, pinned by
+  `testABoundTheMemoryNeverTookIsNamedSeededNotStructural`. `docs/debugging.md`
+  says so under the `source` vocabulary.
+- **`docs/tiling-algorithm.md` put the workspace count limit inside
+  `admissionOutlook`.** The count check is in the caller,
+  `WorkspaceOrchestrator.moveToWorkspace`, and it runs only when the
+  destination is hidden.
+
+The same review read step 6 and found more prose than code to fix. The small-gap
+arithmetic and the Terminal number to watch on the live check are stated in the
+step-6 section above; the "will show up as a restored rollback" claim is
+narrowed to what the test pins; the 2026-09-12 supersession note and
+`docs/window-sizing-next-phase.md`'s open finding 6 are marked; and one test
+comment called a one-point y overlap "not positive-area" when it is positive
+area within the slack. The one code change is
+`testRestorationAggregateRulesAreUnchangedByTheSlack`, which built its own
+strict configuration and so never touched the two production lines that build
+the rollback's slack. It now rolls back through both.
+
+Evidence: `red-step6-restoration-slack-pin.log` is
+`FrameSizingTransactionTests` with those two lines deleted — 61 tests, 2
+failures, both new assertions, each reading `accepted` where the rollback must
+refuse an original off the screen. `red-step5-corrections.log` is
+`TilingEngineMembershipTransactionTests` with the labelling fix absent —
+44 tests, 2 failures, both assertions of the seeded-labelling test, which
+reads `structural` where the bound is an app-declared minimum. The raise
+test passes in that run: it pins behaviour that was already there, which is
+the point of adding it. Green: `green-step5-corrections.log`.
+
 ## Step 6 — aggregate safety, narrowed away from size rounding, 2026-09-13
 
 Step 6 of the sizing and recovery plan, and the last of them. Nothing about
@@ -1371,7 +1478,44 @@ that lands a fraction off a half-point target — not room to round into.
   alongside the two size tolerances, and `correspondenceOnly` still means
   overlap between restored originals is reported on the result instead of
   judged. Containment is not correspondence: an original that sits off the
-  screen is still refused.
+  screen is still refused. Both of those assignments are exercised:
+  `testRestorationAggregateRulesAreUnchangedByTheSlack` now rolls back through
+  `restore` and through `applyRestoration` with a candidate configuration
+  whose slack is twelve, and an original two points off the screen is still
+  refused on each path. Deleting either assignment fails that test.
+
+At a small gap the budget is small, and that is worth stating plainly because
+it is where this change bites:
+
+| gap | erosion budget | what a neighbour may round into |
+| --- | --- | --- |
+| 0 | 0 | nothing; the overlap check allows one point on an axis |
+| 1 | 0 | nothing |
+| 2 | 1 | one point |
+| 8 (shipping) | 7 | seven points |
+| 21 and up | 20 | twenty points, the per-window allowance |
+
+Gap 1 is not reachable from the settings slider, which runs 0 to 32 in steps
+of two, so it only happens in a hand-edited config. Gap 0 is reachable and is
+the case to think about: with no gap to erode, two tiles sharing a full edge
+are judged by the overlap check alone, which rejects an intersection over one
+point on both axes. A cell-quantizing app rounding two points into its
+neighbour is refused, and a full-edge neighbour always shares the other axis,
+so verified tiling with such an app at gap 0 is effectively out of reach. That
+is deliberate — at gap 0 there is nothing between the two windows but the
+slack — but it is a real narrowing, not a rounding detail.
+
+The number to watch on the live check comes out of the same arithmetic.
+Terminal.app rounds up to whole character cells, and the rounding this repo
+measured is +8 points in height (the 3424x1301 target that read back as
+3425x1309, in "Cell-rounded overshoot acceptance" above). At the shipping 8 pt
+gap the budget is 7. So a Terminal that rounds +8 on the axis of a top/bottom
+split lands at exactly zero separation from its neighbour and is refused by
+one point. The same Terminal in a left/right split rounds into its own padding
+on an axis nobody shares and passes. This is the first thing to look for if
+tiling gets worse after this commit: a top/bottom split holding a terminal,
+refused where it used to be published. It is also the reason to revert this
+commit on its own if it fires, rather than reaching for a tolerance.
 
 At gap 8 the old rules accepted up to twelve points of real overlap before
 `gapViolation` and up to twenty before `overlap`; the new ones accept none of
@@ -1410,7 +1554,8 @@ target-size matching ones:
   screen edge and one point past it accepted, four points past rejected.
 - `...testHalfPointTargetsPassAggregateSafetyOnIntegerReadback` — the
   `(8,41,744,416.5)` shape from evidence `05`, answered on the integer.
-- `...testRestorationAggregateRulesAreUnchangedByTheSlack` and
+- `...testRestorationAggregateRulesAreUnchangedByTheSlack` — correspondence,
+  containment, and the two places that build the rollback's own slack — and
   `...testRestorationContainmentStaysTightAtOnePoint`.
 - `FrameReadbackPollerTests.testAggregateRejectionOnRoundedFramesTeachesNoMinimum`
   — sixteen points of rounding through the gap: rejected, and no conflict,
@@ -1442,5 +1587,11 @@ This commit can be reverted on its own. It touches
 `FrameSizingTransaction.swift`, one line of `FrameReadbackPoller.swift`, tests
 and docs, and nothing else. The live check before it is trusted: a Terminal
 beside a Safari docked and undocked, three and four tiles, and windows at the
-screen edges — a layout that used to be published and is now refused will show
-up as a restored rollback, not as a silent overlap.
+screen edges. What a newly refused layout is guaranteed is that it is not
+published. Whether its rollback verifies is a separate question and depends on
+the app taking its original frames back.
+`testRoundedUpWindowThatReachesItsNeighbourIsNotPublished` does not pin more
+than that: its trace quantizes every write, restoration writes included, so
+the rollback lands 16 points wide as well and the outcome is `.degraded`. The
+test asserts the candidate reason (`overlap(521, 522)`) and that no minimum
+was learned, and wildcards the restoration fields.

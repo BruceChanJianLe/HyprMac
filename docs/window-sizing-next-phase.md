@@ -74,7 +74,7 @@ The current two-pass design is a sound starting point, but it does not yet provi
 3. On unsettled or undersized outcomes, some paths cache or reapply the requested frame. Internal geometry can therefore diverge from the actual window.
 4. The adjusted second pass is applied without a second readback. The final state is assumed after only the first candidate was observed.
 5. The wait budget is accumulated from requested sleep intervals, not measured with a monotonic clock around AX calls. Slow synchronous AX calls can exceed the nominal deadline substantially.
-6. The 20-point frame tolerance is larger than the default 8-point gap. Two individually tolerated errors can erase a gap or create overlap.
+6. The 20-point frame tolerance is larger than the default 8-point gap. Two individually tolerated errors can erase a gap or create overlap. (Addressed on 2026-09-13: the pairwise and containment checks use `FrameSizingConfiguration.aggregateSafetySlack`, one point, instead of the size tolerance, so a positive gap always keeps a point of real separation. Per-window matching still allows twenty. See "Step 6 — aggregate safety, narrowed away from size rounding" in `docs/window-sizing-verification.md`.)
 7. Learned minimum sizes are observations tied to a window's prior state. Content, mode, toolbars, and app updates can change the accepted floor, so the cache must remain a heuristic.
 
 Earlier overlap fixes in `docs/investigation/failed-fix-attempts.patch` caused false rejections, floating cascades, flicker, and latency. The new phase should avoid open-ended retries, global reshuffles, and treating learned sizes as permanent truth.

@@ -129,9 +129,22 @@ edges to the slack, measured against the unpadded screen rect, so a
 rounded-up window grows into its own outer padding and stops there. Two
 frames that overlap by more than the slack on both axes are rejected however
 well each matched its own target. Gap erosion is capped at
-`min(sizeOvershootTolerance, gap - slack)`: a rounded-up window may eat a
-positive gap down to one point and no further, contact is a `gapViolation`,
-past contact is an `overlap`, and a zero gap asks for no separation at all.
+`min(sizeOvershootTolerance, max(0, gap - slack))`: a rounded-up window may
+eat a positive gap down to one point and no further, contact is a
+`gapViolation`, past contact is an `overlap`, and a zero gap asks for no
+separation at all.
+
+The budget follows the gap, so a small gap leaves little room to round into.
+Gap 2 tolerates one point; gap 1 tolerates none, and is only reachable from a
+hand-edited config, since the settings slider runs 0 to 32 in steps of two. At
+gap 0 there is no gap to erode and the pair falls to the overlap check, which
+rejects an intersection over one point on both axes — and two tiles sharing a
+full edge always share the other axis. So an app that quantizes its frame to
+character cells will not hold a verified tiling at gap 0. At the shipping 8 pt
+gap the budget is 7, which is one point short of the +8 height rounding this
+repo measured from Terminal.app: a terminal on the shared axis of a top/bottom
+split is refused, while the same rounding in a left/right split goes into the
+window's own padding and passes.
 
 Each attempt has a 0.36-second monotonic deadline and a 12-sample limit.
 Time inside AX calls counts toward that deadline. Individual AX calls use
@@ -397,8 +410,10 @@ the tenants is the point: the bound that refuses an incoming window is
 usually a tenant's, not its own. The answer is `.fits`, `.revalidatable` —
 memory alone refused, so one real attempt would settle it — or `.refused`,
 which the bypass did not change. Both checks read the same tree under the
-same structural rules: depth, slot geometry, topology, and the workspace
-count limit are all still in force, and no frame is written either way.
+same structural rules — depth, slot geometry and topology — and no frame is
+written either way. The workspace count limit is not one of them. That
+check lives in the caller, `WorkspaceOrchestrator.moveToWorkspace`, and it
+runs only when the destination workspace is hidden.
 Priming can still record a new `seeded` entry and asking about an untiled
 workspace still creates its empty tree — both inherited from the plain fit
 check — but no `observed` bound is touched.
@@ -607,7 +622,7 @@ refactor plan. The action-method cluster (`tileWindows`,
 `prepareTileLayout`, `addWindow`, `removeWindow`, `applyResize`,
 `swapWindows`, `toggleSplit`, `resizeInDirection`,
 `prepareSwapLayout`, `prepareToggleSplitLayout`,
-`forceInsertWindow`, `canFitWindow`) plus verified drag capture/drop and
+`forceInsertWindow`, `canFitWindows`) plus verified drag capture/drop and
 `retile` make up the engine's orchestration surface;
 extracting them would require splitting the engine into a thin
 orchestrator over a sibling type, which produces ceremony without

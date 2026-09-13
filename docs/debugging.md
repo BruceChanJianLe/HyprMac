@@ -237,7 +237,11 @@ fit outlook: incoming=<id> ws<N> verdict=<fits|revalidatable|refused> refusals=<
 
 `source` is where the bound that said no came from. `learned` is
 `observed` provenance — the app actually refused that size once. `seeded`
-is an `AXMinimumSize` value or a per-bundle guess nothing has tested.
+is an `AXMinimumSize` value or a per-bundle guess nothing has tested, and it
+covers a bound `MinSizeMemory` holds no entry for: priming refuses a value at
+or above `usableMinSizeMaxPx` or one that is not finite, and the fit check
+still reads it off the window's own mirror. That is the app talking, not
+geometry.
 `structural` is the depth ceiling, or a slot too small for the gap alone
 whatever the memory says. `needIncoming` or `needTenant` reading `0x0`
 means that side has no recorded bound on the axis in question.

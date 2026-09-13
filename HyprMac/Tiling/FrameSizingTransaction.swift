@@ -631,9 +631,10 @@ struct FrameSizingAttempt {
     /// one matched its own target.
     ///
     /// The gap keeps `aggregateSafetySlack` of itself, so erosion is capped
-    /// at `min(sizeOvershootTolerance, gap - aggregateSafetySlack)` and two
-    /// tiles never come into contact. A zero gap asks for no separation at
-    /// all and leaves the pair to the overlap check.
+    /// at `min(sizeOvershootTolerance, max(0, gap - aggregateSafetySlack))`
+    /// and two tiles never come into contact. A gap no wider than the slack
+    /// leaves nothing to erode, and a zero gap asks for no separation at all;
+    /// either way the pair is left to the overlap check.
     ///
     /// Under `correspondenceOnly` the pairwise checks stop being verdicts.
     /// A rollback asks each window to go back where it was; whether those
