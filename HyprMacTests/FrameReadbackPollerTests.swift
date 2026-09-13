@@ -176,4 +176,82 @@ final class FrameReadbackPollerTests: XCTestCase {
         XCTAssertEqual(result.verdict, .unknown(.superseded))
         XCTAssertEqual(window.cachedFrame, newer)
     }
+
+    func testEachEntryPointReportsItsPhase() {
+        let window = makeWindow(id: 50)
+        let target = CGRect(x: 0, y: 0, width: 300, height: 400)
+        var time: TimeInterval = 0
+        let io = FrameSizingIO(
+            setMessagingTimeout: { _, _ in .success },
+            writeSize: { _, _, _ in .success },
+            writePosition: { _, _, _ in .success },
+            readPosition: { _, _ in (.success, target.origin) },
+            readSize: { _, _ in (.success, target.size) },
+            now: { time }, sleep: { time += $0 }, currentGeneration: { 1 }
+        )
+        let poller = FrameReadbackPoller(generation: { 1 }, ioFactory: { _, _ in io })
+        let usable = CGRect(x: 0, y: 0, width: 1000, height: 800)
+
+        XCTAssertEqual(poller.applyLayout([(window, target)], usableFrame: usable,
+                                          gap: 8, generation: 1).progress.phase, .candidate)
+        XCTAssertEqual(poller.applyFinal([(window, target)], usableFrame: usable,
+                                         gap: 8, generation: 1).progress.phase, .adjusted)
+        XCTAssertEqual(poller.applyRestoration([(window, target)], usableFrame: usable,
+                                               gap: 8, generation: 1).progress.phase, .restoration)
+    }
+
+    func testClassifiedResultCarriesWriteProgress() {
+        let window = makeWindow(id: 51)
+        let target = CGRect(x: 0, y: 0, width: 300, height: 400)
+        let oversized = CGRect(x: 0, y: 0, width: 600, height: 400)
+        var time: TimeInterval = 0
+        let io = FrameSizingIO(
+            setMessagingTimeout: { _, _ in .success },
+            writeSize: { _, _, _ in .success },
+            writePosition: { _, _, _ in .success },
+            readPosition: { _, _ in (.success, oversized.origin) },
+            readSize: { _, _ in (.success, oversized.size) },
+            now: { time }, sleep: { time += $0 }, currentGeneration: { 1 }
+        )
+        let result = FrameReadbackPoller(generation: { 1 }, ioFactory: { _, _ in io })
+            .applyLayout([(window, target)],
+                         usableFrame: CGRect(x: 0, y: 0, width: 1000, height: 800),
+                         gap: 8, generation: 1)
+
+        XCTAssertEqual(result.verdict, .rejected(.geometryMismatch(51)))
+        XCTAssertEqual(result.progress.targetIDs, [51])
+        XCTAssertEqual(result.progress.possiblyWritten, [51])
+        XCTAssertEqual(result.progress.writesCompleted, [51])
+        XCTAssertTrue(result.progress.readbackComplete)
+        XCTAssertEqual(result.observations.count, 1)
+    }
+
+    func testSupersededEntryStillNamesItsPhaseAndTargets() {
+        let window = makeWindow(id: 52)
+        let io = FrameSizingIO(
+            setMessagingTimeout: { _, _ in .success },
+            writeSize: { _, _, _ in .success },
+            writePosition: { _, _, _ in .success },
+            readPosition: { _, _ in (.success, .zero) },
+            readSize: { _, _ in (.success, CGSize(width: 100, height: 100)) },
+            now: { 0 }, sleep: { _ in }, currentGeneration: { 9 }
+        )
+        let result = FrameReadbackPoller(generation: { 9 }, ioFactory: { _, _ in io })
+            .applyRestoration([(window, CGRect(x: 0, y: 0, width: 100, height: 100))],
+                              usableFrame: CGRect(x: 0, y: 0, width: 500, height: 500),
+                              gap: 8, generation: 3)
+
+        XCTAssertEqual(result.verdict, .unknown(.superseded))
+        XCTAssertEqual(result.progress.phase, .restoration)
+        XCTAssertEqual(result.progress.generation, 3)
+        XCTAssertEqual(result.progress.targetIDs, [52])
+        XCTAssertTrue(result.progress.possiblyWritten.isEmpty)
+    }
+
+    func testAxisNamingCoversBothSingleAndDoubleConflicts() {
+        XCTAssertEqual(FrameReadbackPoller.axis(width: true, height: true), "width+height")
+        XCTAssertEqual(FrameReadbackPoller.axis(width: true, height: false), "width")
+        XCTAssertEqual(FrameReadbackPoller.axis(width: false, height: true), "height")
+        XCTAssertEqual(FrameReadbackPoller.axis(width: false, height: false), "none")
+    }
 }

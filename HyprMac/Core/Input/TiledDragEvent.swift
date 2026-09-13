@@ -21,6 +21,13 @@ struct TiledDragEvent {
         return hypot(release.x - press.x, release.y - press.y) >= threshold
     }
 
+    /// Pointer travel from the press point, or nil when there was no
+    /// press point to measure from. Diagnostics only.
+    static func travel(from press: CGPoint?, to release: CGPoint) -> CGFloat? {
+        guard let press else { return nil }
+        return hypot(release.x - press.x, release.y - press.y)
+    }
+
     static func release(event: NSEvent, primaryHeight: CGFloat,
                         sawDragEvent: Bool) -> TiledDragRelease {
         TiledDragRelease(pointer: point(event: event, primaryHeight: primaryHeight),

@@ -75,6 +75,13 @@ struct FrameSizingConfiguration {
     var perCallTimeout: TimeInterval = 0.1
 }
 
+/// Which pass produced a sizing result. `capture` only reads; `candidate`
+/// is the first try at a layout, `adjusted` the retry after min-size ratio
+/// adjustment, `restoration` the rollback to captured original frames.
+enum FrameSizingPhase: String, Equatable {
+    case capture, candidate, adjusted, restoration
+}
+
 struct FrameSizingAttempt {
     struct Target: Equatable {
         let windowID: CGWindowID
@@ -87,9 +94,38 @@ struct FrameSizingAttempt {
         case unknown(FrameSizingFailure)
     }
 
+    /// What an attempt is known to have done, carried on every result so a
+    /// caller can tell "nothing went out" from "three setters went out and
+    /// we never read them back".
+    ///
+    /// `possiblyWritten` records that a setter was issued — it is evidence
+    /// of a possible mutation, never proof the app applied the frame.
+    /// `writesCompleted` means all three frame setters returned success for
+    /// that window; the cleanup that follows carries its own error.
+    struct Progress: Equatable {
+        var phase: FrameSizingPhase = .candidate
+        var generation: UInt64 = 0
+        var targetIDs: [CGWindowID] = []
+        var possiblyWritten: Set<CGWindowID> = []
+        var writesCompleted: Set<CGWindowID> = []
+        /// every target produced a readable frame
+        var readbackComplete = false
+        /// every target reached the configured stable sample count
+        var readbackStable = false
+    }
+
+    /// Phase durations for the attempt trace. Not part of the typed
+    /// result — nothing decides on these, they only get logged.
+    struct Timings {
+        var write: TimeInterval = 0
+        var read: TimeInterval = 0
+        var settle: TimeInterval = 0
+    }
+
     struct Result: Equatable {
         let verdict: Verdict
         let actualFrames: [CGWindowID: CGRect]
+        var progress = Progress()
     }
 
     let io: FrameSizingIO
@@ -98,109 +134,145 @@ struct FrameSizingAttempt {
     func captureFrames(windowIDs: [CGWindowID], generation: UInt64) -> Result {
         let started = io.now()
         var frames: [CGWindowID: CGRect] = [:]
+        let progress = Progress(phase: .capture, generation: generation,
+                                targetIDs: windowIDs.sorted())
+        // a capture never writes, so only the readback fields move
+        func out(_ result: Result) -> Result {
+            var stamped = progress
+            stamped.readbackComplete = windowIDs.allSatisfy { result.actualFrames[$0] != nil }
+            return Result(verdict: result.verdict, actualFrames: result.actualFrames,
+                          progress: stamped)
+        }
         guard io.currentGeneration() == generation else {
-            return Result(verdict: .unknown(.superseded), actualFrames: frames)
+            return out(Result(verdict: .unknown(.superseded), actualFrames: frames))
         }
         var seen = Set<CGWindowID>()
         for windowID in windowIDs where !seen.insert(windowID).inserted {
-            return Result(verdict: .unknown(.duplicateWindowID(windowID)), actualFrames: frames)
+            return out(Result(verdict: .unknown(.duplicateWindowID(windowID)), actualFrames: frames))
         }
         for windowID in windowIDs.sorted() {
             guard io.currentGeneration() == generation else {
-                return Result(verdict: .unknown(.superseded), actualFrames: frames)
+                return out(Result(verdict: .unknown(.superseded), actualFrames: frames))
             }
             guard io.now() - started < configuration.deadline else {
-                return Result(verdict: .unknown(.deadlineExceeded), actualFrames: frames)
+                return out(Result(verdict: .unknown(.deadlineExceeded), actualFrames: frames))
             }
             let timeoutError = io.setMessagingTimeout(windowID, configuration.perCallTimeout)
             guard io.currentGeneration() == generation else {
-                return Result(verdict: .unknown(.superseded), actualFrames: frames)
+                return out(Result(verdict: .unknown(.superseded), actualFrames: frames))
             }
             guard io.now() - started < configuration.deadline else {
-                return Result(verdict: .unknown(.deadlineExceeded), actualFrames: frames)
+                return out(Result(verdict: .unknown(.deadlineExceeded), actualFrames: frames))
             }
             guard timeoutError == .success else {
                 let failure: FrameSizingFailure = timeoutError == .invalidUIElement
                     ? .windowUnavailable(windowID) : .readFailed(windowID, timeoutError)
-                return Result(verdict: .unknown(failure), actualFrames: frames)
+                return out(Result(verdict: .unknown(failure), actualFrames: frames))
             }
             let (positionError, position) = io.readPosition(windowID, configuration.perCallTimeout)
             guard io.currentGeneration() == generation else {
-                return Result(verdict: .unknown(.superseded), actualFrames: frames)
+                return out(Result(verdict: .unknown(.superseded), actualFrames: frames))
             }
             guard io.now() - started < configuration.deadline else {
-                return Result(verdict: .unknown(.deadlineExceeded), actualFrames: frames)
+                return out(Result(verdict: .unknown(.deadlineExceeded), actualFrames: frames))
             }
             guard positionError == .success, let position else {
                 let failure: FrameSizingFailure = positionError == .invalidUIElement
                     ? .windowUnavailable(windowID) : .readFailed(windowID, positionError)
-                return Result(verdict: .unknown(failure), actualFrames: frames)
+                return out(Result(verdict: .unknown(failure), actualFrames: frames))
             }
             let sizeTimeoutError = io.setMessagingTimeout(windowID, configuration.perCallTimeout)
             guard io.currentGeneration() == generation else {
-                return Result(verdict: .unknown(.superseded), actualFrames: frames)
+                return out(Result(verdict: .unknown(.superseded), actualFrames: frames))
             }
             guard io.now() - started < configuration.deadline else {
-                return Result(verdict: .unknown(.deadlineExceeded), actualFrames: frames)
+                return out(Result(verdict: .unknown(.deadlineExceeded), actualFrames: frames))
             }
             guard sizeTimeoutError == .success else {
                 let failure: FrameSizingFailure = sizeTimeoutError == .invalidUIElement
                     ? .windowUnavailable(windowID) : .readFailed(windowID, sizeTimeoutError)
-                return Result(verdict: .unknown(failure), actualFrames: frames)
+                return out(Result(verdict: .unknown(failure), actualFrames: frames))
             }
             let (sizeError, size) = io.readSize(windowID, configuration.perCallTimeout)
             guard io.currentGeneration() == generation else {
-                return Result(verdict: .unknown(.superseded), actualFrames: frames)
+                return out(Result(verdict: .unknown(.superseded), actualFrames: frames))
             }
             guard io.now() - started < configuration.deadline else {
-                return Result(verdict: .unknown(.deadlineExceeded), actualFrames: frames)
+                return out(Result(verdict: .unknown(.deadlineExceeded), actualFrames: frames))
             }
             guard sizeError == .success, let size else {
                 let failure: FrameSizingFailure = sizeError == .invalidUIElement
                     ? .windowUnavailable(windowID) : .readFailed(windowID, sizeError)
-                return Result(verdict: .unknown(failure), actualFrames: frames)
+                return out(Result(verdict: .unknown(failure), actualFrames: frames))
             }
             let frame = CGRect(origin: position, size: size)
             guard valid(frame) else {
-                return Result(verdict: .unknown(.invalidFrame(windowID)), actualFrames: frames)
+                return out(Result(verdict: .unknown(.invalidFrame(windowID)), actualFrames: frames))
             }
             frames[windowID] = frame
         }
-        return Result(verdict: .accepted, actualFrames: frames)
+        return out(Result(verdict: .accepted, actualFrames: frames))
     }
 
     /// Traced wrapper around the attempt. Every line is `.debug` and built
     /// inside `hyprLog`'s autoclosure, so nothing is formatted unless the
     /// file log or the trace tier is on.
     func apply(targets: [Target], usableFrame: CGRect, gap: CGFloat,
-               generation: UInt64) -> Result {
+               generation: UInt64, phase: FrameSizingPhase = .candidate) -> Result {
         let started = io.now()
-        let result = perform(targets: targets, usableFrame: usableFrame, gap: gap,
-                             generation: generation)
-        hyprLog(.debug, .tiling, "frame attempt: wids=\(targets.map(\.windowID)) "
+        let (result, timings) = perform(targets: targets, usableFrame: usableFrame, gap: gap,
+                                        generation: generation, phase: phase)
+        let elapsed = io.now() - started
+        let progress = result.progress
+        hyprLog(.debug, .tiling, "frame attempt: phase=\(phase.rawValue) gen=\(generation) "
+                + "wids=\(targets.map(\.windowID)) "
                 + "verdict=\(traced(result.verdict)) "
-                + "elapsed=\(String(format: "%.0f", (io.now() - started) * 1000))ms")
+                + "written=\(Self.ids(progress.possiblyWritten)) "
+                + "complete=\(Self.ids(progress.writesCompleted)) "
+                + "readback=\(progress.readbackComplete ? "complete" : "partial")/"
+                + "\(progress.readbackStable ? "stable" : "unstable") "
+                + "write=\(Self.ms(timings.write)) read=\(Self.ms(timings.read)) "
+                + "settle=\(Self.ms(timings.settle)) elapsed=\(Self.ms(elapsed)) "
+                + "headroom=\(Self.ms(configuration.deadline - elapsed))")
         return result
     }
 
     private func perform(targets: [Target], usableFrame: CGRect, gap: CGFloat,
-                         generation: UInt64) -> Result {
+                         generation: UInt64,
+                         phase: FrameSizingPhase) -> (Result, Timings) {
+        var progress = Progress(phase: phase, generation: generation,
+                                targetIDs: targets.map(\.windowID))
+        var stableCounts: [CGWindowID: Int] = [:]
+        var timings = Timings()
+
+        // every exit carries the progress and the phase durations as they
+        // stand, so a failure is as readable as a success
+        func out(_ result: Result) -> (Result, Timings) {
+            var stamped = progress
+            stamped.readbackComplete = targets.allSatisfy { result.actualFrames[$0.windowID] != nil }
+            stamped.readbackStable = targets.allSatisfy {
+                stableCounts[$0.windowID, default: 0] >= configuration.requiredStableSamples
+            }
+            return (Result(verdict: result.verdict, actualFrames: result.actualFrames,
+                           progress: stamped), timings)
+        }
+
         guard io.currentGeneration() == generation else {
-            return Result(verdict: .unknown(.superseded), actualFrames: [:])
+            return out(Result(verdict: .unknown(.superseded), actualFrames: [:]))
         }
         guard !targets.isEmpty else {
-            return Result(verdict: .accepted, actualFrames: [:])
+            return out(Result(verdict: .accepted, actualFrames: [:]))
         }
         var seen = Set<CGWindowID>()
         for target in targets {
             guard seen.insert(target.windowID).inserted else {
-                return Result(verdict: .rejected(.duplicateWindowID(target.windowID)), actualFrames: [:])
+                return out(Result(verdict: .rejected(.duplicateWindowID(target.windowID)), actualFrames: [:]))
             }
             let frame = target.frame
             guard frame.origin.x.isFinite, frame.origin.y.isFinite,
                   frame.size.width.isFinite, frame.size.height.isFinite,
                   frame.size.width > 0, frame.size.height > 0 else {
-                return Result(verdict: .rejected(.invalidFrame(target.windowID)), actualFrames: [:])
+                return out(Result(verdict: .rejected(.invalidFrame(target.windowID)), actualFrames: [:]))
             }
         }
         let started = io.now()
@@ -213,30 +285,42 @@ struct FrameSizingAttempt {
         }
 
         for target in targets {
-            if let result = write(target, actualFrames: actualFrames,
-                                  checkpoint: interruption) { return result }
+            let result = write(target, actualFrames: actualFrames, progress: &progress,
+                               checkpoint: interruption)
+            timings.write = io.now() - started
+            if let result { return out(result) }
         }
+        timings.write = io.now() - started
+        let readStarted = io.now()
 
         var stableAnchors: [CGWindowID: CGRect] = [:]
-        var stableCounts: [CGWindowID: Int] = [:]
         for attemptIndex in 0..<configuration.maximumAttempts {
             for target in targets {
                 if let result = read(target, actualFrames: &actualFrames,
-                                     checkpoint: interruption) { return result }
+                                     checkpoint: interruption) {
+                    timings.read = io.now() - readStarted
+                    return out(result)
+                }
                 guard let frame = actualFrames[target.windowID] else {
-                    return Result(verdict: .unknown(.windowUnavailable(target.windowID)),
-                                  actualFrames: actualFrames)
+                    timings.read = io.now() - readStarted
+                    return out(Result(verdict: .unknown(.windowUnavailable(target.windowID)),
+                                      actualFrames: actualFrames))
                 }
                 // only off-target samples are logged, and "off" means not
-                // exactly what we asked for — a cell-rounded size sits inside
-                // the verdict's tolerance and is precisely what we want to see.
+                // exactly what we asked for. onTarget says whether the
+                // verdict's tolerant matcher is happy with that sample —
+                // a half-point target read back on the integer is off by
+                // 0.5 and on target.
                 if frame != target.frame {
                     hyprLog(.debug, .tiling, "frame readback: wid=\(target.windowID) "
+                            + "phase=\(phase.rawValue) "
                             + "sample=\(attemptIndex + 1) actual=\(traced(frame)) "
                             + "delta=(\(traced(frame.width - target.frame.width)),"
                             + "\(traced(frame.height - target.frame.height))) "
                             + "dx=\(traced(frame.minX - target.frame.minX)),"
-                            + "dy=\(traced(frame.minY - target.frame.minY))")
+                            + "dy=\(traced(frame.minY - target.frame.minY)) "
+                            + "onTarget=\(matches(frame, target.frame)) "
+                            + "at=\(Self.ms(io.now() - started))")
                 }
                 if let anchor = stableAnchors[target.windowID], stable(frame, anchor) {
                     stableCounts[target.windowID, default: 1] += 1
@@ -250,18 +334,22 @@ struct FrameSizingAttempt {
                     actualFrames[target.windowID].map { matches($0, target.frame) } ?? false
                 }
                 if allOnTarget || io.now() - started >= configuration.minimumMismatchSettle {
-                    return validateFrames(targets: targets, actualFrames: actualFrames,
-                                          usableFrame: usableFrame, gap: gap)
+                    timings.read = io.now() - readStarted
+                    return out(validateFrames(targets: targets, actualFrames: actualFrames,
+                                              usableFrame: usableFrame, gap: gap))
                 }
             }
             if attemptIndex + 1 < configuration.maximumAttempts {
                 io.sleep(configuration.pollInterval)
+                timings.settle += configuration.pollInterval
                 if let failure = interruption() {
-                    return Result(verdict: .unknown(failure), actualFrames: actualFrames)
+                    timings.read = io.now() - readStarted
+                    return out(Result(verdict: .unknown(failure), actualFrames: actualFrames))
                 }
             }
         }
-        return Result(verdict: .unknown(.attemptsExhausted), actualFrames: actualFrames)
+        timings.read = io.now() - readStarted
+        return out(Result(verdict: .unknown(.attemptsExhausted), actualFrames: actualFrames))
     }
 
     private func prepare(_ windowID: CGWindowID,
@@ -290,25 +378,41 @@ struct FrameSizingAttempt {
     }
 
     private func write(_ target: Target, actualFrames: [CGWindowID: CGRect],
+                       progress: inout Progress,
                        checkpoint: () -> FrameSizingFailure?) -> Result? {
+        let phase = progress.phase
+        var steps: [String] = []
+        // one line per window listing every setter that went out, with its
+        // raw AX code and how long it took
+        func traceSteps(_ complete: Bool) {
+            hyprLog(.debug, .tiling, "frame write: wid=\(target.windowID) phase=\(phase.rawValue) "
+                    + "steps=\(steps.isEmpty ? "none" : steps.joined(separator: ",")) "
+                    + "complete=\(complete)")
+        }
         hyprLog(.debug, .tiling,
-                "frame write: wid=\(target.windowID) target=\(traced(target.frame))")
+                "frame write: wid=\(target.windowID) phase=\(phase.rawValue) "
+                + "target=\(traced(target.frame))")
         if let failure = checkpoint() {
+            traceSteps(false)
             return Result(verdict: .unknown(failure), actualFrames: actualFrames)
         }
         let token: AXFrameWriteBatch.Token
         switch io.beginFrameWrite(target.windowID, configuration.perCallTimeout, checkpoint) {
         case let .ready(value): token = value
         case let .failed(error):
+            traceSteps(false)
             let failure: FrameSizingFailure = error == .invalidUIElement
                 ? .windowUnavailable(target.windowID) : .writeFailed(target.windowID, error)
             return result(for: failure, actualFrames: actualFrames)
         case let .failedAfterCleanup(primary, cleanup):
+            traceSteps(false)
             return beginCleanupFailure(target.windowID, primary: primary, cleanup: cleanup,
                                        actualFrames: actualFrames)
         case let .interrupted(reason):
+            traceSteps(false)
             return Result(verdict: .unknown(reason), actualFrames: actualFrames)
         case let .interruptedAfterBegin(value, reason):
+            traceSteps(false)
             return end(value, windowID: target.windowID,
                        preserving: Result(verdict: .unknown(reason), actualFrames: actualFrames),
                        checkpoint: checkpoint)
@@ -321,15 +425,17 @@ struct FrameSizingAttempt {
         ]
         for (label, operation) in writes {
             if let failure = prepare(target.windowID, checkpoint: checkpoint) {
+                traceSteps(false)
                 return end(token, windowID: target.windowID,
                            preserving: result(for: failure, actualFrames: actualFrames),
                            checkpoint: checkpoint)
             }
+            // mark possible mutation before the setter runs, error or not:
+            // an AX write that comes back with a code may still have landed
+            progress.possiblyWritten.insert(target.windowID)
+            let startedStep = io.now()
             let error = operation()
-            if error != .success {
-                hyprLog(.debug, .tiling,
-                        "frame write: wid=\(target.windowID) \(label) err=\(error.rawValue)")
-            }
+            steps.append("\(label):\(error.rawValue)/\(Self.ms(io.now() - startedStep))")
             let primary: Result
             if let failure = checkpoint() {
                 primary = Result(verdict: .unknown(failure), actualFrames: actualFrames)
@@ -339,9 +445,14 @@ struct FrameSizingAttempt {
             } else {
                 continue
             }
+            traceSteps(false)
             return end(token, windowID: target.windowID, preserving: primary,
                        checkpoint: checkpoint)
         }
+        // all three setters returned success. record that before cleanup —
+        // a cleanup error is its own failure and does not unwrite them.
+        progress.writesCompleted.insert(target.windowID)
+        traceSteps(true)
         let ended = end(token, windowID: target.windowID,
                         preserving: Result(verdict: .accepted, actualFrames: actualFrames),
                         checkpoint: checkpoint)
@@ -425,6 +536,14 @@ struct FrameSizingAttempt {
     // sub-pixel value still shows its fraction.
     private func traced(_ value: CGFloat) -> String {
         String(format: "%g", Double(value))
+    }
+
+    private static func ms(_ seconds: TimeInterval) -> String {
+        String(format: "%.0f", seconds * 1000) + "ms"
+    }
+
+    private static func ids(_ set: Set<CGWindowID>) -> String {
+        "\(set.sorted())"
     }
 
     private func traced(_ rect: CGRect) -> String {
@@ -537,11 +656,12 @@ struct FrameSizingTransaction {
         strictAttempt.configuration.sizeOvershootTolerance = strictAttempt.configuration.sizeTolerance
         strictAttempt.configuration.sizeUndershootTolerance = strictAttempt.configuration.sizeTolerance
         return strictAttempt.apply(targets: targets, usableFrame: usableFrame,
-                                   gap: gap, generation: generation)
+                                   gap: gap, generation: generation, phase: .restoration)
     }
 
     func apply(targets: [FrameSizingAttempt.Target], originalFrames: [CGWindowID: CGRect],
-               usableFrame: CGRect, gap: CGFloat, generation: UInt64) -> Outcome {
+               usableFrame: CGRect, gap: CGFloat, generation: UInt64,
+               phase: FrameSizingPhase = .candidate) -> Outcome {
         guard Set(targets.map(\.windowID)) == Set(originalFrames.keys) else {
             return .degraded(candidateReason: .windowUnavailable(
                 targets.first(where: { originalFrames[$0.windowID] == nil })?.windowID ?? 0),
@@ -549,7 +669,7 @@ struct FrameSizingTransaction {
                 actualFrames: [:])
         }
         let candidate = attempt.apply(targets: targets, usableFrame: usableFrame,
-                                      gap: gap, generation: generation)
+                                      gap: gap, generation: generation, phase: phase)
         switch candidate.verdict {
         case .accepted:
             return .accepted(actualFrames: candidate.actualFrames)

@@ -125,6 +125,9 @@ class TilingEngine {
     /// Called before any layout pass so size constraints are fresh.
     func primeMinimumSizes(_ windows: [HyprWindow]) { minSizes.prime(windows) }
 
+    /// Everything `MinSizeMemory` currently believes, for the state dump.
+    var knownMinimumSizes: [CGWindowID: CGSize] { minSizes.snapshot }
+
     /// Drop any stored min-size memory for `windowID`. Called when a
     /// window is forgotten by the discovery layer.
     func forgetMinimumSize(windowID: CGWindowID) { minSizes.forget(windowID: windowID) }

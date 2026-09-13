@@ -91,7 +91,9 @@ class HyprWindow: Equatable, Hashable {
         }
     }
 
-    private func axMinimumSize() -> CGSize? {
+    /// `AXMinimumSize`/`AXMinSize` when the app exposes a usable one.
+    /// Most do not — `MinSizeMemory` learns the real floor from readback.
+    func axMinimumSize() -> CGSize? {
         for attribute in ["AXMinimumSize", "AXMinSize"] {
             var value: AnyObject?
             guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,

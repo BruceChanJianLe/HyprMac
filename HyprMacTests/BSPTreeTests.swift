@@ -349,4 +349,54 @@ final class BSPTreeTests: XCTestCase {
         tree.adjustForMinSizes(conflicts, in: defaultRect, gap: defaultGap, padding: defaultPadding)
         XCTAssertEqual(tree.root.splitRatio, 0.5)
     }
+
+    /// Fable's triage case from the sizing plan: one window with a minimum
+    /// on both axes, where each axis has to come from a different ancestor.
+    /// Width can only come from the root's horizontal split, height only
+    /// from the inner vertical one.
+    ///
+    /// It does not work today, so the test records what happens and skips.
+    /// The width pass widens the right column, which makes the inner node's
+    /// rect wider than tall; `BSPNode.direction(for:)` then reports
+    /// horizontal, so the height pass finds no vertical ancestor and does
+    /// nothing — and the flipped inner split halves the width the first
+    /// pass had just won. Fixing it is a separate bounded change; see
+    /// docs/window-sizing-verification.md.
+    func testAdjustForMinSizesSatisfiesBothAxesThroughDifferentAncestors() throws {
+        let tree = BSPTree()
+        let a = makeWindow(id: 1)
+        let b = makeWindow(id: 2)
+        let c = makeWindow(id: 3)
+        tree.insert(a)
+        tree.insert(b)
+        tree.insert(c)
+
+        let before = Dictionary(uniqueKeysWithValues:
+            tree.layout(in: defaultRect, gap: defaultGap, padding: defaultPadding)
+                .map { ($0.0.windowID, $0.1) })
+        let needed = CGSize(width: 1200, height: 800)
+        tree.adjustForMinSizes([(window: c, actual: needed)], in: defaultRect,
+                               gap: defaultGap, padding: defaultPadding)
+        let after = Dictionary(uniqueKeysWithValues:
+            tree.layout(in: defaultRect, gap: defaultGap, padding: defaultPadding)
+                .map { ($0.0.windowID, $0.1) })
+        let actual = try XCTUnwrap(after[3])
+        let context = "needed=\(needed) before=\(before[3]!) after=\(actual) "
+            + "root=\(tree.root.splitRatio) inner=\(tree.root.right!.splitRatio)"
+
+        // flip to true once the ordering is fixed and this becomes a
+        // plain regression test again
+        let bothAxesAreSatisfiable = false
+        try XCTSkipUnless(bothAxesAreSatisfiable,
+            "two-axis adjustForMinSizes ordering, known follow-up. "
+            + "tree=[1 | [2 over 3]] rect=\(defaultRect) gap=\(defaultGap) "
+            + "padding=\(defaultPadding) \(context). "
+            + "width 596 < 1200 because the inner split flipped to horizontal "
+            + "after the width pass; the height pass then adjusted nothing.")
+
+        XCTAssertGreaterThanOrEqual(actual.width + TilingConfig.minSizeConflictSlackPx,
+                                    needed.width, "width unsatisfied: " + context)
+        XCTAssertGreaterThanOrEqual(actual.height + TilingConfig.minSizeConflictSlackPx,
+                                    needed.height, "height unsatisfied: " + context)
+    }
 }

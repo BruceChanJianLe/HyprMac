@@ -726,7 +726,8 @@ class WindowManager {
             floating: stateCache.floatingWindowIDs,
             trees: trees,
             scratchpad: scratchpad.members,
-            knownCount: stateCache.knownWindowIDs.count
+            knownCount: stateCache.knownWindowIDs.count,
+            minima: tilingEngine.knownMinimumSizes
         )
 
         hyprLog(.notice, .lifecycle, "state dump (\(reason))")
@@ -867,12 +868,17 @@ class WindowManager {
                 // a .leftMouseDragged fires on a pixel of hand jitter, so the flag
                 // alone turns ordinary clicks into drag transactions. pointer
                 // travel from the press point is what actually decides.
+                let isDrag = TiledDragEvent.isDrag(from: self.mouseDownPointCG,
+                                                   to: releasePoint,
+                                                   sawDragEvent: shouldDetectDrag)
+                let travel = TiledDragEvent.travel(from: self.mouseDownPointCG, to: releasePoint)
+                hyprLog(.debug, .mouse, "gesture: sawDragEvent=\(shouldDetectDrag) "
+                        + "travel=\(travel.map { String(format: "%.1f", Double($0)) } ?? "?") "
+                        + "threshold=\(TilingConfig.dragThresholdPx) drag=\(isDrag)")
                 let release = TiledDragEvent.release(
                     event: event,
                     primaryHeight: primaryHeight,
-                    sawDragEvent: TiledDragEvent.isDrag(from: self.mouseDownPointCG,
-                                                        to: releasePoint,
-                                                        sawDragEvent: shouldDetectDrag))
+                    sawDragEvent: isDrag)
                 self.tiledDragHandler.handleMouseUp(release)
             }
             self?.mouseButtonDown = false
@@ -2553,6 +2559,8 @@ private extension WindowManager {
 
     private func completeTiledDrag(_ completion: TiledDragCompletion) {
         let affected = completion.snapshot.context.memberIDs
+        hyprLog(.debug, .tiling, "tiled drag result: dragged=\(completion.snapshot.draggedID) "
+                + "members=\(affected.sorted()) outcome=\(Self.outcomeName(completion.outcome))")
         switch completion.outcome {
         case let .rejectedRestored(reason, frames):
             hyprLog(.notice, .tiling, "tiled drag rejected and restored: reason=\(reason) actual=\(frames)")
@@ -2595,6 +2603,16 @@ private extension WindowManager {
             reportTiledDragFailure(completion)
         case nil:
             break
+        }
+    }
+
+    private static func outcomeName(_ outcome: TiledDragDropOutcome) -> String {
+        switch outcome {
+        case .ignored: return "ignored"
+        case .committed: return "committed"
+        case .rejectedRestored: return "rejectedRestored"
+        case .degraded: return "degraded"
+        case .superseded: return "superseded"
         }
     }
 

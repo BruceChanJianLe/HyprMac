@@ -3,13 +3,14 @@
 // asserted line for line without AppKit or a live tree.
 
 import CoreGraphics
+import Foundation
 
 /// Renders one on-demand state dump as a list of log lines.
 ///
 /// Order is fixed: one line per enabled screen, then each workspace
 /// 1...9 that has at least one assignment (ascending), then the
-/// scratchpad, then cache totals. Workspaces with no assignment are
-/// omitted entirely.
+/// scratchpad, then learned minima, then recovery state, then cache
+/// totals. Workspaces with no assignment are omitted entirely.
 ///
 /// Window titles never enter these lines — ids only.
 struct StateDumpFormatter {
@@ -34,6 +35,15 @@ struct StateDumpFormatter {
     let trees: [Int: [CGWindowID]]
     let scratchpad: Set<CGWindowID>
     let knownCount: Int
+    /// Window → learned or seeded min size, from `MinSizeMemory`.
+    var minima: [CGWindowID: CGSize] = [:]
+    /// Windows waiting on a bounded recovery attempt. Nothing produces
+    /// these yet — the line is here so the shape is stable once
+    /// admission recovery lands.
+    var pendingRecovery: Set<CGWindowID> = []
+    /// Windows whose on-screen geometry was never verified. Same: no
+    /// producer yet, the line reports what exists.
+    var unverifiedGeometry: Set<CGWindowID> = []
 
     private static let workspaceRange = 1...9
 
@@ -58,6 +68,11 @@ struct StateDumpFormatter {
         }
 
         out.append("scratchpad=\(Self.list(scratchpad.sorted()))")
+        out.append("minima=" + "[" + minima.keys.sorted().map {
+            "\($0):" + Self.size(minima[$0]!)
+        }.joined(separator: ", ") + "]")
+        out.append("recovery pending=\(Self.list(pendingRecovery.sorted()))"
+            + " unverified=\(Self.list(unverifiedGeometry.sorted()))")
         out.append("known=\(knownCount) hidden=\(hidden.count)"
             + " reserved=\(reserved.count) floating=\(floating.count)")
         return out
@@ -65,5 +80,9 @@ struct StateDumpFormatter {
 
     private static func list(_ ids: [CGWindowID]) -> String {
         "[" + ids.map(String.init).joined(separator: ", ") + "]"
+    }
+
+    private static func size(_ size: CGSize) -> String {
+        String(format: "%gx%g", Double(size.width), Double(size.height))
     }
 }

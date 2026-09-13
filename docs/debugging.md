@@ -151,20 +151,58 @@ silently — one `.notice` says so and the app runs unchanged.
 `FrameSizingAttempt` traces every AX frame write and every readback at
 `.debug` under `category: tiling`, so the file log shows what was asked
 for and what actually came back — not just the final `verified layout`
-verdict. Four line names:
+verdict. Every line carries `phase=`, one of `capture`, `candidate`,
+`adjusted` or `restoration`: `candidate` is the first try at a layout,
+`adjusted` the retry after min-size ratio adjustment, `restoration` the
+rollback to captured original frames. Four line names:
 
-- `frame write: wid=<id> target=(x,y,w,h)` — once per window, before its
-  writes. The target is the frame the layout asked for.
-- `frame write: wid=<id> <size|position|size2> err=<raw>` — one per
-  individual AX write that did not succeed, with the raw `AXError` code.
+- `frame write: wid=<id> phase=<…> target=(x,y,w,h)` — once per window,
+  before its writes. The target is the frame the layout asked for.
+- `frame write: wid=<id> phase=<…> steps=<label>:<raw>/<n>ms,… complete=<bool>`
+  — once per window after its writes, listing every AX setter that went
+  out with its raw `AXError` code (0 is success) and how long it took.
   `size2` is the second size write of the resize-move-resize pattern.
-- `frame readback: wid=<id> sample=<n> actual=(x,y,w,h) delta=(dw,dh)
-  dx=<>,dy=<>` — one per settle-loop sample that did not land exactly on
-  target. `delta` is size (actual minus target), `dx`/`dy` position.
-  Cell-quantizing apps (terminals) show a steady non-zero delta here
-  even on an accepted attempt, because the verdict tolerates one cell.
-- `frame attempt: wids=[…] verdict=<…> elapsed=<n>ms` — once at the end
-  of every attempt, the restore attempt after a rejection included.
+  `complete=true` means all three setters returned success; it is
+  evidence that the writes were issued, not proof the app applied them.
+  A window that never got past the EnhancedUI bracket logs `steps=none`.
+- `frame readback: wid=<id> phase=<…> sample=<n> actual=(x,y,w,h)
+  delta=(dw,dh) dx=<>,dy=<> onTarget=<bool> at=<n>ms` — one per
+  settle-loop sample that did not land exactly on target. `delta` is
+  size (actual minus target), `dx`/`dy` position, `at` the time since
+  the attempt started. `onTarget` is the verdict's own tolerant matcher:
+  a dwindle split lands on a half point and the app answers on the
+  integer, so the sample is off by 0.5 and `onTarget=true`. A
+  cell-quantizing app (terminals) shows a steady non-zero delta with
+  `onTarget=true` for the same reason. `onTarget=false` on a stable
+  sample is what actually costs the settle floor.
+- `frame attempt: phase=<…> gen=<n> wids=[…] verdict=<…> written=[…]
+  complete=[…] readback=<complete|partial>/<stable|unstable>
+  write=<n>ms read=<n>ms settle=<n>ms elapsed=<n>ms headroom=<n>ms` —
+  once at the end of every attempt, the restore attempt after a
+  rejection included. `written` is every window a setter was issued
+  for, `complete` every window whose three setters all returned
+  success. `write` covers the write pass, `read` the settle loop,
+  `settle` just the sleeps inside it, and `headroom` is what was left
+  of the 0.36 s deadline.
+
+`FrameReadbackPoller` logs one `min evidence:` line per window it treats
+as a min-size conflict, under the same category and tier:
+`min evidence: wid=<id> phase=<…> target=<w>x<h> actual=<w>x<h>
+axis=<width|height|width+height> written=<bool> complete=<bool>
+stable=<bool> source=readback`. `MinSizeMemory` then logs what it did
+with that evidence under `category: lifecycle`: `min-size record:
+wid=<id> old=<w>x<h> new=<w>x<h> actual=<w>x<h> axis=<…> source=<readback|seeded>`
+(with `refused=unusable` and no `new=` when the value fails the sanity
+check) and `min-size lower: wid=<id> old=… new=… actual=… axis=…
+source=accepted`.
+
+`WindowManager` logs one `gesture:` line per left-mouse release under
+`category: mouse`: `gesture: sawDragEvent=<bool> travel=<n>
+threshold=8 drag=<bool>`. macOS fires `.leftMouseDragged` on a pixel of
+hand jitter, so `sawDragEvent=true drag=false` is an ordinary click that
+travelled less than the threshold. A completed tiled drag adds
+`tiled drag result: dragged=<id> members=[…] outcome=<…>` under
+`category: tiling`.
 
 `AXFrameWriteBatch` logs its AXEnhancedUserInterface toggle at the same
 tier, and only when it fails: `enhanced ui: pid=<pid> begin disable
@@ -194,16 +232,26 @@ screen=S34C65xT visible=ws2
 ws1 home=Built-in Retina Display visible=true assigned=[104, 118] hidden=[] reserved=[] floating=[118] tree(Built-in Retina Display)=[104]
 ws2 home=S34C65xT visible=true assigned=[221] hidden=[] reserved=[] floating=[] tree(S34C65xT)=[221]
 scratchpad=[319]
+minima=[104:400x260, 221:1496x841]
+recovery pending=[] unverified=[]
 known=4 hidden=0 reserved=0 floating=1
 ```
 
 Screens first, then each workspace 1–9 that has at least one window
-(empty workspaces are omitted), then the scratchpad, then cache
-totals. `tree(...)` is the leaf membership of that workspace's BSP
-tree on its home screen — compare it against `assigned` minus
-`floating` minus `hidden` to spot a window that holds a workspace slot
-but is missing from the tree. Window ids only; titles never enter the
-dump.
+(empty workspaces are omitted), then the scratchpad, then learned
+minima, then recovery state, then cache totals. `tree(...)` is the leaf
+membership of that workspace's BSP tree on its home screen — compare it
+against `assigned` minus `floating` minus `hidden` to spot a window that
+holds a workspace slot but is missing from the tree. Window ids only;
+titles never enter the dump.
+
+`minima` is everything `MinSizeMemory` believes, learned from readback
+or seeded from `AXMinimumSize`; a window refused by a fit check should
+have an entry here explaining why. `recovery pending` and `unverified`
+report windows waiting on a bounded recovery attempt and windows whose
+on-screen geometry was never verified. Nothing produces either yet, so
+both are always empty today — the lines are here so the shape does not
+move when they do.
 
 ## `--probe-frame` (debug builds)
 
@@ -213,17 +261,39 @@ a size nobody asked for and you want to know whether the app or the
 layout is responsible.
 
 ```
---probe-frame <windowID> <x> <y> <w> <h> [--order size-position-size|position-size|size-only] [--out <path>]
+--probe-frame <windowID> <x> <y> <w> <h> [--order size-position-size|position-size|size-only] [--out <path>] [--wrapper] [--restore]
 ```
 
-It reads position and size, performs the writes in the requested order
-with a 1.0 s messaging timeout, waits 0.3 s, reads back, and records
-every screen's `frame` and `visibleFrame` in both NS and CG
-coordinates. The report goes to `--out` (default
-`/tmp/hyprmac-probe-frame.txt`). Exit status is 0 on a clean run and 1
-when any AX call failed — the raw error code is in the file either way.
-The default order, `size-position-size`, is the one
+It reads the AX minimum size if the app exposes one, reads position and
+size, performs the writes in the requested order with a 1.0 s messaging
+timeout, reads back twice — at 0.3 s and at 1.0 s after the last write,
+each line stamped with its own `t=`— and records every screen's `frame`
+and `visibleFrame` in both NS and CG coordinates. The report goes to
+`--out` (default `/tmp/hyprmac-probe-frame.txt`). Exit status is 0 on a
+clean run and 1 when any AX call failed — the raw error code is in the
+file either way. The default order, `size-position-size`, is the one
 `FrameSizingAttempt` uses.
+
+Two opt-in flags, both off by default so an old invocation behaves
+exactly as before:
+
+- `--wrapper` brackets the writes in the same `AXEnhancedUserInterface`
+  toggle production uses (`AXFrameWriteBatch`), so a probe and a real
+  layout differ only in timing. The report gains `wrapper begin=…` and
+  `wrapper end=…` lines, and a failed begin or end fails the probe.
+  Without it the probe writes raw, as it always has.
+- `--restore` writes the frame read before the probe back at the end,
+  in the resize-move-resize order, then reads it back. Its lines are
+  prefixed `restore` and it carries its own `restore result=ok|error`.
+  A failed restoration fails the whole probe on its own, so a good
+  measurement with a window left in the wrong place is never reported
+  as a clean run. With no readable baseline the probe refuses to
+  restore rather than guessing.
+
+`ax minimum=` reports `AXMinimumSize`/`AXMinSize` when the app exposes a
+usable one and `unreadable` otherwise. Most apps do not expose one —
+that is why `MinSizeMemory` learns the floor from readback — so
+`unreadable` is normal and does not fail the probe.
 
 Launch it through Launch Services, not by exec'ing the binary: the
 Accessibility grant belongs to the bundle, and a direct exec from SSH

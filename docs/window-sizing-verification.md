@@ -309,8 +309,11 @@ has at most one candidate application and one restoration application.
 
 Acceptance requires two stable complete-frame observations, anchored within
 0.01 AX point. Position and size each matched within one AX point at the time
-of this checkpoint; the size tolerances have since widened (see "Cell-rounded
-overshoot acceptance" below). The
+of this checkpoint. **Superseded.** The size tolerances widened to twenty
+points in both directions on 2026-09-12 (see "Cell-rounded overshoot
+acceptance" below), and only position still uses the one-point bound. Any
+later statement about what "matched" means is the current one; this sentence
+describes the state at this checkpoint only. The
 usable-screen boundary is strict; outer padding comes from target geometry
 and therefore inherits the position/size tolerances. Every affected pair is
 checked for positive-area overlap and configured gap erosion. Gap comparison
@@ -676,3 +679,77 @@ its own is never a rejection and `gapViolation` survives only as a tighter
 overlap check firing above twelve points on both axes. This is the behaviour
 the pre-93bfedf build had. Pairwise safety at the shipping gap rests on the
 overlap check and the strict one-point position match.
+
+## Diagnostics and write progress (2026-09-13)
+
+Step 1 of the sizing and recovery plan. It changes no geometry, no timeout,
+no tolerance and no learning rule; it makes what already happens legible.
+
+What the code now carries:
+
+- Every `FrameSizingAttempt.Result` carries a `Progress`: the phase
+  (`capture`, `candidate`, `adjusted`, `restoration`), the generation, the
+  target ids, the ids a setter was issued for, the ids whose three frame
+  setters all returned success, and whether the readback was complete and
+  stable. The mark goes on **before** each setter, including one that comes
+  back with an error, because an AX write that reports a code may still have
+  landed. Completion is recorded before the EnhancedUI cleanup runs, and a
+  cleanup error stays a separate failure rather than unwriting it. Write
+  completion is evidence that setters were issued, never proof that the app
+  applied the frames.
+- `FrameReadbackPoller` passes the phase through, so `applyLayout`,
+  `applyFinal` and `applyRestoration` are distinguishable in a log, and
+  returns the same progress on its own result.
+- Traces gained phase, raw AX codes and per-step durations on the write
+  lines, `onTarget` and a timestamp on the readback lines, and
+  write/read/settle durations plus deadline headroom on the attempt line.
+  Line shapes are in `docs/debugging.md`.
+- The state dump gained `minima` (everything `MinSizeMemory` believes) and a
+  `recovery pending=… unverified=…` line. Nothing produces recovery or
+  unverified state yet; the line reports empty sets so its shape is fixed
+  before steps 3 and 4 fill it in.
+- `--probe-frame` gained `--wrapper` (the production `AXFrameWriteBatch`
+  bracket), `--restore` (write the pre-probe frame back, with its own
+  readback and its own `restore result=`), the AX minimum size when
+  readable, and a second timestamped read at 1.0 s. Defaults and existing
+  arguments are unchanged. Any failed AX call fails the probe, restoration
+  included.
+
+### The half-point trace line was misleading, not slow
+
+A dwindle split produces targets like `(8,41,744,416.5)` and every readback
+lands on the integer. The trace called every such sample off target, which
+read as a window that never settles. It is not: `matches` has tolerated the
+half point since before this checkpoint, so the attempt takes the
+`allOnTarget` branch and accepts on the second stable sample, without waiting
+the 0.24 s mismatch floor. `FrameSizingTransactionTests`
+`testHalfPointTargetIsAcceptedBeforeTheMismatchFloor` pins that: the verdict
+is `accepted`, the observed frame is the integer one, and the fake clock is
+still short of `minimumMismatchSettle` when it returns. The readback line now
+carries `onTarget=true` so the log says the same thing.
+
+### Identified follow-up: two-axis `adjustForMinSizes` ordering
+
+`BSPTreeTests.testAdjustForMinSizesSatisfiesBothAxesThroughDifferentAncestors`
+is the isolated regression the plan asked for. **It fails, so it is marked
+with an `XCTSkip` carrying the recorded input and output, and the algorithm is
+left alone** — fixing it is a separate bounded change, not something to fold
+into a diagnostics commit.
+
+Input: three windows inserted in order into a tree, giving root `[1 | [2 over
+3]]`; rect `(0,0,1920,1080)`, gap 8, padding 8. Window 3 reports a minimum of
+`1200x800`, which needs width from the root's horizontal split and height
+from the inner vertical one.
+
+Output: before the adjustment window 3 is at `(964,544,948,528)`. After it,
+root `splitRatio` is `0.36764705882352944`, the inner `splitRatio` is
+unchanged at `0.5`, and window 3 lays out at `(1316,8,596,1064)` — 596 points
+wide against a 1200-point minimum.
+
+Mechanism: the width pass biases the root split so the right column is about
+1400 wide. That makes the inner node's rect wider than tall, and
+`BSPNode.direction(for:)` picks the longer axis, so the inner split flips
+from vertical to horizontal. The height pass then walks up from the leaf,
+finds no vertical ancestor, and adjusts nothing — and the flipped inner split
+halves the width the first pass had just won. The two passes read geometry
+the first pass has already changed.

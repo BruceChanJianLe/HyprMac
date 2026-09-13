@@ -25,6 +25,9 @@ import Cocoa
 class MinSizeMemory {
     private var known: [CGWindowID: CGSize] = [:]
 
+    /// Everything currently remembered, for the state dump.
+    var snapshot: [CGWindowID: CGSize] { known }
+
     /// Sync this map and the window's observedMinSize. If we already have a
     /// recorded bound, push it onto the window; otherwise pick up a usable
     /// AX-seeded value as our starting estimate.
@@ -34,6 +37,8 @@ class MinSizeMemory {
                 window.observedMinSize = knownSize
             } else if let seeded = window.observedMinSize, isUsable(seeded) {
                 known[window.windowID] = seeded
+                hyprLog(.debug, .lifecycle, "min-size record: wid=\(window.windowID) "
+                        + "old=none new=\(Self.text(seeded)) axis=width+height source=seeded")
             }
         }
     }
@@ -58,9 +63,18 @@ class MinSizeMemory {
             width: widthConflict ? max(existing.width, actual.width) : existing.width,
             height: heightConflict ? max(existing.height, actual.height) : existing.height
         )
-        guard isUsable(updated) else { return }
+        let axis = FrameReadbackPoller.axis(width: widthConflict, height: heightConflict)
+        guard isUsable(updated) else {
+            hyprLog(.debug, .lifecycle, "min-size record: wid=\(window.windowID) "
+                    + "old=\(Self.text(existing)) actual=\(Self.text(actual)) axis=\(axis) "
+                    + "source=readback refused=unusable")
+            return
+        }
         known[window.windowID] = updated
         window.observedMinSize = updated
+        hyprLog(.debug, .lifecycle, "min-size record: wid=\(window.windowID) "
+                + "old=\(Self.text(existing)) new=\(Self.text(updated)) "
+                + "actual=\(Self.text(actual)) axis=\(axis) source=readback")
     }
 
     /// An accepted readback at least `lowerMinSizeAcceptedDeltaPx` smaller than
@@ -73,14 +87,21 @@ class MinSizeMemory {
             || actual.height < knownSize.height - TilingConfig.lowerMinSizeAcceptedDeltaPx else { return }
         let updated = CGSize(width: min(knownSize.width, actual.width),
                              height: min(knownSize.height, actual.height))
+        let axis = FrameReadbackPoller.axis(width: updated.width < knownSize.width,
+                                            height: updated.height < knownSize.height)
         if isUsable(updated) {
             known[window.windowID] = updated
             window.observedMinSize = updated
+            hyprLog(.debug, .lifecycle, "min-size lower: wid=\(window.windowID) "
+                    + "old=\(Self.text(knownSize)) new=\(Self.text(updated)) "
+                    + "actual=\(Self.text(actual)) axis=\(axis) source=accepted")
         } else {
             known.removeValue(forKey: window.windowID)
             window.observedMinSize = nil
+            hyprLog(.debug, .lifecycle, "min-size lower: wid=\(window.windowID) "
+                    + "old=\(Self.text(knownSize)) new=none "
+                    + "actual=\(Self.text(actual)) axis=\(axis) source=accepted")
         }
-        hyprLog(.debug, .lifecycle, "lowered min-size for '\(window.title ?? "?")' → \(Int(updated.width))x\(Int(updated.height))")
     }
 
     /// Drop everything we knew about these windows and clear their
@@ -91,6 +112,10 @@ class MinSizeMemory {
             known.removeValue(forKey: window.windowID)
             window.observedMinSize = nil
         }
+    }
+
+    private static func text(_ size: CGSize) -> String {
+        String(format: "%gx%g", Double(size.width), Double(size.height))
     }
 
     /// Reject NaN, infinities, fully-zero sizes, and bogus AX sentinels.

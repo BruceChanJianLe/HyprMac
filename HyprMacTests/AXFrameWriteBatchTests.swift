@@ -219,4 +219,15 @@ final class AXFrameWriteBatchTests: XCTestCase {
         XCTAssertEqual(result, .failedAfterCleanup(primary: .cannotComplete,
                                                     cleanup: .failed(.notImplemented)))
     }
+
+    func testNoopTokenNeedsNoRawCallsToEnd() {
+        let fake = FakeRaw()
+        let batch = AXFrameWriteBatch(raw: fake.operationsAdapter())
+
+        // the default FrameSizingIO and the probe's plain mode both end a
+        // noop token — that must not touch the app element
+        XCTAssertEqual(batch.end(.noop(windowID: 91), timeout: 0.1, checkpoint: { nil }),
+                       .restored)
+        XCTAssertTrue(fake.operations.isEmpty)
+    }
 }
