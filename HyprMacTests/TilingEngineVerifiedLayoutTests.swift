@@ -35,6 +35,43 @@ final class TilingEngineVerifiedLayoutTests: XCTestCase {
         XCTAssertEqual(trace.restorationStarts, 0)
     }
 
+    func testCellRoundedUpWindowTilesWithoutRestoringSiblings() {
+        let first = makeWindow(id: 511)
+        let second = makeWindow(id: 512)
+        let tree = BSPTree()
+        XCTAssertTrue(tree.insert(first, maxDepth: 3))
+        XCTAssertTrue(tree.insert(second, maxDepth: 3))
+
+        let usable = CGRect(x: 0, y: 0, width: 1000, height: 700)
+        let originals: [CGWindowID: CGRect] = [
+            511: CGRect(x: 40, y: 40, width: 440, height: 620),
+            512: CGRect(x: 520, y: 40, width: 440, height: 620)
+        ]
+        // whole-cell rounding the other way: one point wider, eight taller
+        let trace = QuantizingSizingTrace(frames: originals, quantizedWindowID: 511,
+                                          quantizationDelta: CGSize(width: 1, height: 8))
+        let engine = TilingEngine(
+            displayManager: DisplayManager(),
+            frameSizingIOFactory: { _, generation in trace.io(generation: generation) }
+        )
+
+        let generation = engine.beginLayoutGeneration()
+        let outcome = engine.applyVerifiedLayout(tree, in: usable, generation: generation)
+
+        guard case let .accepted(actualFrames) = outcome else {
+            return XCTFail("expected accepted rounded-up layout, got \(outcome)")
+        }
+        let targets = Dictionary(uniqueKeysWithValues: tree.layout(
+            in: usable, gap: engine.gapSize, padding: engine.outerPadding
+        ).map { ($0.0.windowID, $0.1) })
+        XCTAssertEqual(actualFrames[511]?.width, targets[511].map { $0.width + 1 })
+        XCTAssertEqual(actualFrames[511]?.height, targets[511].map { $0.height + 8 })
+        XCTAssertEqual(actualFrames[512], targets[512])
+        XCTAssertEqual(trace.restorationStarts, 0)
+        XCTAssertNil(first.observedMinSize)
+        XCTAssertEqual(tree.allWindows.map(\.windowID).sorted(), [511, 512])
+    }
+
     func testAdjustedPassFailureRestoresOriginalFramesAndRatiosOnce() {
         let first = makeWindow(id: 1)
         let second = makeWindow(id: 2)
@@ -89,6 +126,7 @@ final class TilingEngineVerifiedLayoutTests: XCTestCase {
 
         XCTAssertEqual(reasons.candidate, .writeFailed(1, .cannotComplete))
         XCTAssertEqual(reasons.restoration, .writeFailed(1, .notImplemented))
+        XCTAssertTrue(reasons.attempted)
     }
 
     func testKeyboardSwapReturnsFalseAndRestoresTreeAfterUnknownRead() throws {
@@ -377,6 +415,7 @@ final class TilingEngineVerifiedLayoutTests: XCTestCase {
 
         XCTAssertEqual(reasons.candidate, expectedReason)
         XCTAssertEqual(reasons.restoration, .outsideUsableFrame(401))
+        XCTAssertFalse(reasons.attempted, "the pre-check must not have run restoration")
         XCTAssertTrue(fixture.trace.hiddenPositionWrites.isEmpty,
                       "invalid offscreen originals must be rejected before recovery writes")
         XCTAssertTrue(fixture.trace.frames.values.allSatisfy { fixture.usable.contains($0) },
@@ -454,11 +493,11 @@ private enum OrdinaryEntryPoint: CaseIterable {
 
 private func degradedReasons(
     _ outcome: TilingEngine.LayoutApplicationOutcome
-) -> (candidate: FrameSizingFailure?, restoration: FrameSizingFailure?) {
-    guard case let .degraded(candidateReason, restorationReason, _) = outcome else {
-        return (nil, nil)
+) -> (candidate: FrameSizingFailure?, restoration: FrameSizingFailure?, attempted: Bool) {
+    guard case let .degraded(candidateReason, restorationReason, attempted, _) = outcome else {
+        return (nil, nil, false)
     }
-    return (candidateReason, restorationReason)
+    return (candidateReason, restorationReason, attempted)
 }
 
 private final class SizingTrace {
@@ -525,10 +564,13 @@ private final class QuantizingSizingTrace {
     private var hasWritten = false
     private var candidateWasRead = false
     private let quantizedWindowID: CGWindowID
+    private let quantizationDelta: CGSize
 
-    init(frames: [CGWindowID: CGRect], quantizedWindowID: CGWindowID) {
+    init(frames: [CGWindowID: CGRect], quantizedWindowID: CGWindowID,
+         quantizationDelta: CGSize = CGSize(width: -6, height: 0)) {
         self.frames = frames
         self.quantizedWindowID = quantizedWindowID
+        self.quantizationDelta = quantizationDelta
     }
 
     func io(generation: @escaping () -> UInt64) -> FrameSizingIO {
@@ -539,7 +581,10 @@ private final class QuantizingSizingTrace {
                 hasWritten = true
                 var frame = frames[id] ?? .zero
                 frame.size = size
-                if id == quantizedWindowID { frame.size.width -= 6 }
+                if id == quantizedWindowID {
+                    frame.size.width += quantizationDelta.width
+                    frame.size.height += quantizationDelta.height
+                }
                 frames[id] = frame
                 return .success
             },

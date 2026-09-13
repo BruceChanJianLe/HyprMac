@@ -308,7 +308,9 @@ a bounded number of calls and may finish after the sizing deadline. A drop
 has at most one candidate application and one restoration application.
 
 Acceptance requires two stable complete-frame observations, anchored within
-0.01 AX point. Position and size must each match within one AX point. The
+0.01 AX point. Position and size each matched within one AX point at the time
+of this checkpoint; the size tolerances have since widened (see "Cell-rounded
+overshoot acceptance" below). The
 usable-screen boundary is strict; outer padding comes from target geometry
 and therefore inherits the position/size tolerances. Every affected pair is
 checked for positive-area overlap and configured gap erosion. Gap comparison
@@ -489,12 +491,12 @@ claims against source and adds regression cases before changing behavior.
 Confirmed and corrected:
 
 - Small downward size rounding was rejected by symmetric one-point matching.
-  Candidate acceptance now allows at most eight points of undershoot per axis.
-  Position and overshoot remain limited to one point; containment, aggregate
-  overlap and configured gaps still validate actual frames. Eight points is a
-  deliberately bounded compatibility allowance tested with a six-by-four-point
-  rounding example, not a measured universal terminal cell size. Every rollback
-  uses the original one-point size tolerance, including drag preflight rollback.
+  Candidate acceptance at the time allowed at most eight points of undershoot
+  per axis, with position and overshoot still limited to one point.
+  (Superseded on 2026-09-12: both size directions now allow twenty points, and
+  the aggregate checks allow the same. See "Cell-rounded overshoot acceptance"
+  below.) Every rollback uses the original one-point size tolerance, including
+  drag preflight rollback.
 - Ordinary membership changes and adjusted ratios could become live before AX
   acceptance. Normal tiling now applies a private candidate and publishes it
   only after acceptance. Failed attempts keep the prior tree. Unknown/degraded
@@ -618,3 +620,59 @@ hold is recorded now, and a failure is retried on the next poll.
 - After the fix: `hidden window <id> verified closed — releasing its workspace
   reservation` and `destroy recheck: closed window not yet gone from the
   snapshot — re-polling`.
+
+### Cell-rounded overshoot acceptance (2026-09-12)
+
+Terminal.app rounds its frame to whole character cells and rounds up. On the
+3440-wide ultrawide a full-workspace target of about 3424x1301 reads back as
+3425x1309. Candidate matching allowed one point of overshoot, so every layout
+holding a Terminal window ended `geometryMismatch`. The readback poller then
+read the height as a min-size conflict — the +1 width did not cross the old
+`actual > target + 1` threshold, the +8 height did — so `MinSizeMemory` raised
+Terminal's height floor to 1309 on the strength of one rounded row, and the
+fit check routed the window off its workspace.
+
+Corrections:
+
+- Candidate size matching now allows twenty points in both directions
+  (`TilingConfig.frameToleranceXPx`). Position stays at one point.
+- The pairwise checks allow the same twenty points. Overlap is rejected only
+  when the intersection exceeds it on both axes, and gap erosion only when both
+  axes fall more than it below the gap.
+- Containment allows the same twenty points past maxX/maxY. The origin keeps
+  the strict one-point rule.
+- Restoration pins overshoot, undershoot, and size tolerance back to one point,
+  so a rollback still has to land exactly.
+- A min-size conflict is measured against the overshoot tolerance, so cell
+  rounding no longer teaches a bogus minimum.
+- A degraded layout publishes its candidate membership only when the candidate
+  was written and restoration was never tried — the parked-originals pre-check.
+  Those frames are still on screen, so keeping the prior tree hid the windows
+  from focus navigation and replayed the failure on every retile. Once
+  restoration has run the windows are back at or near their originals whatever
+  its verdict, so the prior tree is kept; the outcome carries
+  `restorationAttempted` rather than inferring this from the reason. A degraded
+  layout that wrote nothing keeps the prior tree as before.
+- The pre-check branch also copies the adjusted pass's split ratios onto the
+  live tree before returning, because those are the ratios that produced the
+  frames left on screen.
+
+Containment is bounded the same way, at the far edges only. The actual
+origin must sit inside the usable frame within the one-point position
+tolerance, and maxX/maxY may run past it by up to the overshoot tolerance.
+Containment is checked against the unpadded screen rect while targets are
+inset by `outerPadding`, so without this an edge window's headroom would be
+the smaller of twenty points and the configured padding — a user padding
+below the app's cell height would reject the same layout again, as
+`outsideUsableFrame` instead of `geometryMismatch`. Restoration pins the
+overshoot tolerance to one point, so a rollback still has to land inside.
+
+What this deliberately accepts, as the price of tiling cell-quantizing apps:
+a cell-rounded window may overlap its neighbour by up to
+`sizeOvershootTolerance - gap` points, which is twelve at the shipping 8 pt
+gap, and may extend up to `sizeOvershootTolerance` points past the usable
+frame at maxX/maxY. At that gap `gap - tol` is negative, so gap erosion on
+its own is never a rejection and `gapViolation` survives only as a tighter
+overlap check firing above twelve points on both axes. This is the behaviour
+the pre-93bfedf build had. Pairwise safety at the shipping gap rests on the
+overlap check and the strict one-point position match.

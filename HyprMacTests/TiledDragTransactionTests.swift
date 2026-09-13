@@ -722,14 +722,16 @@ final class TiledDragTransactionTests: XCTestCase {
         let fake = FakeAX(frames: [:])
         let attempt = FrameSizingAttempt(io: fake.factory(windows: [:], current: { 1 }))
         var frames = Dictionary(uniqueKeysWithValues: targets.map { ($0.windowID, $0.frame) })
+        // a 28 pt gap less the 20 pt cell allowance puts the floor at the
+        // windows' own 8 pt separation, so only the epsilon is under test
         frames[2]!.origin.x -= 0.00005
         XCTAssertEqual(attempt.validateFrames(targets: targets, actualFrames: frames,
                                                usableFrame: CGRect(x: 0, y: 0, width: 300, height: 100),
-                                               gap: 8).verdict, .accepted)
+                                               gap: 28).verdict, .accepted)
         frames[2]!.origin.x -= 0.00015
         XCTAssertEqual(attempt.validateFrames(targets: targets, actualFrames: frames,
                                                usableFrame: CGRect(x: 0, y: 0, width: 300, height: 100),
-                                               gap: 8).verdict, .rejected(.gapViolation(1, 2)))
+                                               gap: 28).verdict, .rejected(.gapViolation(1, 2)))
     }
 
     func testValidatorAcceptsOnePointPositionAndSizeButRejectsMore() {
@@ -747,22 +749,24 @@ final class TiledDragTransactionTests: XCTestCase {
                        .rejected(.geometryMismatch(1)))
     }
 
-    func testValidatorRejectsAnyPositiveAreaOverlap() {
-        let targets = [
-            FrameSizingAttempt.Target(windowID: 1,
-                frame: CGRect(x: 0, y: 0, width: 100, height: 100)),
-            FrameSizingAttempt.Target(windowID: 2,
-                frame: CGRect(x: 100, y: 0, width: 100, height: 100))
-        ]
-        let frames: [CGWindowID: CGRect] = [
-            1: targets[0].frame,
-            2: CGRect(x: 99.99999, y: 0, width: 100, height: 100)
-        ]
+    func testValidatorRejectsOverlapBeyondTheCellAllowance() {
         let fake = FakeAX(frames: [:])
-        let result = FrameSizingAttempt(io: fake.factory(windows: [:], current: { 1 }))
-            .validateFrames(targets: targets, actualFrames: frames,
-                            usableFrame: CGRect(x: 0, y: 0, width: 300, height: 100), gap: 0)
-        XCTAssertEqual(result.verdict, .rejected(.overlap(1, 2)))
+        let attempt = FrameSizingAttempt(io: fake.factory(windows: [:], current: { 1 }))
+        func verdict(secondX: CGFloat) -> FrameSizingAttempt.Verdict {
+            let targets = [
+                FrameSizingAttempt.Target(windowID: 1,
+                    frame: CGRect(x: 0, y: 0, width: 100, height: 100)),
+                FrameSizingAttempt.Target(windowID: 2,
+                    frame: CGRect(x: secondX, y: 0, width: 100, height: 100))
+            ]
+            let frames = Dictionary(uniqueKeysWithValues: targets.map { ($0.windowID, $0.frame) })
+            return attempt.validateFrames(targets: targets, actualFrames: frames,
+                                          usableFrame: CGRect(x: 0, y: 0, width: 300, height: 100),
+                                          gap: 0).verdict
+        }
+        // exactly one cell of overlap on both axes is the allowance
+        XCTAssertEqual(verdict(secondX: 80), .accepted)
+        XCTAssertEqual(verdict(secondX: 79.99999), .rejected(.overlap(1, 2)))
     }
 
     func testDropReleaseHeightChangeOverThresholdCommitsResize() {

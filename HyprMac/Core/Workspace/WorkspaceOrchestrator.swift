@@ -195,9 +195,14 @@ final class WorkspaceOrchestrator {
             }
 
             if workspaceManager.screenForWorkspace(number) == nil {
-                // exclude hidden windows (minimized/closed but app still running) from count
-                let wids = workspaceManager.windowIDs(onWorkspace: number).subtracting(stateCache.hiddenWindowIDs)
-                let tiledCount = wids.filter { !stateCache.floatingWindowIDs.contains($0) }.count
+                // count occupancy the way admission does: a closed-but-alive
+                // ghost holds no slot, a minimized or Cmd-H'd window still does
+                let excluded = ActionDispatcher.admissionExclusions(
+                    floatingWindowIDs: stateCache.floatingWindowIDs,
+                    hiddenWindowIDs: stateCache.hiddenWindowIDs,
+                    reservedHiddenWindowIDs: stateCache.reservedHiddenWindowIDs)
+                let tiledCount = workspaceManager.windowIDs(onWorkspace: number)
+                    .subtracting(excluded).count
                 let maxDepth = tilingEngine.maxDepth(for: targetScreen)
                 let maxWindows = RetileAllPlanner.workspaceCapacity(maxDepth: maxDepth)
                 if tiledCount >= maxWindows {

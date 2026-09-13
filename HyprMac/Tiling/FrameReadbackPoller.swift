@@ -43,6 +43,7 @@ struct FrameReadbackPoller {
     func applyRestoration(_ layouts: [(HyprWindow, CGRect)], usableFrame: CGRect,
                           gap: CGFloat, generation requestedGeneration: UInt64) -> Result {
         var strictConfiguration = configuration
+        strictConfiguration.sizeOvershootTolerance = strictConfiguration.sizeTolerance
         strictConfiguration.sizeUndershootTolerance = strictConfiguration.sizeTolerance
         return applyLayout(layouts, usableFrame: usableFrame, gap: gap,
                            generation: requestedGeneration, configuration: strictConfiguration)
@@ -107,8 +108,9 @@ struct FrameReadbackPoller {
             guard let actual = raw.actualFrames[window.windowID] else { continue }
             if case .unknown = raw.verdict { continue }
             window.cachedFrame = actual
-            let widthConflict = actual.width > target.width + configuration.sizeTolerance
-            let heightConflict = actual.height > target.height + configuration.sizeTolerance
+            // cell rounding is not a min-size floor, so it must not teach one
+            let widthConflict = actual.width > target.width + configuration.sizeOvershootTolerance
+            let heightConflict = actual.height > target.height + configuration.sizeOvershootTolerance
             if widthConflict || heightConflict, case .rejected = raw.verdict {
                 conflicts.append(Conflict(window: window, allocated: target, actual: actual.size))
                 observations.append(Observation(window: window, actual: actual.size,

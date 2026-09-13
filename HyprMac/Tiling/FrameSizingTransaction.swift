@@ -65,7 +65,10 @@ struct FrameSizingConfiguration {
     var maximumAttempts: Int = 12
     var positionTolerance: CGFloat = 1
     var sizeTolerance: CGFloat = 1
-    var sizeUndershootTolerance: CGFloat = 8
+    // cell-quantizing apps (terminals) round a target to whole character
+    // cells, in either direction. restoration pins both back to sizeTolerance.
+    var sizeOvershootTolerance: CGFloat = TilingConfig.frameToleranceXPx
+    var sizeUndershootTolerance: CGFloat = TilingConfig.frameToleranceXPx
     var stableTolerance: CGFloat = 0.01
     var requiredStableSamples: Int = 2
     var minimumMismatchSettle: TimeInterval = 0.24
@@ -407,18 +410,39 @@ struct FrameSizingAttempt {
             && matchesSize(actual.height, target.height)
     }
 
+    /// Containment with the same bounded overshoot `matchesSize` allows.
+    /// The origin must sit inside the usable frame within `positionTolerance`;
+    /// the far edges may run past it by up to `sizeOvershootTolerance`. A
+    /// cell-rounded window at the screen edge does exactly that whenever the
+    /// outer padding is smaller than its cell. Restoration pins both
+    /// tolerances to `sizeTolerance`, so a rollback still has to land inside.
+    private func contained(_ actual: CGRect, in usableFrame: CGRect) -> Bool {
+        actual.minX >= usableFrame.minX - configuration.positionTolerance
+            && actual.minY >= usableFrame.minY - configuration.positionTolerance
+            && actual.maxX <= usableFrame.maxX + configuration.sizeOvershootTolerance
+            && actual.maxY <= usableFrame.maxY + configuration.sizeOvershootTolerance
+    }
+
     private func matchesSize(_ actual: CGFloat, _ target: CGFloat) -> Bool {
-        actual - target <= configuration.sizeTolerance
+        actual - target <= configuration.sizeOvershootTolerance
             && target - actual <= configuration.sizeUndershootTolerance
     }
 
+    /// Pairwise checks, relaxed by the same bounded amount `matchesSize`
+    /// allows. A window that rounds its size up to a whole character cell can
+    /// eat into the gap, and up to one cell of its neighbour, so overlap and
+    /// gap erosion within `sizeOvershootTolerance` are tolerated. Two windows
+    /// genuinely stacked on top of each other overlap by far more than a cell
+    /// on both axes and are still rejected. Containment is relaxed the same
+    /// bounded way at the far edges only — see `contained(_:in:)`.
     func validateFrames(targets: [Target], actualFrames: [CGWindowID: CGRect],
                         usableFrame: CGRect, gap: CGFloat) -> Result {
+        let tol = configuration.sizeOvershootTolerance
         for target in targets {
             guard let actual = actualFrames[target.windowID] else {
                 return Result(verdict: .unknown(.windowUnavailable(target.windowID)), actualFrames: actualFrames)
             }
-            guard usableFrame.contains(actual) else {
+            guard contained(actual, in: usableFrame) else {
                 return Result(verdict: .rejected(.outsideUsableFrame(target.windowID)), actualFrames: actualFrames)
             }
             if !matches(actual, target.frame) {
@@ -430,12 +454,12 @@ struct FrameSizingAttempt {
                 let first = targets[i]
                 let second = targets[j]
                 guard let actualA = actualFrames[first.windowID], let actualB = actualFrames[second.windowID] else { continue }
-                if actualA.intersection(actualB).width > 0 && actualA.intersection(actualB).height > 0 {
+                if actualA.intersection(actualB).width > tol && actualA.intersection(actualB).height > tol {
                     return Result(verdict: .rejected(.overlap(first.windowID, second.windowID)), actualFrames: actualFrames)
                 }
                 let xSeparation = max(actualA.minX, actualB.minX) - min(actualA.maxX, actualB.maxX)
                 let ySeparation = max(actualA.minY, actualB.minY) - min(actualA.maxY, actualB.maxY)
-                if xSeparation + 0.0001 < gap && ySeparation + 0.0001 < gap {
+                if max(xSeparation, ySeparation) + 0.0001 < gap - tol {
                     return Result(verdict: .rejected(.gapViolation(first.windowID, second.windowID)), actualFrames: actualFrames)
                 }
             }
@@ -461,6 +485,7 @@ struct FrameSizingTransaction {
         let targets = originalFrames.map { FrameSizingAttempt.Target(windowID: $0.key, frame: $0.value) }
             .sorted { $0.windowID < $1.windowID }
         var strictAttempt = attempt
+        strictAttempt.configuration.sizeOvershootTolerance = strictAttempt.configuration.sizeTolerance
         strictAttempt.configuration.sizeUndershootTolerance = strictAttempt.configuration.sizeTolerance
         return strictAttempt.apply(targets: targets, usableFrame: usableFrame,
                                    gap: gap, generation: generation)

@@ -173,6 +173,8 @@ final class FrameSizingTransactionTests: XCTestCase {
             var config = FrameSizingConfiguration()
             config.positionTolerance = tolerance
             config.sizeTolerance = tolerance
+            config.sizeOvershootTolerance = tolerance
+            config.sizeUndershootTolerance = tolerance
             return FrameSizingAttempt(io: fake.io(), configuration: config).apply(targets: targets,
                 usableFrame: CGRect(x: 0, y: 0, width: 1000, height: 800), gap: gap, generation: 1).verdict
         }
@@ -424,7 +426,7 @@ final class FrameSizingTransactionTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(fake.time, 0.1)
     }
 
-    func testDefaultToleranceStillRejectsGapErosionAndAcceptsSafeShift() {
+    func testDefaultToleranceRejectsGapErosionBeyondOneCellAndAcceptsSafeShift() {
         func run(_ actualA: CGRect, _ actualB: CGRect) -> FrameSizingAttempt.Verdict {
             let fake = Fake()
             let a = CGRect(x: 0, y: 0, width: 496, height: 800)
@@ -438,9 +440,13 @@ final class FrameSizingTransactionTests: XCTestCase {
                 targets: [.init(windowID: 32, frame: a), .init(windowID: 33, frame: b)],
                 usableFrame: CGRect(x: 0, y: 0, width: 1000, height: 800), gap: 8, generation: 1).verdict
         }
-        XCTAssertEqual(run(CGRect(x: 0, y: 0, width: 497, height: 800),
-                           CGRect(x: 503, y: 0, width: 497, height: 800)),
+        // erosion past a whole cell of overshoot is still a violation
+        XCTAssertEqual(run(CGRect(x: 1, y: 0, width: 516, height: 800),
+                           CGRect(x: 503, y: 0, width: 496, height: 800)),
                        .rejected(.gapViolation(32, 33)))
+        // a single rounded-up point eats into the gap and is now allowed
+        XCTAssertEqual(run(CGRect(x: 0, y: 0, width: 497, height: 800),
+                           CGRect(x: 503, y: 0, width: 497, height: 800)), .accepted)
         XCTAssertEqual(run(CGRect(x: 1, y: 0, width: 496, height: 800),
                            CGRect(x: 505, y: 0, width: 495, height: 800)), .accepted)
     }
@@ -465,6 +471,46 @@ final class FrameSizingTransactionTests: XCTestCase {
         XCTAssertEqual(result.actualFrames[id], quantized)
     }
 
+    func testCellQuantizedOvershootIsAcceptedWithObservedFrame() {
+        let fake = Fake()
+        let id: CGWindowID = 66
+        // terminal rounds a full-workspace target up to whole character cells
+        let target = CGRect(x: 8, y: 8, width: 3424, height: 1301)
+        let quantized = CGRect(x: 8, y: 8, width: 3425, height: 1309)
+        fake.frames[id] = target
+        fake.reads[id] = Array(repeating: (.success, quantized), count: 12)
+        fake.sizeReads[id] = Array(repeating: (.success, quantized.size), count: 12)
+
+        let result = FrameSizingAttempt(io: fake.io()).apply(
+            targets: [.init(windowID: id, frame: target)],
+            usableFrame: CGRect(x: 0, y: 0, width: 3440, height: 1400),
+            gap: 8,
+            generation: 1
+        )
+
+        XCTAssertEqual(result.verdict, .accepted)
+        XCTAssertEqual(result.actualFrames[id], quantized)
+    }
+
+    func testOvershootBeyondOneCellIsStillRejected() {
+        let fake = Fake()
+        let id: CGWindowID = 67
+        let target = CGRect(x: 8, y: 8, width: 3424, height: 1301)
+        let oversize = CGRect(x: 8, y: 8, width: 3449, height: 1301)
+        fake.frames[id] = target
+        fake.reads[id] = Array(repeating: (.success, oversize), count: 12)
+        fake.sizeReads[id] = Array(repeating: (.success, oversize.size), count: 12)
+
+        let result = FrameSizingAttempt(io: fake.io()).apply(
+            targets: [.init(windowID: id, frame: target)],
+            usableFrame: CGRect(x: 0, y: 0, width: 3600, height: 1400),
+            gap: 8,
+            generation: 1
+        )
+
+        XCTAssertEqual(result.verdict, .rejected(.geometryMismatch(id)))
+    }
+
     func testQuantizationAllowanceRejectsOvershootLargeUndershootAndPositionDrift() {
         let target = FrameSizingAttempt.Target(
             windowID: 62,
@@ -474,8 +520,8 @@ final class FrameSizingTransactionTests: XCTestCase {
         let usable = CGRect(x: 0, y: 0, width: 1200, height: 900)
 
         for actual in [
-            CGRect(x: 20, y: 20, width: 814, height: 700),
-            CGRect(x: 20, y: 20, width: 803, height: 700),
+            CGRect(x: 20, y: 20, width: 833, height: 700),
+            CGRect(x: 20, y: 20, width: 791, height: 700),
             CGRect(x: 22, y: 20, width: 806, height: 700)
         ] {
             let result = attempt.validateFrames(
@@ -486,7 +532,49 @@ final class FrameSizingTransactionTests: XCTestCase {
         }
     }
 
-    func testQuantizedUndershootDoesNotRelaxContainmentGapOrOverlap() {
+    func testEdgeOvershootIsContainedWithinOneCellButOriginMustStayInside() {
+        let attempt = FrameSizingAttempt(io: Fake().io())
+        // 8 pt of outer padding, so the slot stops 8 pt short of the screen
+        // edge and a window that rounds up runs past it
+        let usable = CGRect(x: 0, y: 0, width: 1000, height: 700)
+        let target = FrameSizingAttempt.Target(
+            windowID: 70,
+            frame: CGRect(x: 8, y: 8, width: 984, height: 684)
+        )
+        func verdict(_ actual: CGRect) -> FrameSizingAttempt.Verdict {
+            attempt.validateFrames(targets: [target], actualFrames: [70: actual],
+                                   usableFrame: usable, gap: 8).verdict
+        }
+
+        // 4 pt past the usable frame — the shape a terminal actually produces
+        XCTAssertEqual(verdict(CGRect(x: 8, y: 8, width: 984, height: 696)), .accepted)
+        // 12 pt past it, still inside one cell of allowance
+        XCTAssertEqual(verdict(CGRect(x: 8, y: 8, width: 984, height: 704)), .accepted)
+        // 25 pt past it
+        XCTAssertEqual(verdict(CGRect(x: 8, y: 8, width: 984, height: 717)),
+                       .rejected(.outsideUsableFrame(70)))
+        // the origin gets no such allowance
+        XCTAssertEqual(verdict(CGRect(x: 8, y: -2, width: 984, height: 684)),
+                       .rejected(.outsideUsableFrame(70)))
+    }
+
+    func testRestorationContainmentStaysTightAtOnePoint() {
+        var strict = FrameSizingConfiguration()
+        strict.sizeOvershootTolerance = strict.sizeTolerance
+        strict.sizeUndershootTolerance = strict.sizeTolerance
+        let attempt = FrameSizingAttempt(io: Fake().io(), configuration: strict)
+        let usable = CGRect(x: 0, y: 0, width: 1000, height: 700)
+        let target = FrameSizingAttempt.Target(
+            windowID: 71,
+            frame: CGRect(x: 8, y: 8, width: 984, height: 684)
+        )
+        XCTAssertEqual(attempt.validateFrames(
+            targets: [target], actualFrames: [71: CGRect(x: 8, y: 8, width: 984, height: 696)],
+            usableFrame: usable, gap: 8
+        ).verdict, .rejected(.outsideUsableFrame(71)))
+    }
+
+    func testQuantizedDeviationBoundsContainmentAndGapErosion() {
         let attempt = FrameSizingAttempt(io: Fake().io())
         let targets = [
             FrameSizingAttempt.Target(windowID: 63, frame: CGRect(x: 0, y: 0, width: 496, height: 800)),
@@ -501,52 +589,90 @@ final class FrameSizingTransactionTests: XCTestCase {
                 64: CGRect(x: 504, y: 0, width: 490, height: 800)
             ], usableFrame: usable, gap: 8
         ).verdict, .accepted)
+        // a rounded-up point may eat into the gap
         XCTAssertEqual(attempt.validateFrames(
             targets: targets,
-            actualFrames: [63: targets[0].frame, 64: CGRect(x: 503, y: 0, width: 490, height: 800)],
+            actualFrames: [63: CGRect(x: 0, y: 0, width: 497, height: 800), 64: targets[1].frame],
+            usableFrame: usable, gap: 8
+        ).verdict, .accepted)
+        // erosion past a whole cell of overshoot is not tolerated
+        XCTAssertEqual(attempt.validateFrames(
+            targets: targets,
+            actualFrames: [63: CGRect(x: 1, y: 0, width: 516, height: 800),
+                           64: CGRect(x: 503, y: 0, width: 496, height: 800)],
             usableFrame: usable, gap: 8
         ).verdict, .rejected(.gapViolation(63, 64)))
-        let touchingTargets = [
-            FrameSizingAttempt.Target(windowID: 63, frame: CGRect(x: 0, y: 0, width: 500, height: 800)),
-            FrameSizingAttempt.Target(windowID: 64, frame: CGRect(x: 500, y: 0, width: 500, height: 800))
+        let wideGapTargets = [
+            FrameSizingAttempt.Target(windowID: 63, frame: CGRect(x: 0, y: 0, width: 485, height: 800)),
+            FrameSizingAttempt.Target(windowID: 64, frame: CGRect(x: 515, y: 0, width: 485, height: 800))
         ]
         XCTAssertEqual(attempt.validateFrames(
-            targets: touchingTargets,
-            actualFrames: [
-                63: CGRect(x: 0, y: 0, width: 501, height: 800),
-                64: CGRect(x: 499, y: 0, width: 501, height: 800)
-            ], usableFrame: usable, gap: 0
-        ).verdict, .rejected(.overlap(63, 64)))
+            targets: wideGapTargets,
+            actualFrames: [63: CGRect(x: 0, y: 0, width: 505, height: 800),
+                           64: CGRect(x: 514, y: 0, width: 485, height: 800)],
+            usableFrame: usable, gap: 30
+        ).verdict, .rejected(.gapViolation(63, 64)))
+        // the origin is allowed one point of drift, no more
         XCTAssertEqual(attempt.validateFrames(
             targets: [targets[0]],
-            actualFrames: [63: CGRect(x: -1, y: 0, width: 490, height: 800)],
+            actualFrames: [63: CGRect(x: -2, y: 0, width: 490, height: 800)],
             usableFrame: usable, gap: 8
         ).verdict, .rejected(.outsideUsableFrame(63)))
     }
 
+    func testBoundedOvershootCrossesTheGapButRealOverlapIsRejected() {
+        let attempt = FrameSizingAttempt(io: Fake().io())
+        // stacked windows, 8 pt gap; the top one rounds 15 pt taller and
+        // ends up 7 pt into its neighbour along y, full width along x
+        let stacked = [
+            FrameSizingAttempt.Target(windowID: 68, frame: CGRect(x: 0, y: 0, width: 500, height: 300)),
+            FrameSizingAttempt.Target(windowID: 69, frame: CGRect(x: 0, y: 308, width: 500, height: 300))
+        ]
+        XCTAssertEqual(attempt.validateFrames(
+            targets: stacked,
+            actualFrames: [68: CGRect(x: 0, y: 0, width: 500, height: 315), 69: stacked[1].frame],
+            usableFrame: CGRect(x: 0, y: 0, width: 600, height: 700), gap: 8
+        ).verdict, .accepted)
+
+        // two windows genuinely on top of each other, sharing 200x200
+        let piled = [
+            FrameSizingAttempt.Target(windowID: 68, frame: CGRect(x: 0, y: 0, width: 600, height: 600)),
+            FrameSizingAttempt.Target(windowID: 69, frame: CGRect(x: 400, y: 400, width: 600, height: 600))
+        ]
+        XCTAssertEqual(attempt.validateFrames(
+            targets: piled,
+            actualFrames: [68: piled[0].frame, 69: piled[1].frame],
+            usableFrame: CGRect(x: 0, y: 0, width: 1000, height: 1000), gap: 8
+        ).verdict, .rejected(.overlap(68, 69)))
+    }
+
     func testRestorationRequiresExactSizeDespiteCandidateQuantizationAllowance() {
-        let fake = Fake()
         let id: CGWindowID = 65
-        let original = CGRect(x: 20, y: 20, width: 812, height: 700)
-        let undershotRestore = CGRect(x: 20, y: 20, width: 806, height: 700)
-        fake.frames[id] = original
-        fake.writeErrors = [.cannotComplete]
-        fake.reads[id] = Array(repeating: (.success, undershotRestore), count: 12)
-        fake.sizeReads[id] = Array(repeating: (.success, undershotRestore.size), count: 12)
+        func restore(reading restored: CGRect) -> FrameSizingTransaction.Outcome {
+            let fake = Fake()
+            let original = CGRect(x: 20, y: 20, width: 812, height: 700)
+            fake.frames[id] = original
+            fake.writeErrors = [.cannotComplete]
+            fake.reads[id] = Array(repeating: (.success, restored), count: 12)
+            fake.sizeReads[id] = Array(repeating: (.success, restored.size), count: 12)
+            return FrameSizingTransaction(attempt: FrameSizingAttempt(io: fake.io())).apply(
+                targets: [.init(windowID: id, frame: CGRect(x: 20, y: 20, width: 600, height: 700))],
+                originalFrames: [id: original],
+                usableFrame: CGRect(x: 0, y: 0, width: 1200, height: 900),
+                gap: 8,
+                generation: 1
+            )
+        }
 
-        let outcome = FrameSizingTransaction(attempt: FrameSizingAttempt(io: fake.io())).apply(
-            targets: [.init(windowID: id, frame: CGRect(x: 20, y: 20, width: 600, height: 700))],
-            originalFrames: [id: original],
-            usableFrame: CGRect(x: 0, y: 0, width: 1200, height: 900),
-            gap: 8,
-            generation: 1
-        )
-
-        XCTAssertEqual(outcome, .degraded(
-            candidateReason: .writeFailed(id, .cannotComplete),
-            restorationReason: .geometryMismatch(id),
-            actualFrames: [id: undershotRestore]
-        ))
+        // both directions the candidate pass would have accepted
+        for restored in [CGRect(x: 20, y: 20, width: 806, height: 700),
+                         CGRect(x: 20, y: 20, width: 814, height: 700)] {
+            XCTAssertEqual(restore(reading: restored), .degraded(
+                candidateReason: .writeFailed(id, .cannotComplete),
+                restorationReason: .geometryMismatch(id),
+                actualFrames: [id: restored]
+            ), "\(restored)")
+        }
     }
 
     func testCaptureStopsWhenSizeTimeoutSetupCrossesDeadline() {
@@ -692,10 +818,12 @@ final class FrameSizingTransactionTests: XCTestCase {
 
     func testDiagonalWindowsCannotErodeBothAxisGaps() {
         let fake = Fake()
-        let targetA = CGRect(x: 0, y: 0, width: 496, height: 396)
-        let targetB = CGRect(x: 504, y: 404, width: 496, height: 396)
-        let actualA = CGRect(x: 0, y: 0, width: 497, height: 397)
-        let actualB = CGRect(x: 503, y: 403, width: 497, height: 397)
+        // a 30 pt gap less the 20 pt cell allowance leaves a 10 pt floor on
+        // each axis, and both axes fall under it
+        let targetA = CGRect(x: 0, y: 0, width: 485, height: 385)
+        let targetB = CGRect(x: 515, y: 415, width: 485, height: 385)
+        let actualA = CGRect(x: 0, y: 0, width: 505, height: 405)
+        let actualB = CGRect(x: 514, y: 414, width: 485, height: 385)
         fake.frames = [37: targetA, 38: targetB]
         fake.reads[37] = [(.success, actualA), (.success, actualA)]
         fake.reads[38] = [(.success, actualB), (.success, actualB)]
@@ -703,7 +831,7 @@ final class FrameSizingTransactionTests: XCTestCase {
         fake.sizeReads[38] = [(.success, actualB.size), (.success, actualB.size)]
         let result = FrameSizingAttempt(io: fake.io()).apply(
             targets: [.init(windowID: 37, frame: targetA), .init(windowID: 38, frame: targetB)],
-            usableFrame: CGRect(x: 0, y: 0, width: 1000, height: 800), gap: 8, generation: 1)
+            usableFrame: CGRect(x: 0, y: 0, width: 1000, height: 800), gap: 30, generation: 1)
         XCTAssertEqual(result.verdict, .rejected(.gapViolation(37, 38)))
     }
 

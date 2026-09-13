@@ -33,7 +33,20 @@ private struct TiledDragOccluderContext: Equatable {
 ///
 /// Threading: main-thread only.
 class TilingEngine {
-    typealias LayoutApplicationOutcome = FrameSizingTransaction.Outcome
+    /// Result of applying a verified layout. Mirrors
+    /// `FrameSizingTransaction.Outcome` but carries `restorationAttempted`,
+    /// which membership publication turns on: a degraded outcome that never
+    /// tried to restore is the only one that leaves the candidate frames on
+    /// screen. Once restoration has run, whatever its verdict, the windows
+    /// are back at or near their originals.
+    enum LayoutApplicationOutcome: Equatable {
+        case accepted(actualFrames: [CGWindowID: CGRect])
+        case rejectedRestored(reason: FrameSizingFailure, actualFrames: [CGWindowID: CGRect])
+        case degraded(candidateReason: FrameSizingFailure,
+                      restorationReason: FrameSizingFailure?,
+                      restorationAttempted: Bool,
+                      actualFrames: [CGWindowID: CGRect])
+    }
 
     /// Pseudo-workspace the scratchpad layer's tree lives on. Matches
     /// `ScratchpadController.workspace`; kept local so the engine has no
@@ -450,11 +463,35 @@ class TilingEngine {
         case .accepted: break
         case let .rejectedRestored(reason, frames):
             hyprLog(.notice, .tiling, "verified layout rejected and restored: reason=\(reason) actual=\(frames)")
-        case let .degraded(candidateReason, restorationReason, frames):
+        case let .degraded(candidateReason, restorationReason, attempted, frames):
             hyprLog(.notice, .tiling,
-                    "verified layout degraded: candidate=\(candidateReason) restoration=\(String(describing: restorationReason)) actual=\(frames)")
+                    "verified layout degraded: candidate=\(candidateReason) restoration=\(String(describing: restorationReason)) attempted=\(attempted) actual=\(frames)")
         }
         return outcome
+    }
+
+    /// Whether a membership candidate may become the live tree.
+    ///
+    /// An accepted layout obviously publishes. A degraded one publishes only
+    /// when the candidate was written and restoration was never tried, which
+    /// is the parked-originals pre-check: those candidate frames are still on
+    /// screen, so keeping the prior tree would hide the windows from focus
+    /// navigation. Once restoration has run the windows are back at or near
+    /// their originals whatever its verdict, so publishing the candidate would
+    /// make the tree disagree with the screen the other way around.
+    ///
+    /// A nil restoration reason with nothing attempted means the transaction
+    /// gave up before there was anything to undo — the originals could not be
+    /// captured, or the supplied set was incomplete. The superseded case also
+    /// lands there after writes, but a newer generation owns the screen by
+    /// then and the caller's generation guard blocks publication anyway.
+    private func publishes(_ outcome: LayoutApplicationOutcome) -> Bool {
+        switch outcome {
+        case .accepted: return true
+        case .rejectedRestored: return false
+        case let .degraded(_, restorationReason, attempted, _):
+            return !attempted && restorationReason != nil
+        }
     }
 
     private func applyVerifiedLayoutAttempt(_ tree: BSPTree, in rect: CGRect, generation: UInt64,
@@ -468,7 +505,7 @@ class TilingEngine {
                   windows.allSatisfy({ suppliedOriginalFrames[$0.windowID] != nil }) else {
                 let missing = windows.first { suppliedOriginalFrames[$0.windowID] == nil }
                 return .degraded(candidateReason: .windowUnavailable(missing?.windowID ?? 0),
-                                 restorationReason: nil,
+                                 restorationReason: nil, restorationAttempted: false,
                                  actualFrames: suppliedOriginalFrames)
             }
             originalFrames = suppliedOriginalFrames
@@ -479,7 +516,7 @@ class TilingEngine {
                 let missing = windows.first { captured.actualFrames[$0.windowID] == nil }
                 return .degraded(
                     candidateReason: captured.verdict.failure ?? .windowUnavailable(missing?.windowID ?? 0),
-                    restorationReason: nil,
+                    restorationReason: nil, restorationAttempted: false,
                     actualFrames: captured.actualFrames
                 )
             }
@@ -508,14 +545,19 @@ class TilingEngine {
 
         guard layoutGeneration == generation else {
             return .degraded(candidateReason: .superseded, restorationReason: nil,
+                             restorationAttempted: false,
                              actualFrames: terminal.actualFrames)
         }
         let reason = terminal.verdict.failure ?? .attemptsExhausted
         if let invalidOriginalID = originalFrames.keys.sorted().first(where: { windowID in
             originalFrames[windowID].map { !restorationFrame.contains($0) } ?? true
         }) {
+            // the candidate frames stay on screen, so the tree has to carry
+            // the ratios that produced them — the adjusted pass's, when it ran
+            copyVerifiedRatios(from: candidate.root, to: tree.root)
             return .degraded(candidateReason: reason,
                              restorationReason: .outsideUsableFrame(invalidOriginalID),
+                             restorationAttempted: false,
                              actualFrames: terminal.actualFrames)
         }
         let originals = windows.compactMap { window in
@@ -528,6 +570,7 @@ class TilingEngine {
         }
         return .degraded(candidateReason: reason,
                          restorationReason: restored.verdict.failure,
+                         restorationAttempted: true,
                          actualFrames: restored.actualFrames)
     }
 
@@ -731,7 +774,8 @@ class TilingEngine {
     /// back actual frames; pass 2 (when conflicts are detected)
     /// adjusts split ratios via `MinSizeMemory` and re-applies. If
     /// the adjusted pass fails, restoration is verified and the prior
-    /// topology remains live. Only accepted candidates publish membership.
+    /// topology remains live. Accepted candidates publish membership, and so
+    /// do candidates whose restoration failed — those frames are on screen.
     func tileWindows(_ windows: [HyprWindow], onWorkspace workspace: Int, screen: NSScreen) {
         let generation = beginLayoutGeneration()
         pendingSwapRevert = nil
@@ -744,7 +788,7 @@ class TilingEngine {
 
         _ = consumePendingInserted(for: key, in: t)
         let outcome = applyVerifiedLayout(t, in: rect, generation: generation)
-        if case .accepted = outcome, layoutGeneration == generation {
+        if publishes(outcome), layoutGeneration == generation {
             if let live { live.root = candidate.root } else { trees[key] = candidate }
         }
 
@@ -799,9 +843,10 @@ class TilingEngine {
 
         let outcome = applyVerifiedLayout(t, in: rect, generation: generation,
                                 restorationUsableFrame: displayManager.cgRect(for: screen))
-        if case .accepted = outcome, layoutGeneration == generation {
+        if publishes(outcome), layoutGeneration == generation {
             if let live { live.root = t.root } else { trees[key] = t }
-            // discard the old monitor's tree only after the destination accepts
+            // discard the old monitor's tree only once the destination holds
+            // the candidate frames
             for other in trees.keys where other.workspace == Self.scratchpadWorkspace && other != key {
                 trees.removeValue(forKey: other)
             }

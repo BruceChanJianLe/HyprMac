@@ -98,6 +98,76 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertNil(f.engine.existingTree(forWorkspace: 0, screen: destination))
     }
 
+    func testDegradedLayoutWithFailedRestorationKeepsPriorMembership() throws {
+        let f = try fixture()
+        // restoration runs and fails: the window will not shrink back to its
+        // original, so the screen is near the originals, not the candidate
+        f.trace.minSize[f.windows[0].windowID] = CGSize(width: 300, height: 300)
+        let before = f.tree.structuralFingerprint()
+        f.trace.rejectNextRead = true
+
+        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+
+        XCTAssertEqual(f.engine.existingTree(forWorkspace: 1, screen: f.screen)?.structuralFingerprint(), before)
+    }
+
+    func testDegradedLayoutWithoutAttemptedRestorationPublishesCandidateMembership() throws {
+        let f = try fixture()
+        // originals parked off the usable frame, so restoration cannot be
+        // attempted after the candidate readback fails — the writes stand
+        let usable = f.engine.displayManager.cgRect(for: f.screen)
+        for window in f.windows {
+            f.trace.frames[window.windowID] = CGRect(x: usable.maxX + 200, y: usable.minY + 20,
+                                                     width: 120, height: 120)
+        }
+        f.trace.rejectNextRead = true
+
+        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+
+        let published = f.engine.existingTree(forWorkspace: 1, screen: f.screen)
+        XCTAssertEqual(Set(published?.allWindows.map(\.windowID) ?? []), Set(f.windows.map(\.windowID)))
+    }
+
+    func testDegradedLayoutWithoutRestorationPublishesTheAdjustedRatios() throws {
+        let f = try fixture()
+        let usable = f.engine.displayManager.cgRect(for: f.screen)
+        // one window refuses to shrink, so pass 1 conflicts and pass 2
+        // re-splits around it; the floor is unsatisfiable, so pass 2 fails too
+        f.trace.minSize[f.windows[0].windowID] = CGSize(width: usable.width * 1.2, height: 0)
+        for window in f.windows {
+            f.trace.frames[window.windowID] = CGRect(x: usable.maxX + 200, y: usable.minY + 20,
+                                                     width: 120, height: 120)
+        }
+
+        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+
+        // a recorded minimum proves pass 1 rejected with a conflict, which is
+        // what sends the transaction into the adjusted second pass
+        XCTAssertNotNil(f.windows[0].observedMinSize)
+        let published = try XCTUnwrap(f.engine.existingTree(forWorkspace: 1, screen: f.screen))
+        XCTAssertEqual(Set(published.allWindows.map(\.windowID)), Set(f.windows.map(\.windowID)))
+        let layout = Dictionary(uniqueKeysWithValues: published.layout(
+            in: usable, gap: f.engine.gapSize, padding: f.engine.outerPadding
+        ).map { ($0.0.windowID, $0.1) })
+        XCTAssertEqual(layout, f.trace.requested,
+                       "the published tree must reproduce the frames left on screen")
+    }
+
+    func testDegradedLayoutWithoutWritesKeepsPriorMembership() throws {
+        let f = try fixture()
+        // no capture for the new window, so the transaction gives up before
+        // any AX write happens
+        f.trace.frames.removeValue(forKey: f.windows[2].windowID)
+        let before = f.tree.structuralFingerprint()
+        var writes = 0
+        f.trace.onWrite = { writes += 1 }
+
+        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+
+        XCTAssertEqual(writes, 0)
+        XCTAssertEqual(f.engine.existingTree(forWorkspace: 1, screen: f.screen)?.structuralFingerprint(), before)
+    }
+
     private func fixture() throws -> (engine: TilingEngine, tree: BSPTree, windows: [HyprWindow], screen: NSScreen, trace: MembershipTrace) {
         guard let screen = NSScreen.main ?? NSScreen.screens.first else { throw XCTSkip("requires display geometry") }
         let windows = (901...903).map { id in
@@ -122,16 +192,28 @@ private final class MembershipTrace {
     var frames: [CGWindowID: CGRect] = [:]
     var rejectNextRead = false
     var onWrite: (() -> Void)?
+    /// floor a window refuses to shrink below, the way a real min-size app behaves
+    var minSize: [CGWindowID: CGSize] = [:]
+    /// the frames the engine asked for, before any floor is applied
+    var requested: [CGWindowID: CGRect] = [:]
     private var wrote = false
     private var now: TimeInterval = 0
 
     func io(_ generation: @escaping () -> UInt64) -> FrameSizingIO {
         FrameSizingIO(setMessagingTimeout: { _, _ in .success },
                       writeSize: { [self] id, size, _ in
-                          onWrite?(); wrote = true; frames[id]?.size = size; return .success
+                          onWrite?(); wrote = true
+                          requested[id, default: .zero].size = size
+                          let floor = minSize[id] ?? .zero
+                          frames[id]?.size = CGSize(width: max(size.width, floor.width),
+                                                    height: max(size.height, floor.height))
+                          return .success
                       },
                       writePosition: { [self] id, position, _ in
-                          onWrite?(); frames[id]?.origin = position; return .success
+                          onWrite?()
+                          requested[id, default: .zero].origin = position
+                          frames[id]?.origin = position
+                          return .success
                       },
                       readPosition: { [self] id, _ in
                           if wrote && rejectNextRead { rejectNextRead = false; return (.cannotComplete, nil) }

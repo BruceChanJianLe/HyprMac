@@ -118,11 +118,15 @@ reveals an oversize, pass 2 redistributes the parent's split ratio.
 The engine first captures every affected window's actual position and
 size. `FrameSizingAttempt` applies each requested frame in resize–move–resize
 order, retains AX write errors, and reads the complete layout back. Two
-stable samples are required. Position and size overshoot may differ by at most
-one AX point. Candidate size undershoot may be at most eight points, allowing
-small downward size rounding while retaining observed frames. Restoration uses
-one point in both size directions. Usable-screen containment, positive-area
-overlap, and the configured gap are checked across every pair of windows.
+stable samples are required. Position may differ by at most one AX point.
+Candidate size may differ by at most twenty points in either direction, which
+covers apps that round a target to whole character cells, and the observed
+frame is retained. Restoration uses one point in both size directions.
+Usable-screen containment holds the origin to one point but lets the far
+edges run twenty points past. Pairwise overlap and configured gap
+erosion are allowed the same twenty points, so a rounded-up window may eat
+into a gap and a little into its neighbour; two windows genuinely stacked on
+top of each other exceed the allowance on both axes and are still rejected.
 
 Each attempt has a 0.36-second monotonic deadline and a 12-sample limit.
 Time inside AX calls counts toward that deadline. Individual AX calls use
