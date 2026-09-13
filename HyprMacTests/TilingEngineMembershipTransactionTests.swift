@@ -352,6 +352,282 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertEqual(f.engine.knownMinimumSizes[f.windows[0].windowID]?.provenance, .observed)
     }
 
+    // MARK: - explicit revalidation of learned minima
+
+    /// A newcomer whose learned bound is stale: the app refused once, the
+    /// engine wrote the bound down, and the app would take the slot now.
+    private func staleNewcomerBound(_ f: (engine: TilingEngine, tree: BSPTree, windows: [HyprWindow], screen: NSScreen, trace: MembershipTrace)) -> HyprWindow {
+        let newcomer = f.windows[2]
+        let usable = f.engine.displayManager.cgRect(for: f.screen)
+        f.trace.minSize[newcomer.windowID] = CGSize(width: usable.width * 1.2, height: 0)
+        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+        f.trace.minSize.removeValue(forKey: newcomer.windowID)
+        return newcomer
+    }
+
+    func testAStaleNewcomerBoundReadsAsRevalidatable() throws {
+        let f = try fixture()
+        let newcomer = staleNewcomerBound(f)
+        XCTAssertEqual(f.engine.knownMinimumSizes[newcomer.windowID]?.provenance, .observed)
+
+        let outlook = f.engine.admissionOutlook(newcomer, onWorkspace: 1, screen: f.screen)
+
+        guard case let .revalidatable(refusals) = outlook else {
+            return XCTFail("expected a revalidatable refusal, got \(outlook)")
+        }
+        XCTAssertFalse(refusals.isEmpty)
+        XCTAssertTrue(refusals.contains { $0.source == .learned },
+                      "the bound the app refused is what said no")
+        XCTAssertTrue(refusals.allSatisfy { $0.incoming == newcomer.windowID })
+    }
+
+    func testAStaleIncumbentBoundIsBypassedForTheNewcomersSake() throws {
+        let f = try fixture()
+        let newcomer = f.windows[2]
+        let incumbent = f.windows[0]
+        let usable = f.engine.displayManager.cgRect(for: f.screen)
+        // the incumbents are what refuse, the way 21611 refused while 26016 was
+        // the window trying to get in. both leaves, or the newcomer simply
+        // takes the unconstrained one
+        for window in f.windows.prefix(2) {
+            f.trace.minSize[window.windowID] = CGSize(width: usable.width * 1.2, height: 0)
+        }
+        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+        XCTAssertEqual(f.engine.knownMinimumSizes[incumbent.windowID]?.provenance, .observed)
+        XCTAssertNil(f.engine.knownMinimumSizes[newcomer.windowID],
+                     "the newcomer's own memory is empty; only the incumbents refused")
+        for window in f.windows.prefix(2) { f.trace.minSize.removeValue(forKey: window.windowID) }
+
+        let outlook = f.engine.admissionOutlook(newcomer, onWorkspace: 1, screen: f.screen)
+
+        guard case let .revalidatable(refusals) = outlook else {
+            return XCTFail("expected a revalidatable refusal, got \(outlook)")
+        }
+        XCTAssertTrue(refusals.contains { $0.tenant == incumbent.windowID && $0.source == .learned })
+    }
+
+    func testAnAcceptedRevalidationTilesTheWindowAndLowersTheBound() throws {
+        let f = try fixture()
+        let newcomer = staleNewcomerBound(f)
+        let before = try XCTUnwrap(f.engine.knownMinimumSizes[newcomer.windowID]).size
+
+        let result = f.engine.revalidateAdmission(f.windows, incoming: [newcomer.windowID],
+                                                  onWorkspace: 1, screen: f.screen)
+
+        XCTAssertTrue(result.published)
+        XCTAssertTrue(result.publishedIDs.contains(newcomer.windowID))
+        let after = try XCTUnwrap(f.engine.knownMinimumSizes[newcomer.windowID]).size
+        XCTAssertLessThan(after.width, before.width,
+                          "the accepted readback lowers the bound it disproved")
+    }
+
+    func testATrueLargeMinimumIsRefusedAndKeepsItsEvidenceExactly() throws {
+        let f = try fixture()
+        let newcomer = f.windows[2]
+        let usable = f.engine.displayManager.cgRect(for: f.screen)
+        // the app really will not shrink, and still will not on the retry
+        f.trace.minSize[newcomer.windowID] = CGSize(width: usable.width * 1.2, height: 0)
+        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+        let learned = try XCTUnwrap(f.engine.knownMinimumSizes[newcomer.windowID])
+        let before = f.engine.windowIDs(inTreeForWorkspace: 1, screen: f.screen)
+
+        let result = f.engine.revalidateAdmission(f.windows, incoming: [newcomer.windowID],
+                                                  onWorkspace: 1, screen: f.screen)
+
+        XCTAssertFalse(result.published)
+        XCTAssertFalse(result.publishedIDs.contains(newcomer.windowID))
+        XCTAssertEqual(f.engine.windowIDs(inTreeForWorkspace: 1, screen: f.screen), before,
+                       "a refused attempt publishes nothing")
+        XCTAssertEqual(f.engine.knownMinimumSizes[newcomer.windowID], learned,
+                       "previous evidence is preserved exactly")
+    }
+
+    func testTheBypassIsSpentOnTheOneAttemptItWraps() throws {
+        let f = try fixture()
+        let newcomer = f.windows[2]
+        let usable = f.engine.displayManager.cgRect(for: f.screen)
+        f.trace.minSize[newcomer.windowID] = CGSize(width: usable.width * 1.2, height: 0)
+        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+
+        // the attempt is refused, so nothing was disproved and nothing lowered
+        f.engine.revalidateAdmission(f.windows, incoming: [newcomer.windowID],
+                                     onWorkspace: 1, screen: f.screen)
+
+        // the app would take it now, but the ordinary pass still honours the
+        // bound: an explicit request buys one attempt, not a standing licence
+        f.trace.minSize.removeValue(forKey: newcomer.windowID)
+        let ordinary = f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+        XCTAssertTrue(ordinary.insertedIDs.isEmpty)
+        XCTAssertEqual(f.engine.knownMinimumSizes[newcomer.windowID]?.provenance, .observed)
+    }
+
+    func testAStructuralRefusalSurvivesTheBypassAndWritesNothing() throws {
+        let f = try fixture()
+        f.engine.maxSplitsPerMonitor = [f.screen.localizedName: 1]
+        var writes = 0
+        f.trace.onWrite = { writes += 1 }
+
+        let outlook = f.engine.admissionOutlook(f.windows[2], onWorkspace: 1, screen: f.screen)
+
+        guard case let .refused(refusals) = outlook else {
+            return XCTFail("expected a structural refusal, got \(outlook)")
+        }
+        XCTAssertFalse(refusals.isEmpty)
+        XCTAssertTrue(refusals.allSatisfy { $0.source == .structural })
+        XCTAssertTrue(refusals.allSatisfy { $0.axis == "depth" })
+        XCTAssertEqual(writes, 0, "a structural refusal never touches the screen")
+    }
+
+    func testASeededHintSurvivesTheBypassAndIsNamedAsASeededRefusal() throws {
+        let f = try fixture()
+        let newcomer = f.windows[2]
+        let usable = f.engine.displayManager.cgRect(for: f.screen)
+        newcomer.observedMinSize = CGSize(width: usable.width * 1.2, height: 0)
+        newcomer.minSizeProvenance = .seeded
+
+        let outlook = f.engine.admissionOutlook(newcomer, onWorkspace: 1, screen: f.screen)
+
+        guard case let .refused(refusals) = outlook else {
+            return XCTFail("expected a refusal, got \(outlook)")
+        }
+        XCTAssertTrue(refusals.contains { $0.source == .seeded },
+                      "a hint nothing has tested is not a learned bound")
+    }
+
+    func testAWindowThatFitsNeedsNoRevalidation() throws {
+        let f = try fixture()
+        var writes = 0
+        f.trace.onWrite = { writes += 1 }
+
+        XCTAssertEqual(f.engine.admissionOutlook(f.windows[2], onWorkspace: 1, screen: f.screen),
+                       .fits)
+        XCTAssertEqual(writes, 0)
+    }
+
+    func testTheOutlookLeavesTheMemoryAndTheTreeAlone() throws {
+        let f = try fixture()
+        let newcomer = staleNewcomerBound(f)
+        let memory = f.engine.knownMinimumSizes
+        let before = try XCTUnwrap(f.engine.existingTree(forWorkspace: 1, screen: f.screen))
+            .structuralFingerprint()
+
+        _ = f.engine.admissionOutlook(newcomer, onWorkspace: 1, screen: f.screen)
+
+        XCTAssertEqual(f.engine.knownMinimumSizes, memory)
+        XCTAssertEqual(f.engine.existingTree(forWorkspace: 1, screen: f.screen)?.structuralFingerprint(),
+                       before)
+    }
+
+    // MARK: - the bypass never reaches the overflow router
+
+    func testABypassedPassDoesNotHandAStructuralNoFitToTheOverflowRouter() throws {
+        let f = try fixture()
+        var routed: [CGWindowID] = []
+        f.engine.onAutoFloat = { routed.append($0.windowID) }
+        f.engine.maxSplitsPerMonitor = [f.screen.localizedName: 1]
+        let newcomer = f.windows[2]
+
+        let ordinary = f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+        XCTAssertEqual(routed, [newcomer.windowID], "an ordinary pass routes as it always has")
+        XCTAssertTrue(ordinary.refusedIDs.isEmpty)
+
+        routed = []
+        let revalidated = f.engine.revalidateAdmission(f.windows, incoming: [newcomer.windowID],
+                                                       onWorkspace: 1, screen: f.screen)
+
+        XCTAssertTrue(routed.isEmpty,
+                      "routing here would pick the next workspace with the bounds this pass ignores")
+        XCTAssertEqual(revalidated.refusedIDs, [newcomer.windowID])
+        XCTAssertEqual(revalidated.strandedIDs, [newcomer.windowID],
+                       "the caller finishes it instead")
+    }
+
+    func testAFitProbeRunInsideABypassedPassStillSeesTheRealBound() throws {
+        let f = try fixture()
+        let newcomer = staleNewcomerBound(f)
+        let incumbent = f.windows[0]
+        var probed: Bool?
+        f.trace.onWrite = {
+            guard probed == nil else { return }
+            // the shape routeUnfittedWindow asks in: the destination's tenants
+            // plus the window, on a workspace with no tree of its own
+            probed = f.engine.canFitWindows([incumbent, newcomer], onWorkspace: 9, screen: f.screen)
+        }
+
+        f.engine.revalidateAdmission(f.windows, incoming: [newcomer.windowID],
+                                     onWorkspace: 1, screen: f.screen)
+
+        XCTAssertEqual(probed, false,
+                       "the probe answers on the memory as it stands, not on a bypass"
+                       + " belonging to the pass it happened to run inside")
+    }
+
+    func testAWindowTheRequestNeverNamedIsJudgedAndRoutedByTheOrdinaryRules() throws {
+        let f = try fixture()
+        let asked = staleNewcomerBound(f)
+        // a second newcomer turns up on the same workspace. the request was
+        // never about it, so this pass must not lend it the tenants' bypass
+        let bystander = makeWindow(id: 977)
+        let usable = f.engine.displayManager.cgRect(for: f.screen)
+        f.trace.frames[bystander.windowID] = CGRect(x: usable.minX + 500, y: usable.minY + 20,
+                                                    width: 120, height: 120)
+        bystander.observedMinSize = CGSize(width: usable.width * 1.2, height: 0)
+        bystander.minSizeProvenance = .observed
+        f.engine.primeMinimumSizes([bystander])
+        var routed: [CGWindowID] = []
+        f.engine.onAutoFloat = { routed.append($0.windowID) }
+
+        let result = f.engine.revalidateAdmission(f.windows + [bystander],
+                                                  incoming: [asked.windowID],
+                                                  onWorkspace: 1, screen: f.screen)
+
+        XCTAssertFalse(result.insertedIDs.contains(bystander.windowID),
+                       "its own learned bound still refuses it")
+        XCTAssertFalse(result.refusedIDs.contains(bystander.windowID))
+        XCTAssertEqual(routed, [bystander.windowID],
+                       "it goes to the overflow router like any other window this pass did not take")
+    }
+
+    func testARefusedRevalidationPutsTheIncumbentsBackWhenTheNewcomerCameFromElsewhere() throws {
+        let f = try fixture()
+        let newcomer = f.windows[2]
+        let usable = f.engine.displayManager.cgRect(for: f.screen)
+        // the window is standing somewhere this screen's usable rect does not
+        // cover, the way a window being moved from another screen is
+        let offScreen = CGRect(x: usable.maxX + 400, y: usable.minY + 20, width: 120, height: 120)
+        f.trace.frames[newcomer.windowID] = offScreen
+        let incumbentOriginals = f.windows.prefix(2).map { f.trace.frames[$0.windowID] }
+        f.trace.rejectNextRead = true
+
+        let result = f.engine.revalidateAdmission(f.windows, incoming: [newcomer.windowID],
+                                                  onWorkspace: 1, screen: f.screen,
+                                                  restorationReach: offScreen)
+
+        XCTAssertFalse(result.published)
+        XCTAssertTrue(result.restorationVerified,
+                      "the rollback can reach both screens, so it runs and verifies")
+        XCTAssertEqual(f.windows.prefix(2).map { f.trace.frames[$0.windowID] }, incumbentOriginals,
+                       "the incumbents are back on their originals, not the failed candidate")
+        XCTAssertEqual(f.trace.frames[newcomer.windowID], offScreen,
+                       "and the newcomer is back where it came from")
+    }
+
+    func testWithoutTheReachTheSameRollbackIsCancelledWhole() throws {
+        let f = try fixture()
+        let newcomer = f.windows[2]
+        let usable = f.engine.displayManager.cgRect(for: f.screen)
+        let offScreen = CGRect(x: usable.maxX + 400, y: usable.minY + 20, width: 120, height: 120)
+        f.trace.frames[newcomer.windowID] = offScreen
+        f.trace.rejectNextRead = true
+
+        let result = f.engine.revalidateAdmission(f.windows, incoming: [newcomer.windowID],
+                                                  onWorkspace: 1, screen: f.screen)
+
+        XCTAssertFalse(result.published)
+        XCTAssertFalse(result.restorationVerified,
+                       "this is what the reach exists to prevent")
+    }
+
     // MARK: - clearing the mark
 
     func testTheMarkClearsWhenEveryAttemptOnTheKeyRestoredItsOriginals() throws {

@@ -105,7 +105,7 @@ final class FloatingWindowController {
                 stateCache.floatingWindowIDs.remove(window.windowID)
                 window.isFloating = false
 
-                switch tilingEngine.forceInsertWindow(window, toWorkspace: workspace, on: screen) {
+                switch forceInsert(window, workspace: workspace, screen: screen) {
                 case .inserted, .alreadyPresent:
                     hyprLog(.debug, .floating, "tiling window '\(window.title ?? "?")'")
                 case let .evicted(evictedID):
@@ -157,6 +157,33 @@ final class FloatingWindowController {
                 }
             }
         }
+    }
+
+    /// The float→tile insertion, with one explicit revalidation behind it.
+    ///
+    /// When the tree refuses the window and the fit check says learned bounds
+    /// are the only thing in the way, the user's toggle buys exactly one more
+    /// attempt with those bounds set aside. Structure still decides: a tree
+    /// that is out of depth, or a slot too small whatever the memory says,
+    /// refuses both times. There is no second bypass and nothing is rearmed —
+    /// the next toggle is a new request.
+    ///
+    /// The gate is deliberately narrower than the retry it guards.
+    /// `admissionOutlook` asks whether a leaf would take the window;
+    /// `forceInsertWindow` may also evict the deepest right tile to make one.
+    /// So a tree that is out of depth reads as `structural` and buys no
+    /// retry, even though a bypassed force insert could have got the window
+    /// in by evicting someone. Erring that way keeps a depth ceiling from
+    /// quietly costing a tile the user did not offer up.
+    private func forceInsert(_ window: HyprWindow, workspace: Int,
+                             screen: NSScreen) -> TilingEngine.ForceInsertResult {
+        let first = tilingEngine.forceInsertWindow(window, toWorkspace: workspace, on: screen)
+        guard case .failed(.noFittingSlot) = first else { return first }
+        guard case .revalidatable = tilingEngine.admissionOutlook(window, onWorkspace: workspace,
+                                                                 screen: screen) else { return first }
+        hyprLog(.notice, .floating, "float→tile revalidation: \(window.windowID) ws\(workspace)")
+        return tilingEngine.forceInsertWindow(window, toWorkspace: workspace, on: screen,
+                                              bypassingLearnedMinima: true)
     }
 
     /// Leave `window` floating exactly where it is.

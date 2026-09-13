@@ -103,7 +103,10 @@ final class AdmissionRecovery {
     ///
     /// A newcomer that made it into the published tree is finished. One that
     /// did not is stranded, and gets its retry armed unless it is already
-    /// pending — the bound is one attempt per window, not one per pass.
+    /// pending — the bound is one attempt per window, not one per pass. A
+    /// window a bypassed pass refused outright is stranded too: nothing
+    /// routed it, because routing inside such a pass would decide with the
+    /// bounds the pass is ignoring.
     func note(_ result: TilingEngine.AdmissionResult) {
         // the scratchpad layer runs its own recovery and must never enter
         // this path
@@ -113,7 +116,7 @@ final class AdmissionRecovery {
             resolve(id, reason: "tiled")
         }
 
-        let stranded = result.failedInsertedIDs.filter { records[$0] == nil }
+        let stranded = result.strandedIDs.filter { records[$0] == nil }
         guard !stranded.isEmpty else { return }
         for id in stranded {
             records[id] = Record(workspace: result.workspace, screen: result.screen,

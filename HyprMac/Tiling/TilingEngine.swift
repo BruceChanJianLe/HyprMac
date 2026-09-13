@@ -52,8 +52,8 @@ class TilingEngine {
     }
 
     /// One `(workspace, screen)` whose last layout attempt did not leave
-    /// verified geometry behind, with the ids involved. Step 4's
-    /// orchestrator reads this to schedule its one bounded retry.
+    /// verified geometry behind, with the ids involved. The admission
+    /// recovery reads this when it decides what to finish.
     struct UnverifiedLayout {
         let workspace: Int
         /// nil when the screen that owned the key is gone.
@@ -101,9 +101,16 @@ class TilingEngine {
         /// or it failed, which is also when the prior tree stops speaking
         /// for the screen.
         let restoredIDs: Set<CGWindowID>
+        /// newcomers a bypassed pass would not even insert. Always empty on
+        /// an ordinary pass, where a smart-insert refusal goes to the
+        /// overflow router as it always has.
+        let refusedIDs: Set<CGWindowID>
 
         /// newcomers this pass could not leave tiled.
         var failedInsertedIDs: Set<CGWindowID> { insertedIDs.subtracting(publishedIDs) }
+        /// every newcomer this pass left outside the tree, however it got
+        /// there.
+        var strandedIDs: Set<CGWindowID> { failedInsertedIDs.union(refusedIDs) }
         /// whether the rollback put every one of its targets back.
         var restorationVerified: Bool { !restoredIDs.isEmpty }
         var published: Bool { failure == nil }
@@ -125,6 +132,51 @@ class TilingEngine {
         /// the window fit the tree but the screen did not accept the layout.
         case layoutRejected(FrameSizingFailure)
     }
+
+    /// One slot's reason for refusing an incoming window, with where the
+    /// bound that refused it came from.
+    ///
+    /// There is one of these per leaf the search tried, never a single
+    /// "largest free slot": which leaf can take a window depends on the split
+    /// direction, the ratios and the tenant already sitting there, so one
+    /// number would be a fiction.
+    struct FitRefusal: Equatable {
+        /// `learned` is a bound the app refused (`observed` provenance),
+        /// `seeded` an `AXMinimumSize` or per-bundle hint nothing has tested,
+        /// `structural` a depth, count or slot-geometry limit no attempt can
+        /// talk its way out of.
+        enum Source: String { case learned, seeded, structural }
+
+        let incoming: CGWindowID
+        /// the tenant of the leaf that refused. nil for an empty leaf.
+        let tenant: CGWindowID?
+        let slot: CGSize
+        let incomingMinimum: CGSize
+        let tenantMinimum: CGSize
+        let axis: String
+        let source: Source
+    }
+
+    /// What a fit check says about an explicit user request.
+    enum AdmissionOutlook: Equatable {
+        case fits
+        /// nothing but learned bounds is in the way. One real attempt would
+        /// settle whether they are still true.
+        case revalidatable([FitRefusal])
+        /// refused for something an attempt cannot change — a seeded bound
+        /// that survived the bypass, or structure.
+        case refused([FitRefusal])
+    }
+
+    /// How far back an explicit revalidation's bypass reaches: all the way.
+    ///
+    /// The admission retry ignores only what one failed attempt observed,
+    /// because that is the bound it has reason to distrust. A user asking
+    /// again, by hand, is distrusting the whole observed record for these
+    /// windows, so the bypass covers every observed entry however old. It
+    /// still erases nothing: the entries stand unless the attempt is accepted
+    /// and lowers them through the ordinary reconcile path.
+    static let revalidationSinceGeneration: UInt64 = 0
 
     /// Pseudo-workspace the scratchpad layer's tree lives on. Matches
     /// `ScratchpadController.workspace`; kept local so the engine has no
@@ -990,9 +1042,10 @@ class TilingEngine {
     }
 
     private func fittingLeaf(for window: HyprWindow?, in tree: BSPTree,
-                             maxDepth: Int, rect: CGRect) -> BSPNode? {
+                             maxDepth: Int, rect: CGRect,
+                             noting: ((LayoutEngine.SlotRefusal) -> Void)? = nil) -> BSPNode? {
         layoutEngine.fittingLeaf(for: window, in: tree, maxDepth: maxDepth,
-                                 rect: rect, minimumSize: minimumSize(for:))
+                                 rect: rect, minimumSize: minimumSize(for:), noting: noting)
     }
 
     private struct TileMembershipResult {
@@ -1000,6 +1053,8 @@ class TilingEngine {
         let tree: BSPTree
         let rect: CGRect
         let insertedWindows: [HyprWindow]
+        /// newcomers a bypassed pass refused outright, so nothing routed them.
+        var refusedWindows: [HyprWindow] = []
     }
 
     // shared tree-update path between tileWindows and prepareTileLayout.
@@ -1048,12 +1103,36 @@ class TilingEngine {
         }
 
         var insertedWindows: [HyprWindow] = []
+        var refusedWindows: [HyprWindow] = []
         for w in toInsert {
-            if !smartInsertFitting(w, into: t, maxDepth: maxDepth(for: screen), rect: rect) {
-                hyprLog(.debug, .lifecycle, "no fitting tile slot — auto-floating '\(w.title ?? "?")'")
-                onAutoFloat?(w)
-            } else {
+            // the bypass belongs to the request, not to the pass. a window the
+            // request never named is judged and routed by the ordinary rules
+            // even though this pass is revalidating someone else's bounds —
+            // otherwise an unrelated newcomer that happens to be assigned here
+            // rides a bypass nobody asked for on its behalf.
+            guard minimaBypass?[w.windowID] != nil else {
+                withoutMinimaBypass {
+                    if smartInsertFitting(w, into: t, maxDepth: maxDepth(for: screen), rect: rect) {
+                        insertedWindows.append(w)
+                    } else {
+                        hyprLog(.debug, .lifecycle, "no fitting tile slot — auto-floating '\(w.title ?? "?")'")
+                        onAutoFloat?(w)
+                    }
+                }
+                continue
+            }
+            if smartInsertFitting(w, into: t, maxDepth: maxDepth(for: screen), rect: rect) {
                 insertedWindows.append(w)
+            } else {
+                // the request's own window, and it still does not fit: a
+                // structural no-fit. the overflow router must not see it —
+                // routing picks the next workspace with a fit check of its
+                // own, and that check would run inside this pass and decide
+                // with the very bounds the pass is ignoring. it is reported
+                // instead, and the caller finishes it.
+                refusedWindows.append(w)
+                hyprLog(.notice, .lifecycle, "no fitting tile slot for \(w.windowID)"
+                        + " with learned bounds set aside — not routed")
             }
         }
 
@@ -1063,7 +1142,9 @@ class TilingEngine {
         }
         t.root.applySavedRatios()
 
-        return TileMembershipResult(key: key, tree: t, rect: rect, insertedWindows: insertedWindows)
+        return TileMembershipResult(key: key, tree: t, rect: rect,
+                                    insertedWindows: insertedWindows,
+                                    refusedWindows: refusedWindows)
     }
 
     /// Tile `windows` for `(workspace, screen)`.
@@ -1082,7 +1163,8 @@ class TilingEngine {
     /// tree ended up holding, so the caller can tell which newcomers were
     /// stranded without reading the failure's window id.
     @discardableResult
-    func tileWindows(_ windows: [HyprWindow], onWorkspace workspace: Int, screen: NSScreen) -> AdmissionResult {
+    func tileWindows(_ windows: [HyprWindow], onWorkspace workspace: Int, screen: NSScreen,
+                     alsoRestoringWithin extraReach: CGRect? = nil) -> AdmissionResult {
         let generation = beginLayoutGeneration()
         pendingSwapRevert = nil
         let live = trees[TilingKey(workspace: workspace, screen: screen)]
@@ -1094,7 +1176,8 @@ class TilingEngine {
 
         _ = consumePendingInserted(for: key, in: t)
         let outcome = applyTrackedLayout(t, in: rect, generation: generation, key: key,
-                                         inserted: m.insertedWindows.map(\.windowID))
+                                         inserted: m.insertedWindows.map(\.windowID),
+                                         restorationUsableFrame: extraReach.map { rect.union($0) })
         if publishes(outcome), layoutGeneration == generation {
             if let live { live.root = candidate.root } else { trees[key] = candidate }
         }
@@ -1110,7 +1193,8 @@ class TilingEngine {
 
         return admissionResult(outcome, workspace: workspace, screen: screen, key: key,
                                generation: generation,
-                               inserted: Set(m.insertedWindows.map(\.windowID)))
+                               inserted: Set(m.insertedWindows.map(\.windowID)),
+                               refused: Set(m.refusedWindows.map(\.windowID)))
     }
 
     /// Build the typed admission result from what the live tree holds now.
@@ -1121,7 +1205,8 @@ class TilingEngine {
     private func admissionResult(_ outcome: LayoutApplicationOutcome,
                                  workspace: Int, screen: NSScreen, key: TilingKey,
                                  generation: UInt64,
-                                 inserted: Set<CGWindowID>) -> AdmissionResult {
+                                 inserted: Set<CGWindowID>,
+                                 refused: Set<CGWindowID>) -> AdmissionResult {
         let published = Set(trees[key]?.allWindows.map(\.windowID) ?? [])
         var failure: FrameSizingFailure?
         var restored: Set<CGWindowID> = []
@@ -1136,7 +1221,7 @@ class TilingEngine {
         }
         return AdmissionResult(workspace: workspace, screen: screen, generation: generation,
                                insertedIDs: inserted, publishedIDs: published,
-                               failure: failure, restoredIDs: restored)
+                               failure: failure, restoredIDs: restored, refusedIDs: refused)
     }
 
     /// One more admission attempt for `(workspace, screen)`, ignoring for
@@ -1148,10 +1233,13 @@ class TilingEngine {
     /// `MinSizeMemory` — the bypass lasts exactly as long as this call.
     @discardableResult
     func retryAdmission(_ windows: [HyprWindow], onWorkspace workspace: Int, screen: NSScreen,
-                        bypassingMinimaSince bypass: [CGWindowID: UInt64]) -> AdmissionResult {
+                        bypassingMinimaSince bypass: [CGWindowID: UInt64],
+                        restorationReach: CGRect? = nil) -> AdmissionResult {
+        let previous = minimaBypass
         minimaBypass = bypass
-        defer { minimaBypass = nil }
-        return tileWindows(windows, onWorkspace: workspace, screen: screen)
+        defer { minimaBypass = previous }
+        return tileWindows(windows, onWorkspace: workspace, screen: screen,
+                           alsoRestoringWithin: restorationReach)
     }
 
     /// Tile scratchpad members into a caller-supplied `rect` on the layer's
@@ -1626,7 +1714,173 @@ class TilingEngine {
                            rect: rect) != nil
     }
 
+    /// What an explicit user request should expect from `(workspace, screen)`.
+    ///
+    /// Runs the ordinary fit check first. If it refuses, runs it again with
+    /// every learned bound for the incoming window *and* the destination's
+    /// tenants set aside, on the same tree and under the same structural
+    /// rules. A refusal the second check does not repeat was a refusal by
+    /// memory alone, and one attempt would say whether that memory is still
+    /// true. A refusal it does repeat is real, and the facts reported are the
+    /// ones that survived the bypass.
+    ///
+    /// No AX write and no layout happen here, and the bypass lasts exactly as
+    /// long as the second check. Two things are not read-only, both inherited
+    /// from the fit check this replaces: priming can pick up a window's
+    /// `AXMinimumSize` as a new `seeded` entry, and asking about a workspace
+    /// that has no tree yet creates an empty one. Neither touches an
+    /// `observed` bound, which is what a revalidation is about.
+    func admissionOutlook(_ window: HyprWindow, onWorkspace workspace: Int,
+                          screen: NSScreen) -> AdmissionOutlook {
+        let key = TilingKey(workspace: workspace, screen: screen)
+        let t = tree(for: key)
+        if t.root.isEmpty {
+            logOutlook([], incoming: window.windowID, workspace: workspace, verdict: "fits")
+            return .fits
+        }
+        var toPrime = t.allWindows
+        toPrime.append(window)
+        primeMinimumSizes(toPrime)
+        let rect = displayManager.cgRect(for: screen)
+        let depth = maxDepth(for: screen)
+
+        var honoured: [FitRefusal] = []
+        if fittingLeaf(for: window, in: t, maxDepth: depth, rect: rect,
+                       noting: { honoured.append(self.refusal($0, incoming: window)) }) != nil {
+            logOutlook([], incoming: window.windowID, workspace: workspace, verdict: "fits")
+            return .fits
+        }
+
+        var bypassed: [FitRefusal] = []
+        let found: BSPNode? = withRevalidationBypass(incoming: [window.windowID], key: key) {
+            fittingLeaf(for: window, in: t, maxDepth: depth, rect: rect,
+                        noting: { bypassed.append(self.refusal($0, incoming: window)) })
+        }
+        if found != nil {
+            logOutlook(honoured, incoming: window.windowID, workspace: workspace, verdict: "revalidatable")
+            return .revalidatable(honoured)
+        }
+        logOutlook(bypassed, incoming: window.windowID, workspace: workspace, verdict: "refused")
+        return .refused(bypassed)
+    }
+
+    /// Attach provenance to one slot's geometric refusal.
+    ///
+    /// The memory is read directly, never through the bypass: a bound that is
+    /// being ignored for the duration of a check is still the reason the
+    /// first check said no. A minimum of zero on the refusing side
+    /// contributes nothing, so a slot too small for the gap alone reads as
+    /// structural rather than blaming a bound that is not there.
+    private func refusal(_ slot: LayoutEngine.SlotRefusal, incoming: HyprWindow) -> FitRefusal {
+        var source = FitRefusal.Source.structural
+        if !slot.depthExhausted {
+            var provenances: [MinSizeProvenance] = []
+            if slot.incomingMinimum != .zero,
+               let entry = minSizes.entry(for: incoming.windowID) { provenances.append(entry.provenance) }
+            if slot.tenantMinimum != .zero, let tenant = slot.tenantID,
+               let entry = minSizes.entry(for: tenant) { provenances.append(entry.provenance) }
+            if provenances.contains(.observed) {
+                source = .learned
+            } else if provenances.contains(.seeded) {
+                source = .seeded
+            }
+        }
+        return FitRefusal(incoming: incoming.windowID, tenant: slot.tenantID, slot: slot.slot,
+                          incomingMinimum: slot.incomingMinimum, tenantMinimum: slot.tenantMinimum,
+                          axis: slot.axis, source: source)
+    }
+
+    private func logOutlook(_ refusals: [FitRefusal], incoming: CGWindowID,
+                            workspace: Int, verdict: String) {
+        for r in refusals {
+            hyprLog(.notice, .tiling, "fit refusal: incoming=\(r.incoming) ws\(workspace)"
+                    + " tenant=\(r.tenant.map(String.init) ?? "none") slot=\(Self.sizeText(r.slot))"
+                    + " needIncoming=\(Self.sizeText(r.incomingMinimum))"
+                    + " needTenant=\(Self.sizeText(r.tenantMinimum))"
+                    + " axis=\(r.axis) source=\(r.source.rawValue)")
+        }
+        hyprLog(.notice, .tiling, "fit outlook: incoming=\(incoming) ws\(workspace)"
+                + " verdict=\(verdict) refusals=\(refusals.count)")
+    }
+
+    private static func sizeText(_ size: CGSize) -> String {
+        String(format: "%gx%g", Double(size.width), Double(size.height))
+    }
+
+    /// Run `body` with every observed bound ignored for `incoming` and for
+    /// whoever currently holds `key`'s tree.
+    ///
+    /// Widening it to the incumbents is the point: the bound that refuses an
+    /// incoming window is usually the tenant's, not its own — Safari 21611
+    /// refused while 26016 was the window trying to get in. The map is
+    /// rebuilt per call and dropped on the way out, so nothing outlives the
+    /// one check or the one attempt it wraps.
+    private func withRevalidationBypass<T>(incoming: Set<CGWindowID>, key: TilingKey,
+                                           _ body: () -> T) -> T {
+        let previous = minimaBypass
+        minimaBypass = revalidationBypass(incoming: incoming, key: key)
+        defer { minimaBypass = previous }
+        return body()
+    }
+
+    /// Run `body` with no bypass at all, whatever pass it is nested in. For
+    /// the decisions that belong to some other window than the one being
+    /// revalidated.
+    private func withoutMinimaBypass<T>(_ body: () -> T) -> T {
+        let previous = minimaBypass
+        minimaBypass = nil
+        defer { minimaBypass = previous }
+        return body()
+    }
+
+    private func revalidationBypass(incoming: Set<CGWindowID>, key: TilingKey) -> [CGWindowID: UInt64] {
+        var bypass: [CGWindowID: UInt64] = [:]
+        for id in incoming { bypass[id] = Self.revalidationSinceGeneration }
+        for window in trees[key]?.allWindows ?? [] {
+            bypass[window.windowID] = Self.revalidationSinceGeneration
+        }
+        return bypass
+    }
+
+    /// One explicit-request admission attempt for `(workspace, screen)` with
+    /// every learned bound for `incoming` and for the destination's tenants
+    /// set aside.
+    ///
+    /// Otherwise an ordinary tiling pass: fresh generation, private
+    /// candidate, same publication gate, same reconcile path. An accepted
+    /// layout lowers the bounds it disproved; a refused one publishes nothing
+    /// and leaves the memory exactly as it found it.
+    ///
+    /// `restorationReach` widens the rect a rollback is allowed to write
+    /// into. A window being moved from another screen is still standing on
+    /// that screen when the attempt captures it, and a captured original
+    /// outside the restoration rect cancels the whole rollback — every
+    /// incumbent would be left on the failed candidate's frames and the
+    /// newcomer stranded on a screen it does not belong to. Pass the screen
+    /// the newcomer is coming from and the rollback can reach both.
+    @discardableResult
+    func revalidateAdmission(_ windows: [HyprWindow], incoming: Set<CGWindowID>,
+                             onWorkspace workspace: Int, screen: NSScreen,
+                             restorationReach: CGRect? = nil) -> AdmissionResult {
+        let key = TilingKey(workspace: workspace, screen: screen)
+        let bypass = revalidationBypass(incoming: incoming, key: key)
+        hyprLog(.notice, .tiling, "minima revalidation attempt: ws\(workspace)"
+                + " incoming=[\(incoming.sorted().map(String.init).joined(separator: ", "))]"
+                + " bypassing=[\(bypass.keys.sorted().map(String.init).joined(separator: ", "))]")
+        return retryAdmission(windows, onWorkspace: workspace, screen: screen,
+                              bypassingMinimaSince: bypass,
+                              restorationReach: restorationReach)
+    }
+
+    /// A capacity probe other subsystems run for their own reasons — the
+    /// overflow router's next-workspace search above all. It answers on the
+    /// memory as it stands, never on a bypass belonging to whatever pass it
+    /// was called from.
     func canFitWindows(_ windows: [HyprWindow], onWorkspace workspace: Int, screen: NSScreen) -> Bool {
+        withoutMinimaBypass { fitWindows(windows, onWorkspace: workspace, screen: screen) }
+    }
+
+    private func fitWindows(_ windows: [HyprWindow], onWorkspace workspace: Int, screen: NSScreen) -> Bool {
         let ids = Set(windows.map(\.windowID))
         guard ids.count == windows.count else { return false }
         let key = TilingKey(workspace: workspace, screen: screen)
@@ -1655,32 +1909,47 @@ class TilingEngine {
     /// eviction is committed only once the layout that replaces it has been
     /// accepted, and `.failed` is a refusal the caller has to report, not a
     /// quiet nil.
-    func forceInsertWindow(_ window: HyprWindow, toWorkspace workspace: Int, on screen: NSScreen) -> ForceInsertResult {
-        primeMinimumSizes([window])
+    ///
+    /// `bypassingLearnedMinima` is the explicit-revalidation pass: the user
+    /// asked a second time after a refusal that only learned bounds produced,
+    /// so this one attempt ignores the observed bounds of the window and of
+    /// the tenants already in the tree. Structure is untouched — the same
+    /// depth, the same slot geometry, the same eviction fallback, and the same
+    /// publication gate decide it.
+    func forceInsertWindow(_ window: HyprWindow, toWorkspace workspace: Int, on screen: NSScreen,
+                           bypassingLearnedMinima: Bool = false) -> ForceInsertResult {
         let key = TilingKey(workspace: workspace, screen: screen)
+        guard !bypassingLearnedMinima else {
+            return withRevalidationBypass(incoming: [window.windowID], key: key) {
+                forceInsertWindow(window, toWorkspace: workspace, on: screen)
+            }
+        }
+        primeMinimumSizes([window])
         let live = trees[key]
         let rect = displayManager.cgRect(for: screen)
 
         if live?.contains(window) == true { return .alreadyPresent }
-        let generation = invalidatePendingLayout()
         let candidate = live?.deepClone() ?? BSPTree()
+
+        var success = ForceInsertResult.inserted
+        if !smartInsertFitting(window, into: candidate, maxDepth: maxDepth(for: screen), rect: rect) {
+            guard let evicted = candidate.deepestRightLeafWindow() else { return .failed(.noFittingSlot) }
+            candidate.remove(evicted)
+            guard smartInsertFitting(window, into: candidate, maxDepth: maxDepth(for: screen), rect: rect) else {
+                // the candidate is discarded, so the evicted window never left
+                // the live tree and needs no reinsertion
+                return .failed(.noFittingSlot)
+            }
+            success = .evicted(evicted.windowID)
+        }
+
+        // only now: a refusal above applies nothing, and cancelling an
+        // in-flight layout for a pass that never ran is a layout lost for
+        // nothing
+        let generation = invalidatePendingLayout()
         _ = consumePendingInserted(for: key, in: candidate)
-
-        if smartInsertFitting(window, into: candidate, maxDepth: maxDepth(for: screen), rect: rect) {
-            return commitForceInsert(candidate, live: live, key: key, rect: rect,
-                                     window: window, generation: generation, success: .inserted)
-        }
-
-        guard let evicted = candidate.deepestRightLeafWindow() else { return .failed(.noFittingSlot) }
-        candidate.remove(evicted)
-        guard smartInsertFitting(window, into: candidate, maxDepth: maxDepth(for: screen), rect: rect) else {
-            // the candidate is discarded, so the evicted window never left
-            // the live tree and needs no reinsertion
-            return .failed(.noFittingSlot)
-        }
         return commitForceInsert(candidate, live: live, key: key, rect: rect,
-                                 window: window, generation: generation,
-                                 success: .evicted(evicted.windowID))
+                                 window: window, generation: generation, success: success)
     }
 
     private func commitForceInsert(_ candidate: BSPTree, live: BSPTree?, key: TilingKey,

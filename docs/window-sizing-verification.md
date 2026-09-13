@@ -1048,20 +1048,284 @@ Both logs under `build/sizing/recovery/`:
   `intendedTileRects` hands out rects for a marked key, the click hit-test
   tries the tiles first, `floatInPlace` sets only the cache flag, and a
   refused float→tile neither restores the flags nor flashes.
-  `Executed 652 tests, with 20 tests skipped and 50 failures` across 28
-  tests. Two of those, `testUnverifiedKeyOffersNoIntendedRects` and
-  `testEmptyMembersEmptiesTree`, are step 3's and fail as a side effect of
-  the last two switches — proof the switches reached the behaviour they
-  aimed at.
-- Green: `green-step4.log`. 658 tests, 20 skipped, 0 failures. One full run
-  of this commit hit the known wall-clock flake in
-  `PollingSchedulerTests.testScheduleAfterPollFiresAgain` ("1 is not equal
-  to 2"); it passed on its own rerun, and the recorded log is a clean
-  repeat of the whole suite.
+  `Executed 652 tests, with 20 tests skipped and 50 failures`, across 28
+  distinct test cases.
+- Green: `green-step4.log`. 658 tests, 20 skipped, 0 failures.
 
-Tests that pass in both runs on purpose: the cancellation cases, which check
-that nothing happens and hold whether or not the recovery tracks anything;
+What the 28 red failures were, checked against the log rather than
+remembered (corrected 2026-09-13, step 5):
+
+- 23 are tests this commit added.
+- `testUnverifiedKeyOffersNoIntendedRects` and `testEmptyMembersEmptiesTree`
+  are step 3's and fail as a side effect of the last two switches — proof
+  the switches reached the behaviour they aimed at.
+- `testDirectionalPickUsesActualFramesForAnUnverifiedKey` is step 3's, and
+  this commit rewrote it.
+- `testAnUnrestoredRollbackKeepsTheKeyMarkedAfterTheFloat` and
+  `testFloatInPlaceClearsTheMarkOnlyWhenTheIncumbentsWereRestored` were
+  renamed before the commit and are in the suite under other names. The red
+  log is the only place those two names appear.
+
+The commit adds 49 tests, so 26 of them have no red entry at all. Eight were
+written after the red run and never had one:
+`testAPendingDisplayTransitionHoldsTheRetryInsteadOfTilingMidReconfigure`,
+`testEachNewcomerBypassesOnlyBackToItsOwnAdmission`,
+`testTheFallbackAsksTheEngineToClearTheMark`,
+`testTheFallbackDoesNothingBesidesAttemptFloatAndClear`, and the four
+`TilingEngineMembershipTransactionTests` mark tests
+(`testTheMarkClearsWhenEveryAttemptOnTheKeyRestoredItsOriginals`,
+`testTheMarkStandsOnceAnyAttemptOnTheKeyFailedToRestore`,
+`testALaterVerifiedRollbackDoesNotRedeemAnEarlierFailedOne`,
+`testAnAcceptedLayoutStillClearsTheMarkAfterAFailedRollback`). The other 18
+pass in both runs on purpose: the cancellation cases, which check that
+nothing happens and hold whether or not the recovery tracks anything;
 `testAcceptedAdmissionStrandsNobody` and `testAcceptedAdmissionTracksNothing`,
 which pin the quiet path; and
 `testAVanishedNewcomerStopsLookingLiveToAdmissionRecovery`, which pins
 existing discovery behaviour that the recovery's liveness probe reads.
+
+An earlier version of this section claimed a run of this commit hit the
+known `PollingSchedulerTests.testScheduleAfterPollFiresAgain` wall-clock
+flake. No log under `build/sizing/recovery/` records that failure — the test
+passes in `green-step4.log` and in every other saved run — so the claim is
+withdrawn.
+
+## Step 5 — explicit revalidation of learned minima, 2026-09-13
+
+A learned bound is a memory of one refusal, and the fit check treats it as a
+standing fact. In the evidence run that is how 26016 ends up stuck: the
+admission at 12:32:49 is refused on the incumbent 21611, a minimum is
+written down, and the three `moveToWorkspace(2)` presses at 12:33:06,
+12:33:08 and 12:33:09 are all answered with `workspace 2 can't fit` without
+a single frame being written. Nothing ever asks the screen again. This step
+gives the user's own request one way to ask.
+
+### What counts as learned
+
+`learned` means `observed` provenance and nothing else. A `seeded` entry is
+an `AXMinimumSize` value or a per-bundle guess that nothing has tested, and
+bypassing it would mean writing a frame the app has said up front it will
+not take. The refusal diagnostics name all three sources separately —
+`learned`, `seeded`, `structural` — so a seeded refusal reads as what it is
+rather than as a bound the user could argue with.
+
+### The outlook
+
+`TilingEngine.admissionOutlook(_:onWorkspace:screen:)` runs the ordinary fit
+check, and if it refuses, runs it again with every observed bound for the
+incoming window *and* the destination's tenants set aside. Three answers:
+
+- `.fits` — nothing to do.
+- `.revalidatable(refusals)` — the second check found a slot, so memory
+  alone refused. The refusals reported are the first check's, because those
+  are the facts that said no.
+- `.refused(refusals)` — the second check refused too. The refusals reported
+  are the second check's, because those are the ones that survive a bypass,
+  and reporting the first check's would blame a bound that is not the
+  obstacle.
+
+Both checks read the same tree under the same structural rules. Nothing is
+written, no tree is mutated, and `MinSizeMemory` is untouched either way.
+
+Widening the bypass to the incumbents is the point. The bound that refuses
+an incoming window is usually a tenant's, not its own: 21611 refused while
+26016 was the window trying to get in. The bypass reaches back over every
+observed entry for those ids, not just the newest — an explicit request is
+the user distrusting the whole observed record for these windows, where the
+admission retry distrusts only what one failed attempt just learned.
+
+### Refusal diagnostics
+
+One line per leaf the search tried, never a single "largest free slot":
+which leaf can take a window depends on the split direction, the ratios and
+the tenant already sitting there, so one number would be a fiction.
+
+```
+fit refusal: incoming=26016 ws2 tenant=21611 slot=1504x883 needIncoming=0x0 needTenant=1496x841 axis=width source=learned
+fit outlook: incoming=26016 ws2 verdict=revalidatable refusals=2
+```
+
+`LayoutEngine.pairFit` is `pairFits` with its working shown, so the axis is
+read off the check that failed rather than recomputed. `fittingLeaf` reports
+on its second pass only: pass 0's `minSlotDimension` skip is a preference,
+not a refusal, and pass 1 revisits every leaf it skipped. So
+`minSlotDimension` never appears as a refusal source, because in this search
+it cannot refuse anything.
+
+The workspace-full check keeps its own line, with the same vocabulary:
+`workspace 2 full: incoming=26016 tiled=4 max=4 axis=count source=structural`.
+
+### A visible destination is settled on the spot
+
+`WorkspaceOrchestrator.moveToWorkspace` lays the window out into the
+destination alongside its tenants *before* anything about the source
+changes. Only a published layout commits the move. A refusal costs the user
+nothing: the engine's rollback puts every incumbent back, the window keeps
+its place in the source tree, its floating flag is put back, and the
+ordinary rejection beep and flash happen.
+
+### A hidden destination waits for its reveal
+
+Unparking a hidden workspace's tenants over the visible one to run an
+experiment is not what the user asked for, so nothing is written. The move
+follows the existing assignment and parking, and `MinimaRevalidation`
+(`Core/Orchestration/MinimaRevalidation.swift`) holds a marker with the
+destination, its screen, and where the window came from. The first retile
+after that workspace becomes visible spends the marker: `retileVisible`
+calls `revalidateAdmission` instead of `tileWindows` for that key. Accepted,
+and the bound it disproved is lowered through the ordinary reconcile path.
+Refused, and the newcomer is stranded, which hands it to step 4's bounded
+recovery — one retry, then a float in place.
+
+The marker is spent by that one reveal whatever the answer, so an ordinary
+poll can never become an unlimited min-size probe. It is also dropped when
+the window is reassigned, when the user floats it, when the user moves it
+again, when it is forgotten, on a display change, and on a stop. It
+deliberately survives a later key press, unlike an armed admission retry:
+the key press that matters here is the workspace switch the marker is
+waiting for.
+
+### Float to tile
+
+`FloatingWindowController.toggle` asks for the outlook only when
+`forceInsertWindow` returns `.failed(.noFittingSlot)` — the tree refusing
+the window. `.failed(.layoutRejected)` is the screen refusing real frames,
+which is evidence, not memory, and buys nothing. A `.revalidatable` outlook
+buys exactly one more `forceInsertWindow` with `bypassingLearnedMinima:
+true`. Structure still decides it: the same depth ceiling, the same eviction
+fallback, the same publication gate.
+
+### Corrections to `2a7d57e`
+
+- **The retry's bypass reached the overflow router.** `minimaBypass` is a
+  field, live for the whole `retryAdmission` call, and
+  `updateTreeMembership` fired `onAutoFloat` synchronously inside it. That
+  callback is `routeUnfittedWindow`, which runs `canFitWindows` to pick the
+  next workspace — with the newcomer's real learned bound ignored, so it
+  could send the window to a workspace that cannot hold it. Two changes: a
+  pass that is already setting bounds aside does not route at all (a window
+  that still does not fit is a structural no-fit, reported on the result as
+  `refusedIDs` and finished by the caller), and `canFitWindows` explicitly
+  answers on the memory as it stands, never on a bypass belonging to
+  whatever pass it was called from. `AdmissionResult.strandedIDs` is
+  `failedInsertedIDs` plus `refusedIDs`, so the recovery picks these windows
+  up: for its own retry that is the second failure and the float in place;
+  for a reveal it is the newcomer's one bounded recovery.
+- **A refused `forceInsertWindow` cancelled an in-flight layout.**
+  `invalidatePendingLayout` ran before the fit, so a `.noFittingSlot` return
+  discarded a pending layout having applied nothing. It now runs once a
+  candidate exists that could be applied. `consumePendingInserted` moved with
+  it, so a refusal no longer eats the key's pending-inserted ids either.
+- **A window in recovery was focused as `syncTracker-floating`.** It is in
+  no tree and not floating either; `clickFocusTarget` now says
+  `syncTracker-recovery` for those ids.
+- `TilingEngine.UnverifiedLayout`'s doc comment described the plan step that
+  introduced it instead of the behaviour.
+- `WindowManager.cancelsPendingRecovery` is the switch-workspace exclusion,
+  extracted from `handleAction` so it can be pinned.
+- The step 4 section's red-run evidence is corrected above.
+
+### Evidence
+
+Both under `build/sizing/recovery/`:
+
+- Red: `red-step5-explicit-revalidation.log`, taken with the new API in
+  place and seven behaviour switches reverted — `admissionOutlook` answers
+  `.fits` or `.refused([])` the way `canFitWindow` did, `fittingLeaf`
+  reports no refusals, `revalidateAdmission` runs an ordinary pass,
+  `bypassingLearnedMinima` is ignored, a bypassed pass routes through
+  `onAutoFloat` as before, `canFitWindows` inherits the caller's bypass, the
+  force-insert invalidation is back before the fit, and `clickFocusTarget`
+  ignores `recoveryIDs`. Run per suite rather than whole-suite, so the log
+  holds one `Executed` line per suite: `LayoutEngineTests` 22/3,
+  `TilingEngineMembershipTransactionTests` 39/9,
+  `ForceInsertWindowFallbackTests` 11/9, `AdmissionRecoveryTests` 35/1,
+  `MinimaRevalidationTests` 16/0, `WorkspaceOrchestratorMoveTests` 5/5.
+  Two tests were rewritten after that run because their premise was wrong —
+  with a single tenant, force-insert's eviction empties the tree and any
+  minimum fits the root, and a 100 000 px minimum is above
+  `usableMinSizeMaxPx`, so `MinSizeMemory` holds no entry and there is no
+  provenance for a bypass to key on. The membership and force-insert suites
+  were re-run against the same switches, and the force-insert suite once
+  more with the bodies as committed: `ForceInsertWindowFallbackTests` 11/7,
+  four of this step's five failing. All three re-runs are appended to the
+  log.
+- Green: `green-step5.log`. `Executed 710 tests, with 20 tests skipped and 0
+  failures`, 52 more than step 4's 658.
+- A fresh-context review of the first green tree found two defects, fixed in
+  this same commit and described under "Corrections to this step's own first
+  pass" below. Their two tests were red-run the same way, with just those two
+  behaviours reverted; that run is the last block in the red log and exactly
+  two tests fail in it, with no collateral.
+
+The run before that one, saved as `green-step5-flake-run.log`, is the same
+707 tests with one failure: `PollingSchedulerTests.testScheduleAfterPollFiresAgain`,
+"1 is not equal to 2", the known wall-clock flake. It passes alone in
+`green-step5-pollingscheduler-rerun.log` and passes in the recorded full
+run. Those two logs are kept because the step 4 section claimed this flake
+without an artifact; this is what the artifact looks like.
+
+Tests with no red entry, named rather than counted:
+
+- `MinimaRevalidationTests` (16) and the two
+  `AdmissionRecoveryTests` action-cancellation tests
+  (`testShowingAnotherWorkspaceDoesNotCancelAPendingRetry`,
+  `testEveryOtherActionCancelsAPendingRetry`) are new surface. There is no
+  earlier behaviour for them to contradict, so they pass in both runs.
+- `testAWindowABypassedPassRefusedOutrightIsStrandedToo` passes in both:
+  under the switches the bypassed pass routed the window instead, and the
+  test's `refusedIDs` set still reaches `strandedIDs`.
+- Three `WorkspaceOrchestratorMoveTests`
+  (`testASeededBoundRefusesTheMoveAndParksNothing`,
+  `testAStructuralRefusalNeverTouchesTheScreen`,
+  `testAFittingDestinationTakesTheWindowWithNoMarker`) pass in both on
+  purpose: they pin that a refusal still refuses and still writes nothing.
+- `testPairFit*` (4) and `testReportingDoesNotChangeWhichLeafIsChosen` pin a
+  refactor — `pairFits` now calls `pairFit` — and hold either way.
+- `testBypassingLearnedMinimaLeavesASeededHintStanding` passes in both: a
+  seeded bound refuses whether or not the bypass exists, which is the point
+  of the test.
+
+`testWithoutTheReachTheSameRollbackIsCancelledWhole` passes in both: it pins
+the behaviour the reach exists to work around, which the fix does not
+change.
+
+### Corrections to this step's own first pass
+
+Both found by reviewing the first green tree, both real, both fixed here.
+
+- **A refused visible-destination revalidation rolled back nothing.** A
+  visible destination is always another screen, so the window's captured
+  original frame lay outside the destination's usable rect, and
+  `applyVerifiedLayoutAttempt` cancels a rollback whole on exactly that
+  condition. The incumbents would have kept the failed candidate's frames
+  and the window would have been left standing on the destination screen
+  while still assigned to the source — which the next poll reads as screen
+  drift and acts on, completing the move the user was just told was
+  impossible. `revalidateAdmission` now takes a `restorationReach` and the
+  orchestrator passes the source screen's rect.
+- **The bypass was scoped to the pass, not to the request.** On a reveal,
+  every newcomer assigned to that workspace was inserted under the marked
+  window's bypass, so an unrelated window could take a slot the tenants'
+  learned bounds refuse, and its own structural no-fit went to `refusedIDs`
+  instead of the overflow router — for a request nobody made about it. Only
+  windows named in the bypass map are now judged under it; everyone else is
+  judged and routed with it suspended.
+
+Three claims in the first pass were also overstated and are corrected in the
+prose above: `admissionOutlook` is not fully read-only (priming can add a
+`seeded` entry, and asking about an untiled workspace creates its empty
+tree), marker cancellation on reassignment and float is lazy rather than
+immediate, and the float→tile gate is narrower than the retry it guards
+because the outlook does not model eviction.
+
+One existing test changed its expectation.
+`TilingEngineVerifiedLayoutTests.testReentrantStateChangesSupersedeActiveLayoutWithoutOldRollback`
+pinned that a `forceInsertWindow` the tree refuses supersedes a layout in
+flight. That was only true because the invalidation ran before the fit. A
+refused force insert now applies nothing — private candidate discarded, the
+key's pending-inserted ids left alone, no generation spent — so the layout
+in flight is
+still describing the truth and is left to finish. The other five reentrant
+changes in that test still supersede, and none of the six may roll back to
+frames the change has already made stale.

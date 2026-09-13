@@ -223,6 +223,56 @@ lines at all.
   axis=<…> source=accepted was=<seeded|observed>` — an accepted readback
   relaxing a bound. `was=` is the provenance the entry keeps.
 
+### Why a move or a float→tile was refused
+
+`TilingEngine.admissionOutlook` logs the whole question at `.notice` under
+`category: tiling`, one line per leaf the search tried and then a verdict:
+
+```
+fit refusal: incoming=<id> ws<N> tenant=<id|none> slot=<w>x<h>
+  needIncoming=<w>x<h> needTenant=<w>x<h>
+  axis=<width|height|width+height|depth> source=<learned|seeded|structural>
+fit outlook: incoming=<id> ws<N> verdict=<fits|revalidatable|refused> refusals=<n>
+```
+
+`source` is where the bound that said no came from. `learned` is
+`observed` provenance — the app actually refused that size once. `seeded`
+is an `AXMinimumSize` value or a per-bundle guess nothing has tested.
+`structural` is the depth ceiling, or a slot too small for the gap alone
+whatever the memory says. `needIncoming` or `needTenant` reading `0x0`
+means that side has no recorded bound on the axis in question.
+
+There is one line per leaf on purpose. Which leaf can take a window depends
+on the split direction, the ratios and the tenant already sitting there, so
+a single "largest free slot" figure would be a fiction. `minSlotDimension`
+never appears as a source: `fittingLeaf`'s second pass ignores it, so it is
+a preference rather than a refusal.
+
+`verdict=revalidatable` means only learned bounds refused, and the request
+gets one attempt with them set aside. Look for what follows:
+
+- `minima revalidation attempt: ws<N> incoming=[…] bypassing=[…]` — the
+  attempt itself. `bypassing` is the incoming window plus every tenant of
+  the destination tree.
+- `minima revalidation parked: <id> → ws<N> from ws<M> — verified when that
+  workspace is shown` — a hidden destination. Nothing was written.
+- `minima revalidation revealed: spent=[…] tiled=[…]` — the marker being
+  spent on the reveal. Ids in `spent` but not `tiled` were stranded, and
+  the next line for them is `admission retry scheduled:`.
+- `minima revalidation cancelled: <id> reason=<…>` — the marker dropped
+  before its reveal.
+- `float→tile revalidation: <id> ws<N>` — the toggle's one bypassed
+  `forceInsertWindow`.
+- `no fitting tile slot for <id> with learned bounds set aside — not
+  routed` — a structural no-fit inside a bypassed pass. It is not handed to
+  the overflow router, because routing would pick its next workspace with
+  the bounds this pass is ignoring; the admission recovery finishes it
+  instead.
+
+The workspace-full check uses the same vocabulary on its own line:
+`workspace <N> full: incoming=<id> tiled=<n> max=<m> axis=count
+source=structural — rejected move`.
+
 `WindowManager` logs one `gesture:` line per left-mouse release under
 `category: mouse`: `gesture: sawDragEvent=<bool> travel=<n>
 threshold=8 drag=<bool>`. macOS fires `.leftMouseDragged` on a pixel of
@@ -430,6 +480,10 @@ Every `FocusStateController.recordFocus` call logs the
 `from → to` transition with a short reason tag (`ensureFocus-tiled`,
 `syncTracker-floating`, `cycleFocus`, etc.). Walk the log
 backwards from the unexpected focus state to find the trigger.
+`syncTracker-recovery` is the click hit-test landing on a newcomer in
+admission recovery: it is drawn over the tiles like a floater but it is
+not floating, so it gets its own tag rather than borrowing
+`syncTracker-floating`.
 
 ### "Why didn't a swap take effect?"
 

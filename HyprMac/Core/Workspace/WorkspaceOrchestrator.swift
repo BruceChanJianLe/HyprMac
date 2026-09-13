@@ -29,11 +29,16 @@ final class WorkspaceOrchestrator {
     private let focusBorder: FocusBorder
     private let dimmingOverlay: DimmingOverlay
     private let suppressions: SuppressionRegistry
+    private let revalidation: MinimaRevalidation
 
     var screenUnderCursor: () -> NSScreen = { NSScreen.main! }
     var currentFocusedWindow: () -> HyprWindow? = { nil }
     var updateFocusBorder: (HyprWindow) -> Void = { _ in }
     var tileAllVisibleSpaces: () -> Void = { }
+    /// Every window AX can see right now. A seam because the explicit
+    /// revalidation attempt needs the destination's tenants, and a test has
+    /// no desktop to read them off.
+    var allWindows: () -> [HyprWindow] = { [] }
     var animatedRetile: (_ prepare: (() -> Void)?, _ completion: (() -> Void)?) -> Void = { _, _ in }
 
     init(workspaceManager: WorkspaceManager,
@@ -45,7 +50,9 @@ final class WorkspaceOrchestrator {
          focusController: FocusStateController,
          focusBorder: FocusBorder,
          dimmingOverlay: DimmingOverlay,
-         suppressions: SuppressionRegistry) {
+         suppressions: SuppressionRegistry,
+         revalidation: MinimaRevalidation) {
+        self.revalidation = revalidation
         self.workspaceManager = workspaceManager
         self.tilingEngine = tilingEngine
         self.accessibility = accessibility
@@ -56,6 +63,7 @@ final class WorkspaceOrchestrator {
         self.focusBorder = focusBorder
         self.dimmingOverlay = dimmingOverlay
         self.suppressions = suppressions
+        self.allWindows = { [weak accessibility] in accessibility?.getAllWindows() ?? [] }
     }
 
     // MARK: - switch
@@ -140,13 +148,15 @@ final class WorkspaceOrchestrator {
 
     /// Move the focused window to workspace `number`.
     ///
-    /// Capacity is checked before any mutation: if the target workspace
-    /// is currently visible, `canFitWindow` is consulted (so min-size
-    /// constraints reject impossible moves); if it is not visible, a
-    /// raw tile-count vs. dwindle-depth check rejects when the
-    /// workspace is full. Rejections beep and flash a red border;
+    /// Capacity is checked before any mutation. `admissionOutlook` answers
+    /// for visible and hidden destinations alike: it fits, only learned
+    /// bounds refuse it, or the refusal is one no attempt can change. A
+    /// hidden destination then also gets the raw tile-count vs.
+    /// dwindle-depth check. Rejections beep and flash a red border;
     /// successful moves animate the surrounding tile and post a
-    /// workspace-changed notification.
+    /// workspace-changed notification. A refusal that only learned bounds
+    /// produced buys one revalidation — run here for a visible destination,
+    /// left as a marker for the reveal when the destination is hidden.
     ///
     /// Special-cases windows on disabled monitors: they unfloat into
     /// the target as tiled windows on success.
@@ -182,10 +192,17 @@ final class WorkspaceOrchestrator {
         let targetScreen = workspaceManager.homeScreenForWorkspace(number) ?? screen
         let targetVisible = workspaceManager.screenForWorkspace(number) != nil
 
+        // the user asking again replaces whatever the last ask left pending
+        revalidation.cancel(focused.windowID, reason: "moved again")
+
         // check capacity on target workspace before moving a tiled window.
+        var decision = MinimaRevalidation.Decision.admit
         if willTile {
-            if !tilingEngine.canFitWindow(focused, onWorkspace: number, screen: targetScreen) {
-                hyprLog(.debug, .workspace, "workspace \(number) can't fit '\(focused.title ?? "?")' on \(targetScreen.localizedName) — rejected move")
+            let outlook = tilingEngine.admissionOutlook(focused, onWorkspace: number, screen: targetScreen)
+            decision = MinimaRevalidation.decide(outlook, destinationVisible: targetVisible)
+            if decision == .refuse {
+                hyprLog(.notice, .workspace, "workspace \(number) can't fit \(focused.windowID)"
+                        + " on \(targetScreen.localizedName) — rejected move")
                 NSSound.beep()
                 if let frame = focused.frame {
                     focusBorder.flashError(around: frame, windowID: focused.windowID, window: focused,
@@ -206,7 +223,9 @@ final class WorkspaceOrchestrator {
                 let maxDepth = tilingEngine.maxDepth(for: targetScreen)
                 let maxWindows = RetileAllPlanner.workspaceCapacity(maxDepth: maxDepth)
                 if tiledCount >= maxWindows {
-                    hyprLog(.debug, .workspace, "workspace \(number) full (\(tiledCount) tiled, max \(maxWindows)) — rejected move")
+                    hyprLog(.notice, .workspace, "workspace \(number) full: incoming=\(focused.windowID)"
+                            + " tiled=\(tiledCount) max=\(maxWindows) axis=count source=structural"
+                            + " — rejected move")
                     NSSound.beep()
                     if let frame = focused.frame {
                         focusBorder.flashError(around: frame, windowID: focused.windowID, window: focused,
@@ -215,6 +234,31 @@ final class WorkspaceOrchestrator {
                     return
                 }
             }
+        }
+
+        // the destination refused on learned bounds alone. a visible one gets
+        // its one attempt right here, and nothing about the source changes
+        // until the screen has accepted the layout; a hidden one keeps a
+        // marker and is settled on its reveal.
+        switch decision {
+        case .revalidateHere:
+            guard revalidateVisibleDestination(focused, workspace: number, screen: targetScreen,
+                                               from: screen) else {
+                hyprLog(.notice, .workspace, "moveToWorkspace(\(number)): revalidation refused"
+                        + " incoming=\(focused.windowID) — \(focused.windowID) stays on"
+                        + " ws\(currentWorkspace.map(String.init) ?? "none")")
+                NSSound.beep()
+                if let frame = focused.frame {
+                    focusBorder.flashError(around: frame, windowID: focused.windowID, window: focused,
+                                           message: "Won't fit on workspace \(number)")
+                }
+                return
+            }
+        case .parkForReveal:
+            revalidation.park(focused.windowID, toWorkspace: number, screen: targetScreen,
+                              sourceWorkspace: currentWorkspace, sourceScreen: screen)
+        case .admit, .refuse:
+            break
         }
 
         // unfloat if coming from disabled monitor
@@ -274,6 +318,49 @@ final class WorkspaceOrchestrator {
             }
             NotificationCenter.default.post(name: .hyprMacWorkspaceChanged, object: nil)
         })
+    }
+
+    /// The one bypassed attempt for a destination that is on screen.
+    ///
+    /// The window is laid out into the destination alongside its tenants
+    /// before anything about the source is touched, so a refusal costs the
+    /// user nothing: the rollback puts every incumbent back and the window
+    /// back on `sourceScreen`, it keeps its place in the source tree and its
+    /// floating flag, and the caller shows the ordinary rejection.
+    ///
+    /// `sourceScreen` is not decoration. A visible destination is always
+    /// another screen, so the window is standing on `sourceScreen` when the
+    /// attempt captures it, and a captured original outside the restoration
+    /// rect cancels the whole rollback — the incumbents would keep the failed
+    /// candidate's frames and the window would be left on a screen it is not
+    /// assigned to, which the next poll reads as drift and acts on. The
+    /// engine is told to reach both screens.
+    ///
+    /// - Returns: whether the screen accepted a layout holding `window`.
+    private func revalidateVisibleDestination(_ window: HyprWindow, workspace: Int,
+                                              screen: NSScreen, from sourceScreen: NSScreen) -> Bool {
+        let all = allWindows()
+        for w in all where stateCache.floatingWindowIDs.contains(w.windowID) { w.isFloating = true }
+        let assigned = workspaceManager.windowIDs(onWorkspace: workspace)
+        var windows = all.filter {
+            assigned.contains($0.windowID) && $0.windowID != window.windowID && !$0.isFloating
+        }
+        // the live element if AX still knows it, so the attempt writes to the
+        // same window the retile will
+        let incoming = all.first { $0.windowID == window.windowID } ?? window
+        let wasFloating = incoming.isFloating
+        // the move is what makes it tiled; the flag goes back if this fails
+        incoming.isFloating = false
+        windows.append(incoming)
+
+        let result = tilingEngine.revalidateAdmission(
+            windows, incoming: [window.windowID], onWorkspace: workspace, screen: screen,
+            restorationReach: displayManager.cgRect(for: sourceScreen))
+        guard result.publishedIDs.contains(window.windowID) else {
+            incoming.isFloating = wasFloating
+            return false
+        }
+        return true
     }
 
     /// Place a floating window onto `screen`, preserving its size and its

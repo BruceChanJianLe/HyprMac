@@ -371,6 +371,115 @@ The memory mirrors back onto each `HyprWindow.observedMinSize` and
 `HyprWindow.minSizeProvenance` so other subsystems (drag-swap fit check,
 floating toggle) read consistent values.
 
+### Explicit revalidation
+
+A learned bound is a memory of one refusal, and every later fit check treats
+it as a standing fact. Two things get to ask the app again, and only these
+two: the admission recovery's one retry, and the user's own explicit
+request. Ordinary polling and ordinary retiles never do — that is how a
+recovery turns into an unlimited min-size probe.
+
+"Learned" means `observed` provenance. A `seeded` entry is an
+`AXMinimumSize` value or a per-bundle guess that nothing has tested, and
+setting it aside would mean writing a frame the app said up front it will
+not take. The refusal diagnostics name `learned`, `seeded` and `structural`
+separately for the same reason.
+
+`TilingEngine.admissionOutlook` is the question. It runs the ordinary fit
+check, and if that refuses, runs it again with every observed bound for the
+incoming window and for the destination's tenants set aside. Widening it to
+the tenants is the point: the bound that refuses an incoming window is
+usually a tenant's, not its own. The answer is `.fits`, `.revalidatable` —
+memory alone refused, so one real attempt would settle it — or `.refused`,
+which the bypass did not change. Both checks read the same tree under the
+same structural rules: depth, slot geometry, topology, and the workspace
+count limit are all still in force, and no frame is written either way.
+Priming can still record a new `seeded` entry and asking about an untiled
+workspace still creates its empty tree — both inherited from the plain fit
+check — but no `observed` bound is touched.
+
+Where the bypass reaches differs by who is asking. The admission retry
+ignores only what the attempt it is retrying observed, because that is the
+bound it has reason to distrust. An explicit request ignores the whole
+observed record for those ids, because the user asking by hand is
+distrusting all of it. Neither erases anything: the entries stand unless an
+attempt is accepted and lowers them through the ordinary reconcile path.
+
+The bypass belongs to the request, not to the pass. A window the request
+never named — an unrelated newcomer that happens to be assigned to the same
+workspace — is judged and routed by the ordinary rules, with the bypass
+suspended for both decisions. Only the request's own windows are inserted
+under it.
+
+For those, a pass running with bounds set aside never hands a window to the
+overflow router. Routing picks the next workspace with a fit check of its
+own, and inside such a pass that check would decide with the very bounds the
+pass is ignoring. A window that still does not fit is a structural no-fit:
+it is reported on the `AdmissionResult` as `refusedIDs`, and the caller
+finishes it. `canFitWindows`, which the router uses, always answers on the
+memory as it stands.
+
+### Moving a window to another workspace
+
+`WorkspaceOrchestrator.moveToWorkspace` asks for the outlook before it
+touches anything. A structural or seeded refusal beeps and flashes as it
+always has, without a single frame write. A `.revalidatable` refusal takes
+one of two paths.
+
+**Visible destination.** The window is laid out into the destination
+alongside its tenants before anything about the source changes, and only a
+published layout commits the move. A refusal rolls back: the incumbents go
+back on their originals, the window goes back to the screen it came from, it
+keeps its place in the source tree, its floating flag goes back, and the
+ordinary rejection happens.
+
+The rollback has to be told it may reach that far. A visible destination is
+always a different screen, so the window is standing on the source screen
+when the attempt captures its original frame, and a captured original
+outside the restoration rect cancels the rollback whole. Left alone that
+would strand the window on the destination screen while it is still assigned
+to the source, which the next poll reads as screen drift and acts on —
+completing the move the user was just told was impossible.
+`revalidateAdmission` takes a `restorationReach` for this, and the
+orchestrator passes the source screen's rect.
+
+**Hidden destination.** Nothing is written. Unparking a hidden workspace's
+tenants over the visible one to run an experiment is not what the user
+asked for. The move follows the existing assignment and parking, and
+`MinimaRevalidation` holds a marker carrying the destination, its screen and
+the source. The first retile after that workspace is shown spends the
+marker, as one `revalidateAdmission` pass. Accepted, the disproved bound is
+lowered. Refused, the newcomer is stranded and the bounded admission
+recovery takes it from there — one retry, then a float in place.
+
+The marker is spent by that one reveal whatever the answer, and only by a
+pass that can actually judge the window: an id AX did not return keeps its
+marker instead. It is dropped when the window is moved again, when it is
+forgotten, on a display change and on a stop. Reassignment and a user float
+drop it too, but lazily — the reveal notices rather than the action. It
+deliberately survives a later key press, unlike an armed admission retry:
+the key press it is waiting for is the workspace switch.
+
+The float→tile toggle asks the same question, but only when
+`forceInsertWindow` returns `.failed(.noFittingSlot)` — the tree refusing
+the window. `.failed(.layoutRejected)` is the screen refusing real frames,
+which is evidence rather than memory, and buys nothing. The gate is narrower
+than the retry it guards: the outlook asks whether a leaf would take the
+window, while forced insertion may also evict the deepest right tile to make
+one, so a tree out of depth reads as structural and buys no retry. Erring
+that way keeps a depth ceiling from quietly costing a tile the user did not
+offer up.
+
+### Refusal diagnostics
+
+A refusal reports one line per leaf the search tried, with the incoming id,
+the tenant that refused, the slot, both required sizes, the axis and the
+source. There is deliberately no single "largest free slot" figure: which
+leaf can take a window depends on the split direction, the ratios and the
+tenant already sitting there, so one number would be a fiction.
+`minSlotDimension` never appears as a source, because `fittingLeaf`'s second
+pass ignores it — it is a preference, not a refusal.
+
 ## Swap
 
 Direction swap (`Hypr+Shift+Arrow`) goes through

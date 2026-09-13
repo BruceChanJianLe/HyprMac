@@ -385,6 +385,10 @@ final class TilingEngineVerifiedLayoutTests: XCTestCase {
         }
     }
 
+    /// Every reentrant engine change that invalidates what a layout in
+    /// flight was computed from must supersede it, and none of them may roll
+    /// back to frames the change has already made stale. A force insert the
+    /// tree refuses is the exception, and says why inline.
     func testReentrantStateChangesSupersedeActiveLayoutWithoutOldRollback() throws {
         guard let screen = NSScreen.main ?? NSScreen.screens.first else {
             throw XCTSkip("generation integration requires a display")
@@ -420,7 +424,13 @@ final class TilingEngineVerifiedLayoutTests: XCTestCase {
 
             let accepted = engine.applyComputedLayout(onWorkspace: 1, screen: screen)
 
-            XCTAssertFalse(accepted, "\(change) must supersede the active layout")
+            // a refused force insert is the one change that changes nothing:
+            // the candidate is private and discarded, no pending insert is
+            // consumed and no generation is spent, so the layout in flight is
+            // still describing the truth and is left to finish. Every other
+            // change here mutates something the layout was computed from.
+            XCTAssertEqual(accepted, change == .forceInsertNoFit,
+                           "\(change) supersession")
             XCTAssertEqual(trace.restorationStarts, 0, "\(change) must not restore stale frames")
         }
     }

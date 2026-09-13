@@ -67,7 +67,8 @@ final class ToggleSplitFallthroughRegressionTests: XCTestCase {
             focusController: focusController,
             focusBorder: focusBorder,
             dimmingOverlay: dimmingOverlay,
-            suppressions: suppressions
+            suppressions: suppressions,
+            revalidation: MinimaRevalidation()
         )
         floatingController = FloatingWindowController(
             stateCache: stateCache,

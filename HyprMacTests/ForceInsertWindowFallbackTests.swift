@@ -104,6 +104,107 @@ final class ForceInsertWindowFallbackTests: XCTestCase {
         XCTAssertFalse(tree()?.contains(w3) ?? true)
     }
 
+    // MARK: - explicit revalidation of learned minima
+
+    /// Two tenants, so evicting the deepest right still leaves one behind for
+    /// the incoming window's minimum to argue with. With only one tenant,
+    /// eviction empties the tree and every minimum fits the root.
+    private func seedTwoTenants() {
+        engine.forceInsertWindow(makeWindow(id: 1), toWorkspace: 1, on: screen)
+        engine.forceInsertWindow(makeWindow(id: 2), toWorkspace: 1, on: screen)
+    }
+
+    /// A window whose recorded minimum is wider than any slot the screen can
+    /// offer. Screen-relative and under `usableMinSizeMaxPx`, so it is a real
+    /// `MinSizeMemory` entry with a provenance rather than a sentinel the
+    /// memory refuses to hold.
+    private func windowRefusedByItsOwnBound(id: CGWindowID,
+                                            provenance: MinSizeProvenance) -> HyprWindow {
+        let w = makeWindow(id: id)
+        let usable = engine.displayManager.cgRect(for: screen)
+        w.observedMinSize = CGSize(width: usable.width * 1.2, height: 0)
+        w.minSizeProvenance = provenance
+        engine.primeMinimumSizes([w])
+        return w
+    }
+
+    func testBypassingLearnedMinimaTakesASlotAStaleBoundRefused() throws {
+        seedTwoTenants()
+        let w3 = windowRefusedByItsOwnBound(id: 3, provenance: .observed)
+        XCTAssertEqual(engine.forceInsertWindow(w3, toWorkspace: 1, on: screen),
+                       .failed(.noFittingSlot))
+
+        XCTAssertEqual(engine.forceInsertWindow(w3, toWorkspace: 1, on: screen,
+                                                bypassingLearnedMinima: true),
+                       .inserted)
+        XCTAssertEqual(Set(tree()?.allWindows.map(\.windowID) ?? []), [1, 2, 3],
+                       "nothing was evicted: the slot was there once the bound was set aside")
+    }
+
+    func testBypassingLearnedMinimaLeavesASeededHintStanding() throws {
+        seedTwoTenants()
+        let w3 = windowRefusedByItsOwnBound(id: 3, provenance: .seeded)
+
+        XCTAssertEqual(engine.forceInsertWindow(w3, toWorkspace: 1, on: screen,
+                                                bypassingLearnedMinima: true),
+                       .failed(.noFittingSlot))
+        XCTAssertFalse(tree()?.contains(w3) ?? true)
+        XCTAssertEqual(Set(tree()?.allWindows.map(\.windowID) ?? []), [1, 2],
+                       "the refusal discards the candidate whole, eviction included")
+    }
+
+    func testBypassingLearnedMinimaStillObeysTheDepthCeiling() throws {
+        engine.maxSplitsPerMonitor[screen.localizedName] = 1
+        let w1 = makeWindow(id: 1)
+        let w2 = makeWindow(id: 2)
+        engine.forceInsertWindow(w1, toWorkspace: 1, on: screen)
+        engine.forceInsertWindow(w2, toWorkspace: 1, on: screen)
+        let before = tree()?.structuralFingerprint()
+
+        let w3 = windowRefusedByItsOwnBound(id: 3, provenance: .observed)
+
+        // the ceiling is structural: the bypass does not buy a deeper tree, so
+        // the window can only get in by taking someone's place
+        let result = engine.forceInsertWindow(w3, toWorkspace: 1, on: screen,
+                                              bypassingLearnedMinima: true)
+        XCTAssertEqual(result, .evicted(2))
+        XCTAssertEqual(Set(tree()?.allWindows.map(\.windowID) ?? []), [1, 3],
+                       "two tiles, not three — the depth ceiling still holds")
+        XCTAssertNotEqual(tree()?.structuralFingerprint(), before)
+    }
+
+    func testTheBypassDoesNotOutlastTheOneAttempt() throws {
+        seedTwoTenants()
+        let w3 = windowRefusedByItsOwnBound(id: 3, provenance: .observed)
+        XCTAssertEqual(engine.forceInsertWindow(w3, toWorkspace: 1, on: screen,
+                                                bypassingLearnedMinima: true),
+                       .inserted)
+
+        let w4 = windowRefusedByItsOwnBound(id: 4, provenance: .observed)
+        XCTAssertEqual(engine.forceInsertWindow(w4, toWorkspace: 1, on: screen),
+                       .failed(.noFittingSlot),
+                       "the next insert is a new request and gets no bypass of its own")
+    }
+
+    // MARK: - a refusal applies nothing
+
+    func testARefusedForceInsertDoesNotCancelAnInFlightLayout() throws {
+        let w1 = makeWindow(id: 1)
+        let w2 = makeWindow(id: 2)
+        engine.forceInsertWindow(w1, toWorkspace: 1, on: screen)
+        engine.forceInsertWindow(w2, toWorkspace: 1, on: screen)
+        engine.maxSplitsPerMonitor[screen.localizedName] = 1
+        let generation = engine.beginLayoutGeneration()
+
+        let w3 = makeWindow(id: 3)
+        w3.observedMinSize = CGSize(width: 100_000, height: 100_000)
+        XCTAssertEqual(engine.forceInsertWindow(w3, toWorkspace: 1, on: screen),
+                       .failed(.noFittingSlot))
+
+        XCTAssertEqual(engine.beginLayoutGeneration(), generation &+ 1,
+                       "nothing was applied, so nothing in flight was cancelled")
+    }
+
     // MARK: - the screen refuses the layout
 
     func testRefusedLayoutKeepsTheOldTreeAndDoesNotCommitTheEviction() throws {

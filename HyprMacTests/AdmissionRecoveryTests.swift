@@ -29,10 +29,11 @@ final class AdmissionRecoveryTests: XCTestCase {
                                  published: Set<CGWindowID> = [11],
                                  generation: UInt64 = 7,
                                  failure: FrameSizingFailure? = .geometryMismatch(11),
-                                 restored: Set<CGWindowID> = [11]) -> TilingEngine.AdmissionResult {
+                                 restored: Set<CGWindowID> = [11],
+                                 refused: Set<CGWindowID> = []) -> TilingEngine.AdmissionResult {
         TilingEngine.AdmissionResult(workspace: workspace, screen: screen, generation: generation,
                                      insertedIDs: ids, publishedIDs: published,
-                                     failure: failure, restoredIDs: restored)
+                                     failure: failure, restoredIDs: restored, refusedIDs: refused)
     }
 
     // MARK: - the identity of the newcomer
@@ -47,9 +48,30 @@ final class AdmissionRecoveryTests: XCTestCase {
     func testAcceptedAdmissionTracksNothing() {
         recovery.note(TilingEngine.AdmissionResult(
             workspace: 2, screen: screen, generation: 7, insertedIDs: [26],
-            publishedIDs: [11, 26], failure: nil, restoredIDs: []))
+            publishedIDs: [11, 26], failure: nil, restoredIDs: [], refusedIDs: []))
         XCTAssertTrue(recovery.pendingWindowIDs.isEmpty)
         XCTAssertEqual(harness.scheduled.count, 0)
+    }
+
+    func testAWindowABypassedPassRefusedOutrightIsStrandedToo() {
+        // nothing routed it: routing inside a bypassed pass would pick its
+        // next workspace with the very bounds that pass is ignoring
+        recovery.note(failedAdmission([], published: [11], failure: nil, restored: [],
+                                      refused: [26]))
+        XCTAssertEqual(recovery.pendingWindowIDs, [26])
+        XCTAssertEqual(harness.scheduled.count, 1)
+    }
+
+    // MARK: - which key presses cancel
+
+    func testShowingAnotherWorkspaceDoesNotCancelAPendingRetry() {
+        XCTAssertFalse(WindowManager.cancelsPendingRecovery(.switchWorkspace(3)))
+        XCTAssertFalse(WindowManager.cancelsPendingRecovery(.cycleWorkspace(1)))
+    }
+
+    func testEveryOtherActionCancelsAPendingRetry() {
+        XCTAssertTrue(WindowManager.cancelsPendingRecovery(.moveToWorkspace(3)))
+        XCTAssertTrue(WindowManager.cancelsPendingRecovery(.toggleFloating))
     }
 
     // MARK: - the one retry
@@ -305,7 +327,7 @@ final class AdmissionRecoveryTests: XCTestCase {
         recovery.note(failedAdmission([26]))
         recovery.note(TilingEngine.AdmissionResult(
             workspace: 2, screen: screen, generation: 9, insertedIDs: [],
-            publishedIDs: [11, 26], failure: nil, restoredIDs: []))
+            publishedIDs: [11, 26], failure: nil, restoredIDs: [], refusedIDs: []))
 
         XCTAssertTrue(recovery.pendingWindowIDs.isEmpty)
         harness.fire()
@@ -333,6 +355,19 @@ final class AdmissionRecoveryTests: XCTestCase {
 
         XCTAssertEqual(target?.id, 26)
         XCTAssertEqual(target?.reason, "syncTracker-floating")
+    }
+
+    func testARecoveryNewcomerSaysSoInsteadOfClaimingToBeFloating() {
+        let overlap = CGRect(x: 100, y: 100, width: 400, height: 300)
+        let target = WindowManager.clickFocusTarget(
+            at: CGPoint(x: 200, y: 200),
+            overlayFrames: [(id: 26, frame: overlap)],
+            tiledPositions: [11: CGRect(x: 0, y: 0, width: 800, height: 600)],
+            recoveryIDs: [26])
+
+        XCTAssertEqual(target?.id, 26)
+        XCTAssertEqual(target?.reason, "syncTracker-recovery",
+                       "it is in no tree and not floating either; the log should not say floating")
     }
 
     func testAClickOutsideEveryOverlayStillPicksTheTile() {

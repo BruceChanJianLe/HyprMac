@@ -80,6 +80,7 @@ class WindowManager {
     // one bounded retry, then an explicit float, for a newcomer a failed
     // admission left outside the tree.
     private let admissionRecovery = AdmissionRecovery()
+    private let minimaRevalidation = MinimaRevalidation()
 
     // SIGUSR1 → dumpState. armed in start(), cancelled in stop().
     private var dumpStateSignalSource: DispatchSourceSignal?
@@ -221,7 +222,8 @@ class WindowManager {
             focusController: focusController,
             focusBorder: focusBorder,
             dimmingOverlay: dimmingOverlay,
-            suppressions: suppressions
+            suppressions: suppressions,
+            revalidation: minimaRevalidation
         )
         self.workspaceOrchestrator.screenUnderCursor = { [weak self] in self?.screenUnderCursor() ?? NSScreen.main! }
         self.workspaceOrchestrator.currentFocusedWindow = { [weak self] in self?.currentFocusedWindow() }
@@ -690,6 +692,7 @@ class WindowManager {
     func stop() {
         isRunning = false
         admissionRecovery.cancelAll(reason: "stop")
+        minimaRevalidation.cancelAll(reason: "stop")
         dumpStateSignalSource?.cancel()
         dumpStateSignalSource = nil
         tiledDragHandler.cancel()
@@ -1300,15 +1303,7 @@ class WindowManager {
     /// callback site stays terse and so subclasses or tests can intercept
     /// in one place. Also called from the menu bar (cheat-sheet row).
     func handleAction(_ action: Action) {
-        // whatever the user just asked for is newer than a retry armed off
-        // a layout they have already moved past. showing another workspace
-        // is the exception: that is the evidence a parked newcomer has been
-        // waiting for, and forgetting it here would hand it a fresh timer on
-        // the reveal retile instead of its one remaining attempt.
-        switch action {
-        case .switchWorkspace, .cycleWorkspace:
-            break
-        default:
+        if Self.cancelsPendingRecovery(action) {
             admissionRecovery.cancelAll(reason: "later press")
         }
         // workspace flows park/unpark and then focus+warp. mid-display-
@@ -1548,6 +1543,7 @@ class WindowManager {
         // every pending recovery captured a screen that may no longer own
         // its workspace
         admissionRecovery.cancelAll(reason: "display change")
+        minimaRevalidation.cancelAll(reason: "display change")
         workspaceManager.initializeMonitors()
         tilingEngine.handleDisplayChange(
             currentScreens: displayManager.screens,
@@ -1619,7 +1615,19 @@ class WindowManager {
             }
 
             hyprLog(.debug, .lifecycle, "retile: workspace=\(workspace) screen=\(workspaceManager.screenID(for: screen)), \(workspaceWindows.count) windows")
-            let result = tilingEngine.tileWindows(workspaceWindows, onWorkspace: workspace, screen: screen)
+            // a workspace being shown is where an explicit move to a hidden
+            // destination finally gets its one attempt. the marker is spent
+            // on this pass whatever it says.
+            // only windows this pass can actually judge. one that AX did not
+            // return keeps its marker rather than spending it on a pass that
+            // was never going to look at it.
+            let incoming = minimaRevalidation.incomingIDs(forWorkspace: workspace, screen: screen)
+                .intersection(workspaceWindows.map(\.windowID))
+            let result = incoming.isEmpty
+                ? tilingEngine.tileWindows(workspaceWindows, onWorkspace: workspace, screen: screen)
+                : tilingEngine.revalidateAdmission(workspaceWindows, incoming: incoming,
+                                                   onWorkspace: workspace, screen: screen)
+            minimaRevalidation.noteReveal(incoming, accepted: result.publishedIDs)
             admissionRecovery.note(result)
         }
 
@@ -1922,8 +1930,23 @@ class WindowManager {
             return (wid, frame)
         }
         guard let target = Self.clickFocusTarget(at: cgPoint, overlayFrames: overlayFrames,
-                                                 tiledPositions: stateCache.tiledPositions) else { return }
+                                                 tiledPositions: stateCache.tiledPositions,
+                                                 recoveryIDs: admissionRecovery.pendingWindowIDs) else { return }
         focusController.recordFocus(target.id, reason: target.reason)
+    }
+
+    /// Whether `action` makes an armed admission retry stale.
+    ///
+    /// Whatever the user just asked for is newer than a retry armed off a
+    /// layout they have already moved past. Showing another workspace is the
+    /// exception: that is the evidence a parked newcomer has been waiting
+    /// for, and forgetting it here would hand it a fresh timer on the reveal
+    /// retile instead of its one remaining attempt.
+    static func cancelsPendingRecovery(_ action: Action) -> Bool {
+        switch action {
+        case .switchWorkspace, .cycleWorkspace: return false
+        default: return true
+        }
     }
 
     /// Forget every trace of `id` from cache state and the engine, workspace,
@@ -1940,6 +1963,7 @@ class WindowManager {
     /// or border state that pointed at the window.
     private func applyForgottenIDExternalCleanup(_ id: CGWindowID) {
         admissionRecovery.forget(id)
+        minimaRevalidation.forget(id)
         tilingEngine.forgetMinimumSize(windowID: id)
         workspaceManager.removeWindow(id)
         scratchpad.forget(id)
@@ -2724,6 +2748,12 @@ private extension WindowManager {
         tilingEngine.pendingRecoverySource = { [weak self] in
             self?.admissionRecovery.pendingWindowIDs ?? []
         }
+        minimaRevalidation.workspaceFor = { [weak self] id in self?.workspaceManager.workspaceFor(id) }
+        minimaRevalidation.isFloating = { [weak self] id in
+            guard let self else { return true }
+            return self.stateCache.floatingWindowIDs.contains(id)
+                || (self.stateCache.cachedWindows[id]?.isFloating ?? false)
+        }
         admissionRecovery.workspaceFor = { [weak self] id in self?.workspaceManager.workspaceFor(id) }
         admissionRecovery.homeScreenForWorkspace = { [weak self] ws in
             self?.workspaceManager.homeScreenForWorkspace(ws)
@@ -2824,12 +2854,16 @@ extension WindowManager {
     /// recovery, which are in no tree and sit on top exactly like a floater.
     /// The tiled rects get a look only after those, so a recovery newcomer
     /// overlapping an incumbent's slot does not hand the click to the
-    /// incumbent underneath it.
+    /// incumbent underneath it. A recovery newcomer says so in the reason:
+    /// it is not floating, and a log that calls it floating sends the next
+    /// reader looking in the wrong place.
     static func clickFocusTarget(at point: CGPoint,
                                  overlayFrames: [(id: CGWindowID, frame: CGRect)],
-                                 tiledPositions: [CGWindowID: CGRect]) -> (id: CGWindowID, reason: String)? {
+                                 tiledPositions: [CGWindowID: CGRect],
+                                 recoveryIDs: Set<CGWindowID> = []) -> (id: CGWindowID, reason: String)? {
         for entry in overlayFrames where entry.frame.contains(point) {
-            return (entry.id, "syncTracker-floating")
+            return (entry.id, recoveryIDs.contains(entry.id) ? "syncTracker-recovery"
+                                                             : "syncTracker-floating")
         }
         for (wid, rect) in tiledPositions where rect.contains(point) {
             return (wid, "syncTracker-tiled")
