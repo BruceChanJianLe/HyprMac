@@ -328,3 +328,37 @@ Physical identity, frame changes, and larger usable-area changes still alter
 the signature. Actual layout geometry and every frame-validation tolerance are
 unchanged. `red-display-noise.log`: 1 failure for the one-point case; the same
 test also asserts a two-point accumulated change is detected.
+
+## Final verification and handoff
+
+- Fix 12 full suite (`green-display-noise.log`): `Executed 730 tests, with 111
+  tests skipped and 0 failures`.
+- Final full isolated suite 1 (`final-suite-1.log`): `Executed 730 tests, with
+  111 tests skipped and 0 failures`.
+- Final full isolated suite 2 (`final-suite-2.log`): `Executed 730 tests, with
+  111 tests skipped and 0 failures`.
+- Signed universal debug build: `BUILD SUCCEEDED`; `codesign --verify --deep
+  --strict` reports `valid on disk` and `satisfies its Designated Requirement`.
+  The build script also verifies Developer ID/team, debug bundle identity,
+  source marker, and both arm64/x86_64 architectures.
+- Source marker: `c5d0b74b4ee3+934ce6bf7618`.
+- App: `build/debug-canonical.noindex/Build/Products/Debug/HyprMac Debug.app`.
+- Executable SHA-256: `df996100b0e8130610188f5ef9bcb41858060e0585cf0d390481dc1e77362db0`.
+- `git diff --check` passes. Production diff was reread locally; independent
+  read-only review found the explicit-departure and display-noise corrections
+  above and confirmed them fixed. No new Swift files were added, so the
+  checked-in project file needs no regeneration.
+- The ordered patches reproduce the final source and tests byte-for-byte from
+  `c5d0b74` (`build/stability-audit/patch-replay.log`). Final verification prose
+  is saved separately as the last documentation patch.
+
+The initial 718-test baseline skipped 201 cases here. Synthetic screen/provider
+fixtures enabled 90 existing cases and all new regressions; the final 111 skips
+are still skips, not passes. GUI/AX acceptance on the laptop remains open.
+
+No commits were created: Git metadata is read-only in this session. HEAD remains
+`c5d0b74` and all edits are uncommitted. The ordered patch subjects and evidence
+are in `build/stability-audit/SERIES.md`. These are review/handoff artifacts,
+not a claim that the requested independently revertible commits landed.
+No push, laptop install, live configuration edit, Synapse edit, or Hermes edit
+was performed. The app is built but has not been deployed or launched.
