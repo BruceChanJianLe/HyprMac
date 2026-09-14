@@ -13,6 +13,11 @@ import Cocoa
 /// that attempt itself observed ignored, and, if that is refused too, an
 /// explicit float where the window already is.
 ///
+/// Once a workspace's newcomers are floated the key gets one ordinary
+/// retile, so incumbents the refused pass left out of the tree are admitted
+/// on their own. Anything that retile still leaves visible, nonfloating and
+/// in no tree is held: an explicit record with no timer and no float.
+///
 /// The retry never re-arms itself. A window that is unreadable or on a
 /// hidden workspace when its turn comes keeps its place in the pending set
 /// and waits for a real discovery or activation event instead of a new
@@ -28,6 +33,11 @@ final class AdmissionRecovery {
         /// the window could not be judged when its turn came — unreadable,
         /// or its workspace was hidden. No timer is running for it.
         case awaitingEvidence
+        /// visible, not floating, and in no tree even after the fallback's
+        /// ordinary retile. No timer and no float — an explicit record, so
+        /// every visible nonfloating window is either a verified tile or a
+        /// recovery member, and the state dump shows which.
+        case held
     }
 
     /// What one recovery attempt found out.
@@ -80,6 +90,11 @@ final class AdmissionRecovery {
     var attempt: (_ workspace: Int, _ screen: NSScreen,
                   _ bypass: [CGWindowID: UInt64]) -> AttemptResult = { _, _, _ in AttemptResult() }
     var floatInPlace: (HyprWindow, String) -> Void = { _, _ in }
+    /// One ordinary retile of a key whose newcomers the fallback just
+    /// floated, so incumbents left out of the refused pass get admitted on
+    /// their own. Returns the ids still visible, not floating and in no
+    /// tree once it has run.
+    var retileAfterFallback: (_ workspace: Int, _ screen: NSScreen) -> Set<CGWindowID> = { _, _ in [] }
     /// Ask the engine to drop the key's unverified mark. It refuses when a
     /// rollback on that key did not verify, so the answer is its to give.
     var clearUnverified: (Int, NSScreen) -> Void = { _, _ in }
@@ -125,9 +140,18 @@ final class AdmissionRecovery {
                                  phase: .awaitingRetry,
                                  attempted: result.refusedIDs.contains(id))
         }
-        hyprLog(.notice, .tiling, "admission retry scheduled: ids=\(Self.list(stranded))"
-                + " ws\(result.workspace) in \(Int(retryDelay * 1000))ms"
-                + " cause=\(Self.text(result.failure))")
+        let judged = stranded.filter { result.refusedIDs.contains($0) }
+        let retrying = stranded.subtracting(judged)
+        if !retrying.isEmpty {
+            hyprLog(.notice, .tiling,
+                    Self.strandedLog(ids: retrying, workspace: result.workspace,
+                                     retryIn: Int(retryDelay * 1000), cause: result.failure))
+        }
+        if !judged.isEmpty {
+            hyprLog(.notice, .tiling,
+                    Self.strandedLog(ids: judged, workspace: result.workspace,
+                                     retryIn: nil, cause: result.failure))
+        }
         arm()
     }
 
@@ -184,6 +208,7 @@ final class AdmissionRecovery {
 
     private func run(ids: [CGWindowID]) {
         var byKey: [Int: (screen: NSScreen, bypass: [CGWindowID: UInt64])] = [:]
+        var floated: [Int: NSScreen] = [:]
         for id in ids.sorted() {
             guard let record = records[id] else { continue }
             switch readiness(id, record: record) {
@@ -197,7 +222,7 @@ final class AdmissionRecovery {
                 guard !record.attempted else {
                     // its one attempt is spent; the evidence only unblocks
                     // the verdict
-                    finish(id, retryFailure: nil)
+                    if finish(id, retryFailure: nil) { floated[record.workspace] = record.screen }
                     continue
                 }
                 var entry = byKey[record.workspace] ?? (screen: record.screen, bypass: [:])
@@ -216,11 +241,36 @@ final class AdmissionRecovery {
             for id in entry.bypass.keys.sorted() {
                 if result.placed.contains(id) {
                     resolve(id, reason: "retry tiled it")
-                } else {
-                    finish(id, retryFailure: result.failure)
+                } else if finish(id, retryFailure: result.failure) {
+                    floated[workspace] = entry.screen
                 }
             }
         }
+
+        for (workspace, screen) in floated.sorted(by: { $0.key < $1.key }) {
+            retileWhatIsLeft(workspace, screen)
+        }
+    }
+
+    /// Give a key one ordinary retile once the fallback has floated its
+    /// newcomers, so incumbents the refused pass left out get admitted on
+    /// their own. A returned incumbent whose node was pruned while it was
+    /// hidden is in no tree and is not floating, so without this nothing
+    /// tracks it at all.
+    ///
+    /// Whatever the retile still leaves out is held: no timer, no float,
+    /// just an explicit record, so every visible nonfloating window is
+    /// either a verified tile or a recovery member.
+    private func retileWhatIsLeft(_ workspace: Int, _ screen: NSScreen) {
+        let held = retileAfterFallback(workspace, screen).filter { records[$0] == nil }
+        guard !held.isEmpty else { return }
+        for id in held {
+            records[id] = Record(workspace: workspace, screen: screen,
+                                 sinceGeneration: 0, firstFailure: nil,
+                                 phase: .held, attempted: true)
+        }
+        hyprLog(.notice, .tiling, "admission recovery held: ids=\(Self.list(held))"
+                + " ws\(workspace) — in no tree, not floated")
     }
 
     private enum Readiness {
@@ -254,22 +304,24 @@ final class AdmissionRecovery {
 
     /// Second failure. A readable visible newcomer is left floating exactly
     /// where it is; it is not sent anywhere.
-    private func finish(_ id: CGWindowID, retryFailure: FrameSizingFailure?) {
-        guard let record = records[id] else { return }
+    /// - Returns: whether it actually floated the window.
+    @discardableResult
+    private func finish(_ id: CGWindowID, retryFailure: FrameSizingFailure?) -> Bool {
+        guard let record = records[id] else { return false }
         switch readiness(id, record: record) {
         case .gone:
             forget(id)
-            return
+            return false
         case let .userActed(reason):
             cancel(id, reason: reason)
-            return
+            return false
         case .notYet:
             hold(id)
-            return
+            return false
         case .ready:
             break
         }
-        guard let window = liveWindow(id) else { forget(id); return }
+        guard let window = liveWindow(id) else { forget(id); return false }
         let cause = "first=\(Self.text(record.firstFailure)) retry=\(Self.text(retryFailure))"
         hyprLog(.notice, .tiling, "admission recovery fallback: floated \(id) in place"
                 + " on ws\(record.workspace) \(cause)")
@@ -279,6 +331,22 @@ final class AdmissionRecovery {
         // waiting on it. the engine decides: it saw every attempt that marked
         // the key, and this recovery only saw two of them.
         clearUnverified(record.workspace, record.screen)
+        return true
+    }
+
+    /// How `note` describes one group of stranded windows. A window a pass
+    /// already judged with the bounds it was told to ignore gets no retry,
+    /// so its line must not claim one is scheduled.
+    static func strandedLog(ids: Set<CGWindowID>, workspace: Int,
+                            retryIn delayMS: Int?, cause: FrameSizingFailure?) -> String {
+        let head: String
+        if let delayMS {
+            head = "admission retry scheduled: ids=\(list(ids)) ws\(workspace) in \(delayMS)ms"
+        } else {
+            head = "admission refusal judged: ids=\(list(ids)) ws\(workspace)"
+                + " — floating in place at the next turn"
+        }
+        return head + " cause=\(text(cause))"
     }
 
     private static func list(_ ids: Set<CGWindowID>) -> String {

@@ -154,12 +154,90 @@ final class AdmissionRecoveryTests: XCTestCase {
         XCTAssertEqual(harness.clearedUnverified.map(\.workspace), [2])
     }
 
-    func testTheFallbackDoesNothingBesidesAttemptFloatAndClear() {
+    func testTheFallbackDoesNothingBesidesAttemptFloatClearAndRetile() {
         recovery.note(failedAdmission([26]))
         harness.fire()
 
-        XCTAssertEqual(harness.calls, ["attempt", "floatInPlace", "clearUnverified"],
+        XCTAssertEqual(harness.calls,
+                       ["attempt", "floatInPlace", "clearUnverified", "retileAfterFallback"],
                        "no routing, no workspace move, no second attempt")
+    }
+
+    // MARK: - the incumbents a refused pass left out of the tree
+
+    func testTheFallbackRetilesTheKeyOnceSoIncumbentsAreAdmittedAlone() {
+        // a returned incumbent's node was pruned while it was hidden, and the
+        // pass that would have put it back was refused. one ordinary retile
+        // with the newcomer now floating is what puts it in a tree.
+        recovery.note(failedAdmission([26]))
+        harness.fire()
+
+        XCTAssertEqual(harness.floated.map(\.id), [26])
+        XCTAssertEqual(harness.retiles.map(\.workspace), [2])
+        XCTAssertTrue(recovery.pendingWindowIDs.isEmpty, "the retile tiled the incumbent")
+    }
+
+    func testAnIncumbentTheFallbackRetileCannotTileIsHeldNotFloated() {
+        harness.leftovers = [11]
+        recovery.note(failedAdmission([26]))
+        harness.fire()
+
+        XCTAssertEqual(recovery.pendingWindowIDs, [11])
+        XCTAssertEqual(recovery.phase(of: 11), .held)
+        XCTAssertEqual(harness.floated.map(\.id), [26], "the incumbent is not floated")
+        XCTAssertEqual(harness.scheduled.count, 1, "no second timer")
+        XCTAssertEqual(harness.retiles.count, 1, "one retile, not a loop")
+    }
+
+    func testAHeldIncumbentGetsNoAttemptOfItsOwn() {
+        harness.leftovers = [11]
+        recovery.note(failedAdmission([26]))
+        harness.fire()
+        let attempts = harness.attempts.count
+
+        recovery.noteEvidence(for: 11)
+        harness.fire()
+
+        XCTAssertEqual(harness.attempts.count, attempts)
+        XCTAssertEqual(recovery.phase(of: 11), .held)
+    }
+
+    func testAPublishedLayoutReleasesAHeldIncumbent() {
+        harness.leftovers = [11]
+        recovery.note(failedAdmission([26]))
+        harness.fire()
+        XCTAssertEqual(recovery.pendingWindowIDs, [11])
+
+        recovery.note(TilingEngine.AdmissionResult(
+            workspace: 2, screen: screen, generation: 9, insertedIDs: [],
+            publishedIDs: [11], failure: nil, restoredIDs: [], refusedIDs: []))
+
+        XCTAssertTrue(recovery.pendingWindowIDs.isEmpty)
+    }
+
+    func testAnExplicitRemovalReleasesAHeldIncumbent() {
+        harness.leftovers = [11]
+        recovery.note(failedAdmission([26]))
+        harness.fire()
+
+        recovery.cancel(11, reason: "user floated it")
+
+        XCTAssertTrue(recovery.pendingWindowIDs.isEmpty)
+    }
+
+    // MARK: - what the log says happens next
+
+    func testAPreflightRefusalIsNotLoggedAsAScheduledRetry() {
+        let judged = AdmissionRecovery.strandedLog(ids: [26], workspace: 2,
+                                                   retryIn: nil, cause: nil)
+        XCTAssertTrue(judged.hasPrefix("admission refusal judged: ids=[26] ws2"), judged)
+        XCTAssertFalse(judged.contains("retry scheduled"), judged)
+        XCTAssertFalse(judged.contains("ms"), judged)
+
+        let scheduled = AdmissionRecovery.strandedLog(ids: [27], workspace: 2,
+                                                      retryIn: 250, cause: nil)
+        XCTAssertTrue(scheduled.hasPrefix("admission retry scheduled: ids=[27] ws2 in 250ms"),
+                      scheduled)
     }
 
     func testTheRetryCannotReArmItself() {
@@ -410,6 +488,8 @@ private final class RecoveryHarness {
 
     /// ids the next attempt manages to tile
     var place: Set<CGWindowID> = []
+    /// ids the fallback retile leaves visible, nonfloating and in no tree
+    var leftovers: Set<CGWindowID> = []
     var failure: FrameSizingFailure? = .geometryMismatch(11)
     var displayTransitionPending = false
 
@@ -417,6 +497,7 @@ private final class RecoveryHarness {
     private(set) var attempts: [Attempt] = []
     private(set) var floated: [(id: CGWindowID, reason: String)] = []
     private(set) var clearedUnverified: [(workspace: Int, screen: NSScreen)] = []
+    private(set) var retiles: [(workspace: Int, screen: NSScreen)] = []
     /// every action seam the recovery invoked, in order
     private(set) var calls: [String] = []
     private var windows: [CGWindowID: HyprWindow] = [:]
@@ -456,6 +537,12 @@ private final class RecoveryHarness {
         recovery.clearUnverified = { [weak self] workspace, screen in
             self?.calls.append("clearUnverified")
             self?.clearedUnverified.append((workspace, screen))
+        }
+        recovery.retileAfterFallback = { [weak self] workspace, screen in
+            guard let self else { return [] }
+            self.calls.append("retileAfterFallback")
+            self.retiles.append((workspace, screen))
+            return self.leftovers
         }
     }
 

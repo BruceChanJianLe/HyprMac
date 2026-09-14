@@ -25,6 +25,33 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertTrue(engine.unverifiedLayouts.contains { $0.windowIDs.contains(incumbent.windowID) })
     }
 
+    func testARecycledWindowIDIsJudgedAsANewcomerNotAnIncumbent() {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let incumbent = makeWindow(id: 841)
+        let doomed = makeWindow(id: 842)
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in [incumbent, doomed] { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
+        XCTAssertTrue(engine.tileWindows([incumbent, doomed],
+                                         onWorkspace: 1, screen: screen).published)
+        // 842 closes. discovery prunes its node but never fully forgets the
+        // id, so the verified-admission identity would outlive the window.
+        engine.removeWindowID(842)
+
+        // the id comes back on a different window that cannot fit
+        engine.forgetAdmittedIdentity(windowID: 842)
+        let recycled = makeWindow(id: 842)
+        recycled.observedMinSize = rect.size
+        trace.frames[842] = rect.insetBy(dx: 100, dy: 100)
+
+        let result = engine.tileWindows([incumbent, recycled], onWorkspace: 1, screen: screen)
+
+        XCTAssertEqual(result.refusedIDs, [842], "a recycled id is a newcomer")
+        XCTAssertTrue(result.strandedIDs.contains(842), "so recovery can still see it")
+    }
+
     func testKnownImpossibleAdmissionReturnsRefusalWithoutRoutingOrWritingNewcomer() {
         let screen = MembershipTestScreen()
         let trace = MembershipTrace()

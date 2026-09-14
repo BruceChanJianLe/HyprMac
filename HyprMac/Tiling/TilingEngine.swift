@@ -266,11 +266,20 @@ class TilingEngine {
     /// Drop any stored min-size memory for `windowID`. Called when a
     /// window is forgotten by the discovery layer.
     func forgetMinimumSize(windowID: CGWindowID) {
+        forgetAdmittedIdentity(windowID: windowID)
+        minSizes.forget(windowID: windowID)
+        observedMinimumGeneration.removeValue(forKey: windowID)
+    }
+
+    /// Drop verified-admission identity for `windowID`, leaving its learned
+    /// minima alone. Discovery calls this the moment an id turns up as a new
+    /// window rather than a returned one: CGWindowIDs get recycled, and a
+    /// fresh window inheriting the old one's incumbency would quietly lose
+    /// its place in admission recovery.
+    func forgetAdmittedIdentity(windowID: CGWindowID) {
         for workspace in Array(admittedWindowIDs.keys) {
             admittedWindowIDs[workspace]?.remove(windowID)
         }
-        minSizes.forget(windowID: windowID)
-        observedMinimumGeneration.removeValue(forKey: windowID)
     }
 
     /// Defensive cleanup — drop `windowID` from whichever BSP tree

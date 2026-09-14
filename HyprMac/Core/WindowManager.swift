@@ -2791,6 +2791,24 @@ private extension WindowManager {
         admissionRecovery.clearUnverified = { [weak self] workspace, screen in
             self?.tilingEngine.clearUnverifiedGeometry(forWorkspace: workspace, screen: screen)
         }
+        admissionRecovery.retileAfterFallback = { [weak self] workspace, screen in
+            guard let self else { return [] }
+            let allWindows = self.accessibility.getAllWindows()
+            self.tilingEngine.primeMinimumSizes(allWindows)
+            for w in allWindows where self.stateCache.floatingWindowIDs.contains(w.windowID) {
+                w.isFloating = true
+            }
+            let assigned = self.workspaceManager.windowIDs(onWorkspace: workspace)
+            let windows = allWindows.filter { assigned.contains($0.windowID) }
+            // an ordinary pass, no bypass: the newcomer is floating now, so
+            // this is the incumbents asking for their slots back.
+            let result = self.tilingEngine.tileWindows(windows, onWorkspace: workspace,
+                                                       screen: screen)
+            self.updatePositionCache(windows: allWindows)
+            return Set(windows.filter { !$0.isFloating
+                                        && !result.publishedIDs.contains($0.windowID) }
+                              .map(\.windowID))
+        }
     }
 
     /// Offer every window still waiting on evidence a fresh look. Called

@@ -127,6 +127,14 @@ final class ActionDispatcher {
     ///   `WindowDiscoveryService` consumed; passed through so
     ///   `animatedRetile` and workspace assignment do not re-query AX.
     func applyChanges(_ changes: WindowChanges, allWindows: [HyprWindow]) {
+        // CGWindowIDs get recycled. an id discovery calls new is a different
+        // window from the one that held it, so it must not inherit that
+        // window's verified admission — an inherited incumbency costs it its
+        // place in admission recovery.
+        for w in changes.newWindows {
+            tilingEngine.forgetAdmittedIdentity(windowID: w.windowID)
+        }
+
         // workspace assignment for new windows that didn't auto-float onto a
         // disabled monitor. assigning by physical screen — cursor-based was
         // unreliable under multi-monitor + display-reconfig churn.

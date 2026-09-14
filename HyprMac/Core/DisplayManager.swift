@@ -57,9 +57,14 @@ class DisplayManager {
             let visible = screen.visibleFrame
             let prior = fingerprintUsableBounds[key]
             let slack = TilingConfig.rectComparisonSlackPx
+            // size as well as edges: opposite edges each moving one point
+            // inward stays inside the per-edge slack but is a two-point
+            // change in usable area, which layouts must see.
             let unchanged = prior.map {
                 abs($0.minX - visible.minX) <= slack && abs($0.minY - visible.minY) <= slack
                     && abs($0.maxX - visible.maxX) <= slack && abs($0.maxY - visible.maxY) <= slack
+                    && abs($0.width - visible.width) <= slack
+                    && abs($0.height - visible.height) <= slack
             } ?? false
             // keep the anchor so successive one-point shifts cannot accumulate.
             let stable = unchanged ? prior! : visible

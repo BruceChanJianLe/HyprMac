@@ -132,6 +132,16 @@ final class DisplaySnapshotTests: XCTestCase {
         XCTAssertNotEqual(manager.refreshedFingerprint(), before, "noise cannot accumulate against a moving anchor")
     }
 
+    func testASymmetricOnePointInsetChangesTheFingerprint() {
+        let screen = SnapshotScreen()
+        let manager = DisplayManager(screenSource: { [screen] })
+        let before = manager.refreshedFingerprint()
+        // each edge moves one point, so every edge delta is inside the slack,
+        // but the usable area is two points narrower
+        screen.usable = screen.bounds.insetBy(dx: 1, dy: 0)
+        XCTAssertNotEqual(manager.refreshedFingerprint(), before)
+    }
+
     func testUsableBoundsAndPhysicalIdentityChangeTheFingerprint() {
         let screen = SnapshotScreen()
         let manager = DisplayManager(screenSource: { [screen] })
