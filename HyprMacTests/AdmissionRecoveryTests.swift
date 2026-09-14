@@ -616,8 +616,7 @@ final class FloatingFlagConsistencyTests: XCTestCase {
 
     func testARefusedFloatToTileLeavesTheWindowFloatingAndFlashes() throws {
         try XCTSkipIf(workspaceManager.isMonitorDisabled(screen), "monitor is disabled here")
-        // maxDepth 1 fills at two leaves, so a third window has to evict —
-        // and this one will not fit even the emptied slot
+        // maxDepth 1 fills at two leaves, so a third window is refused
         tilingEngine.maxSplitsPerMonitor[screen.localizedName] = 1
         for id in [CGWindowID(781), 782] {
             XCTAssertEqual(tilingEngine.forceInsertWindow(makeWindow(id: id),
@@ -638,7 +637,7 @@ final class FloatingFlagConsistencyTests: XCTestCase {
         XCTAssertTrue(refused.isFloating, "and its own flag agrees")
         XCTAssertEqual(flashed, [783])
         XCTAssertEqual(Set(tilingEngine.windowIDs(inTreeForWorkspace: workspace, screen: screen)),
-                       [781, 782], "the tree the refusal left alone, eviction included")
+                       [781, 782], "the tree the refusal left alone")
     }
 }
 

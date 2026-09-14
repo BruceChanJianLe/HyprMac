@@ -1604,6 +1604,6 @@ hardening, red/green logs, full-suite counts, and remaining laptop checks.
 It supersedes this file's historical claims about ordinary fit-refusal routing,
 force-insert eviction, broad keypress cancellation, and unguarded adjustment
 conflicts. No frame-writer sequence, tolerance, or timeout changed. The two-axis
-adjustment and physical undock/Terminal verification remain open. Git commits
-are blocked by this session's read-only worktree metadata; numbered patch files
-are implementation units, not landed commits.
+adjustment and physical undock/Terminal verification remain open. The numbered
+patches landed as thirteen commits, `6373c79` through `3ed40b7`, on branch
+`feature/window-sizing-recovery`.

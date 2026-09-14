@@ -725,9 +725,9 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
                        before)
     }
 
-    // MARK: - the bypass never reaches the overflow router
+    // MARK: - a structural no-fit is reported, never routed
 
-    func testABypassedPassDoesNotHandAStructuralNoFitToTheOverflowRouter() throws {
+    func testABypassedPassReportsAStructuralNoFitInsteadOfRoutingIt() throws {
         let f = try fixture()
         f.engine.maxSplitsPerMonitor = [f.screen.localizedName: 1]
         let newcomer = f.windows[2]

@@ -267,11 +267,12 @@ gets one attempt with them set aside. Look for what follows:
   before its reveal.
 - `float→tile revalidation: <id> ws<N>` — the toggle's one bypassed
   `forceInsertWindow`.
-- `no fitting tile slot for <id> with learned bounds set aside — not
-  routed` — a structural no-fit inside a bypassed pass. It is not handed to
-  the overflow router, because routing would pick its next workspace with
-  the bounds this pass is ignoring; the admission recovery finishes it
-  instead.
+- `no fitting tile slot: wid=<id> ws<N> — staying in place` — the pass could
+  not smart-insert that window into the BSP tree for that workspace. Any
+  tiling pass can log it, not just a bypassed one. Nothing routes the window
+  anywhere: a fit refusal never sends a window to another workspace. It stays
+  on its assigned workspace, where it already is, and `AdmissionRecovery`
+  decides what becomes of it.
 
 The workspace-full check uses the same vocabulary on its own line:
 `workspace <N> full: incoming=<id> tiled=<n> max=<m> axis=count
@@ -361,12 +362,28 @@ The recovery's own lines, all `[notice] [tiling]`:
 
 ```
 admission retry scheduled: ids=[26016] ws2 in 250ms cause=geometryMismatch(21611)
+admission refusal judged: ids=[26017] ws2 — floating in place at the next turn cause=geometryMismatch(21611)
 admission retry attempt: ws2 bypassMinimaSince=[26016:418]
 admission retry cancelled: ids=[26016] reason=later press
 admission recovery pending: 26016 not judgeable yet — waiting for evidence
+admission recovery held: ids=[26018] ws2 — in no tree, not floated
 admission recovery resolved: 26016 (retry tiled it)
 admission recovery fallback: floated 26016 in place on ws2 first=geometryMismatch(21611) retry=geometryMismatch(21611)
 ```
+
+One stranded window gets one of the first two lines, never both.
+`admission retry scheduled:` names the windows with a bounded retry armed
+about 250 ms out. `admission refusal judged:` names the windows that get no
+retry at all: the pass already judged them with the bounds it was told to
+ignore, so a second attempt would decide the same way. Their next turn floats
+them where they stand.
+
+`admission recovery held:` is the other end of the fallback. After the
+fallback floats a workspace's newcomers, one ordinary retile runs for that
+key. A window this line names is visible, not floating, and in no tree even
+after that retile. It is held: no timer, no float, an explicit record so the
+state dump's `recovery pending=` shows it. It clears when a later layout for
+that key publishes it, when the window is removed, or when it is forgotten.
 
 `cause` and `first`/`retry` are the layout failures, which name whichever
 window refused — usually an incumbent, not the newcomer being recovered.
@@ -492,12 +509,14 @@ not floating, so it gets its own tag rather than borrowing
 ### "Why didn't a swap take effect?"
 
 ```
-subsystem:com.zachgray.HyprMac category:tiling
+subsystem:com.zachgray.HyprMac (category:tiling || category:orchestration)
 ```
 
-Watch for `swap overflow detected post-readback — reverting` (the
-seeded min lied) or `swap would violate min-size constraints`
-(rejected up front by `canSwapWindows`).
+Both refusals log under `category: orchestration` at `.debug`, so the file
+log is where you will find them. Watch for `swap overflows min-size
+constraints (post-readback) — rejected swap` (the seeded min lied) or `swap
+would violate min-size constraints — rejected swap` (rejected up front by
+`canSwapWindows`).
 
 ### "Why is dimming wrong?"
 
@@ -580,9 +599,9 @@ gives a complete index of diagnostic-tier sites.
 
 ## Stability audit log changes, September 13 evening
 
-A preflight refusal now logs `no fitting tile slot: wid=<id> ws<N> — staying
-in place`. It does not call the old next-workspace router. Its recovery turn
-checks ownership and floats without running another sizing attempt. An
+A preflight refusal logs `no fitting tile slot: wid=<id> ws<N> — staying
+in place`. It routes the window nowhere. Its recovery turn checks ownership
+and floats without running another sizing attempt. An
 impossible adjusted layout logs `adjusted layout cannot resolve observed
 constraints — restoring`; there is no adjusted write in that case.
 

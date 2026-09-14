@@ -6,8 +6,7 @@ surface that drives it, see `docs/architecture.md`.
 
 ## Stability hardening, September 13 evening
 
-The current admission policy supersedes the earlier routing and eviction
-account below. Geometry-fit refusals return as data and leave assigned windows
+Geometry-fit refusals return as data and leave assigned windows
 on their workspace. A preflight-refused newcomer floats at the scheduled
 recovery turn without another sizing attempt. Count-based initial assignment
 is unchanged. Float-to-tile never evicts a neighbor into scratchpad.
@@ -115,14 +114,17 @@ display, this typically backtracks past the deepest-right leaves and
 produces a 2×2 grid layout instead of a degenerate dwindle spiral.
 
 If no leaf fits — the tree is genuinely full given the monitor
-dimensions — `TilingEngine.onAutoFloat` fires and the window is
-auto-floated.
+dimensions — the pass logs `no fitting tile slot: wid=<id> ws<N> — staying
+in place` and reports the window as refused on its `AdmissionResult`. The
+window is not routed to another workspace and it is not floated on the spot.
+It stays on its assigned workspace, exactly where it is, and
+`AdmissionRecovery` decides what becomes of it.
 
 ## Max depth
 
 `TilingConfig.defaultMaxDepth` is 3. A depth-3 tree has 8 leaves;
 the smallest slot is 1/8 of the screen. Beyond depth 3, smart insert
-returns no fitting leaf and the window auto-floats.
+returns no fitting leaf, and the window takes the refusal path above.
 
 Per-monitor overrides live in `TilingEngine.maxSplitsPerMonitor`,
 keyed by `NSScreen.localizedName`. The settings UI exposes this so a
@@ -308,22 +310,28 @@ from the window the user just clicked.
 ### Forced insertion
 
 `forceInsertWindow` is the float→tile entry point. It works on a private
-candidate and returns `.alreadyPresent`, `.inserted`, `.evicted(id)` or
-`.failed(reason)`. A refusal — no leaf takes the window even after evicting
-the deepest right tile, or the screen will not accept the layout — discards
-the candidate whole, so the live tree survives with the evicted window still
-in it and the caller's window stays floating with both flags set and the
-existing rejection flash. The eviction is committed only once the layout
-that replaces it has been accepted.
+candidate and returns `.alreadyPresent`, `.inserted` or `.failed(reason)`.
+It never evicts anyone. It looks for a free slot the same way an ordinary
+insert does, and the only thing it adds is that the user asked explicitly,
+so a capacity refusal from smart insert is worth one attempt anyway.
 
-Normal smart insertion can still auto-float a new window when no leaf fits.
-Before that existing scratchpad fallback, a rejected new window is offered to
-the next fitting workspace anchored to the same monitor. Each destination is
-probed once with its complete assigned tenant set on a private tree. This is a
-coarse fit check; actual AX acceptance is still required when that workspace is
-tiled. No destination is activated or recursively retiled during routing.
-Before insertion, discovery assigns new tiled windows within the physical
-monitor's regular workspaces. It fills the active workspace up to
+Two things can refuse it. `.failed(.noFittingSlot)` means no leaf took the
+window. `.failed(.layoutRejected(reason))` means the tree took it but the
+screen would not accept the frames. Either way the candidate is discarded
+whole, so the live tree survives untouched, and the caller's window stays
+floating with both flags set and the existing rejection flash. Nothing is
+written until the layout is accepted.
+
+A new window that no leaf fits is a different path, and nothing routes it.
+It stays on the workspace it was assigned, the pass logs `no fitting tile
+slot`, and `AdmissionRecovery` gives it one bounded retry and then floats it
+in place. It is never offered to another workspace, and no other workspace is
+probed, activated or retiled on its behalf.
+
+Initial assignment is a separate policy and it is unchanged. Choosing which
+workspace a brand-new window belongs to happens before any fit check, and it
+counts windows rather than measuring them. Discovery assigns new tiled
+windows within the physical monitor's regular workspaces. It fills the active workspace up to
 `2^maxDepth`, then visits the next anchored workspace in cyclic numeric order.
 Only new IDs are assigned; existing workspace membership, floating windows,
 and scratchpad members are preserved. New windows assigned to a hidden
@@ -448,17 +456,13 @@ attempt is accepted and lowers them through the ordinary reconcile path.
 
 The bypass belongs to the request, not to the pass. A window the request
 never named — an unrelated newcomer that happens to be assigned to the same
-workspace — is judged and routed by the ordinary rules, with the bypass
-suspended for both decisions. Only the request's own windows are inserted
-under it.
+workspace — is judged by the ordinary rules, with the bypass suspended for
+that decision. Only the request's own windows are inserted under it.
 
-For those, a pass running with bounds set aside never hands a window to the
-overflow router. Routing picks the next workspace with a fit check of its
-own, and inside such a pass that check would decide with the very bounds the
-pass is ignoring. A window that still does not fit is a structural no-fit:
-it is reported on the `AdmissionResult` as `refusedIDs`, and the caller
-finishes it. `canFitWindows`, which the router uses, always answers on the
-memory as it stands.
+A window that still does not fit is a structural no-fit. It is reported on
+the `AdmissionResult` as `refusedIDs` and the caller finishes it. There is no
+overflow router to hand it to: a fit refusal never moves a window to another
+workspace, in a bypassed pass or an ordinary one.
 
 ### Moving a window to another workspace
 
@@ -504,12 +508,10 @@ the key press it is waiting for is the workspace switch.
 The float→tile toggle asks the same question, but only when
 `forceInsertWindow` returns `.failed(.noFittingSlot)` — the tree refusing
 the window. `.failed(.layoutRejected)` is the screen refusing real frames,
-which is evidence rather than memory, and buys nothing. The gate is narrower
-than the retry it guards: the outlook asks whether a leaf would take the
-window, while forced insertion may also evict the deepest right tile to make
-one, so a tree out of depth reads as structural and buys no retry. Erring
-that way keeps a depth ceiling from quietly costing a tile the user did not
-offer up.
+which is evidence rather than memory, and buys nothing. The outlook and
+forced insertion ask the same structural question — the same depth ceiling,
+the same slot geometry, no eviction on either side — so a tree out of depth
+reads as structural on both and buys no retry.
 
 ### Refusal diagnostics
 

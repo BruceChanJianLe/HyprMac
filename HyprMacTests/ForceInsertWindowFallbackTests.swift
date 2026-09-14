@@ -3,9 +3,11 @@ import Cocoa
 @testable import HyprMac
 
 // pins TilingEngine.forceInsertWindow, the float→tile entry point. It works on
-// a private candidate and reports a typed result, so a caller can tell a tiled
-// window from an evicted neighbour from an outright refusal — the old optional
-// return said "no eviction" and "nothing happened" with the same nil.
+// a private candidate and reports a typed result, so a caller can tell a window
+// that tiled from one that was already there from an outright refusal — the old
+// optional return said "refused" and "nothing happened" with the same nil.
+// Nothing is ever evicted to make room: an incoming window that does not fit is
+// refused and the live tree is left exactly as it was.
 
 final class ForceInsertWindowFallbackTests: XCTestCase {
 
@@ -46,7 +48,7 @@ final class ForceInsertWindowFallbackTests: XCTestCase {
 
     // MARK: - primary path: smartInsertFitting succeeds
 
-    func testForceInsertSucceedsWithoutEvictionWhenSpaceAllows() {
+    func testForceInsertTakesAFreeSlotWhenSpaceAllows() {
         let w1 = makeWindow(id: 1)
         let w2 = makeWindow(id: 2)
         engine.forceInsertWindow(w1, toWorkspace: 1, on: screen)
@@ -55,12 +57,12 @@ final class ForceInsertWindowFallbackTests: XCTestCase {
         XCTAssertEqual(Set(tree()?.allWindows.map(\.windowID) ?? []), [1, 2])
     }
 
-    // MARK: - path A: smartInsertFitting succeeds after eviction
+    // MARK: - path A: the tree is full at max depth
 
     func testForceInsertKeepsEveryIncumbentWhenAtMaxDepth() {
         // shrink maxDepth to force the smartInsertFitting precondition (depth < maxDepth) to fail.
         // with maxDepth=1, tree fills at 2 leaves (depth 1 each); a 3rd insert via
-        // smartInsertFitting fails the depth check, triggering eviction.
+        // smartInsertFitting fails the depth check.
         engine.maxSplitsPerMonitor[screen.localizedName] = 1
 
         let w1 = makeWindow(id: 1)
@@ -70,18 +72,17 @@ final class ForceInsertWindowFallbackTests: XCTestCase {
         engine.forceInsertWindow(w2, toWorkspace: 1, on: screen)
         XCTAssertEqual(tree()?.allWindows.count, 2)
 
-        // evict and reinsert path: w2 (deepest-right) is evicted, w3 takes its slot.
+        // w3 is refused and both incumbents keep their slots.
         XCTAssertEqual(engine.forceInsertWindow(w3, toWorkspace: 1, on: screen), .failed(.noFittingSlot))
         XCTAssertEqual(Set(tree()?.allWindows.map(\.windowID) ?? []), [1, 2])
     }
 
-    // MARK: - path B: smartInsertFitting STILL fails after eviction
+    // MARK: - path B: the incoming window's own minimum refuses it
 
-    func testForceInsertReportsFailureAndKeepsTheEvictedWindowWhenIncomingDoesNotFit() {
-        // even after eviction, smartInsertFitting can fail when the incoming
-        // window's min-size exceeds the available rect. The candidate is
-        // discarded whole, so the window that would have been evicted never
-        // left the live tree and needs no reinsertion.
+    func testForceInsertReportsFailureAndLeavesTheTreeAloneWhenIncomingDoesNotFit() {
+        // smartInsertFitting also fails when the incoming window's min-size
+        // exceeds every available rect. The candidate is discarded whole, so
+        // the live tree never changed and needs no repair.
         engine.maxSplitsPerMonitor[screen.localizedName] = 1
 
         let w1 = makeWindow(id: 1)
@@ -102,9 +103,9 @@ final class ForceInsertWindowFallbackTests: XCTestCase {
 
     // MARK: - explicit revalidation of learned minima
 
-    /// Two tenants, so evicting the deepest right still leaves one behind for
-    /// the incoming window's minimum to argue with. With only one tenant,
-    /// eviction empties the tree and every minimum fits the root.
+    /// Two tenants, so the deepest slot the incoming window can be offered is
+    /// narrow enough for its minimum to argue with. With one tenant, the free
+    /// half is wide enough that every minimum fits.
     private func seedTwoTenants() {
         engine.forceInsertWindow(makeWindow(id: 1), toWorkspace: 1, on: screen)
         engine.forceInsertWindow(makeWindow(id: 2), toWorkspace: 1, on: screen)
@@ -134,7 +135,8 @@ final class ForceInsertWindowFallbackTests: XCTestCase {
                                                 bypassingLearnedMinima: true),
                        .inserted)
         XCTAssertEqual(Set(tree()?.allWindows.map(\.windowID) ?? []), [1, 2, 3],
-                       "nothing was evicted: the slot was there once the bound was set aside")
+                       "both incumbents keep their slots: the room was there"
+                       + " once the bound was set aside")
     }
 
     func testBypassingLearnedMinimaLeavesASeededHintStanding() throws {
@@ -146,7 +148,7 @@ final class ForceInsertWindowFallbackTests: XCTestCase {
                        .failed(.noFittingSlot))
         XCTAssertFalse(tree()?.contains(w3) ?? true)
         XCTAssertEqual(Set(tree()?.allWindows.map(\.windowID) ?? []), [1, 2],
-                       "the refusal discards the candidate whole, eviction included")
+                       "the refusal discards the candidate whole")
     }
 
     func testBypassingLearnedMinimaStillObeysTheDepthCeiling() throws {
@@ -219,7 +221,7 @@ final class ForceInsertWindowFallbackTests: XCTestCase {
         let live = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen))
         let before = live.structuralFingerprint()
 
-        // the layout that would replace the evicted tile is refused
+        // the layout that would seat the incoming window is refused
         let w3 = makeWindow(id: 403)
         trace.frames[w3.windowID] = CGRect(x: usable.minX + 20, y: usable.minY + 20,
                                            width: 120, height: 120)
@@ -231,7 +233,7 @@ final class ForceInsertWindowFallbackTests: XCTestCase {
             return XCTFail("expected a layout refusal, got \(result)")
         }
         XCTAssertEqual(engine.existingTree(forWorkspace: 1, screen: screen)?.structuralFingerprint(),
-                       before, "the old tree survives, eviction included")
+                       before, "the old tree survives untouched")
         XCTAssertEqual(Set(engine.windowIDs(inTreeForWorkspace: 1, screen: screen)), [401, 402])
     }
 }

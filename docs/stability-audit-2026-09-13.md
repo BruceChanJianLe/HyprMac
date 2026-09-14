@@ -102,12 +102,13 @@ only the newcomer is stranded. `red-identity.log`: 1 assertion failure.
 This protects previously verified incumbents, not windows that have never had
 an accepted admission. It does not suppress legitimate minimize/unhide retiles.
 
-Git commits are blocked: the session's filesystem profile makes resolved
-worktree metadata read-only. `git add` and `git commit` both fail creating
-`/Users/zgray/GitHub/HyprMac/.git/worktrees/stability-hardening/index.lock`.
-No alternate checkout or permission bypass is used. Numbered patches under
-`build/stability-audit/` preserve independently reviewable implementation units;
-they are not commit hashes.
+The numbered patches under `build/stability-audit/` were applied byte-for-byte
+and landed as thirteen commits, `6373c79` through `3ed40b7`, on branch
+`feature/window-sizing-recovery`. Each patch is one commit, so every
+implementation unit is still independently reviewable and revertible.
+
+`build/stability-audit/` itself is a gitignored build artifact. Those logs and
+patch files live on the hub only; they are not in the repository.
 
 ## Fix 3: assigned fit refusals stay in place
 
@@ -301,6 +302,10 @@ comparison above follows current mechanisms rather than copying that snapshot.
 6. Keep the existing docked Terminal probe gate: compare wrapper/order and
    delayed reads from a saved baseline before changing the writer. Include a
    portrait top/bottom split at gap 8. Messages drag feedback is unchanged.
+7. The returned incumbent. Hide a tiled Safari with Cmd-H, open another window
+   on the same workspace, then unhide Safari. The original Safari window must
+   end up either tiled or listed in the state dump's `recovery pending=`. It
+   must never end up untracked: visible, not floating, and in no tree.
 
 ## Fix 11: explicit departure ends incumbent protection
 
@@ -356,9 +361,11 @@ The initial 718-test baseline skipped 201 cases here. Synthetic screen/provider
 fixtures enabled 90 existing cases and all new regressions; the final 111 skips
 are still skips, not passes. GUI/AX acceptance on the laptop remains open.
 
-No commits were created: Git metadata is read-only in this session. HEAD remains
-`c5d0b74` and all edits are uncommitted. The ordered patch subjects and evidence
-are in `build/stability-audit/SERIES.md`. These are review/handoff artifacts,
-not a claim that the requested independently revertible commits landed.
+The ordered patches landed as thirteen commits on branch
+`feature/window-sizing-recovery`, `6373c79` through `3ed40b7`, with `3ed40b7`
+at the tip. They are the independently revertible commits that were asked for.
+The patch subjects and the evidence behind them are in
+`build/stability-audit/SERIES.md`, which is a gitignored build artifact on the
+hub rather than a file in the repository.
 No push, laptop install, live configuration edit, Synapse edit, or Hermes edit
 was performed. The app is built but has not been deployed or launched.
