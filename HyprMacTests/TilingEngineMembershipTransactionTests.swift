@@ -49,6 +49,25 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertEqual(result.publishedIDs, [811])
     }
 
+    func testImpossibleAdjustmentSkipsItsVisibleWritePass() {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let windows = [makeWindow(id: 821), makeWindow(id: 822)]
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in windows { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
+        XCTAssertTrue(engine.tileWindows(windows, onWorkspace: 1, screen: screen).published)
+        trace.minSize[822] = CGSize(width: rect.width * 0.95, height: 0)
+        var writes = 0
+        trace.onWrite = { writes += 1 }
+
+        let result = engine.tileWindows(windows, onWorkspace: 1, screen: screen)
+
+        XCTAssertFalse(result.published)
+        XCTAssertLessThanOrEqual(writes, 12, "two windows: candidate and restoration only")
+    }
+
     func testRejectedMembershipKeepsPriorTreeAndActualFrames() throws {
         let f = try fixture()
         f.trace.rejectNextRead = true

@@ -124,3 +124,15 @@ Full suite for fix 3 (`green-routing.log`): `Executed 721 tests, with 166 tests
 skipped and 0 failures`. Recovery's injected state-machine tests now run without
 requiring a live screen. Fake NSScreen equality uses instance identity; AppKit's
 empty device metadata otherwise made two synthetic screens compare equal.
+
+## Fix 4: skip impossible adjusted writes
+
+The proposed adjusted frames must accommodate the guarded refused axes within
+the existing candidate size allowance before any adjusted setter runs. An
+unsolved conflict goes directly to restoration. Actual acceptance still uses
+complete readback and the unchanged aggregate safety rules. The synthetic
+regression observes 18 setters before the fix, versus at most 12 afterward
+(two windows, candidate plus restoration). `red-adjustment.log`: 1 failure.
+`green-adjustment.log`: `Executed 722 tests, with 166 tests skipped and 0 failures`.
+Unknown minima can still require the first candidate and one bounded recovery;
+this removes futile adjustment, not the evidence-gathering attempt.

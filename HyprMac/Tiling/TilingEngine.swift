@@ -869,11 +869,22 @@ class TilingEngine {
             let conflicts = first.conflicts.map { (window: $0.window, actual: $0.actual) }
             candidate.adjustForMinSizes(conflicts, in: rect, gap: gapSize, padding: outerPadding)
             let adjusted = candidate.layout(in: rect, gap: gapSize, padding: outerPadding)
-            terminal = applyLayoutFinal(adjusted, usableFrame: rect, generation: generation)
-            if case .accepted = terminal.verdict {
-                copyVerifiedRatios(from: candidate.root, to: tree.root)
-                return .accepted(actualFrames: terminal.actualFrames,
-                                 progress: FrameSizingProgressReport(candidate: terminal.progress))
+            let frames = Dictionary(uniqueKeysWithValues: adjusted.map { ($0.0.windowID, $0.1) })
+            let tolerance = FrameSizingConfiguration().sizeOvershootTolerance
+            let resolves = first.observations.allSatisfy { observation in
+                guard let frame = frames[observation.window.windowID] else { return false }
+                return (!observation.widthConflict || observation.actual.width <= frame.width + tolerance)
+                    && (!observation.heightConflict || observation.actual.height <= frame.height + tolerance)
+            }
+            if resolves {
+                terminal = applyLayoutFinal(adjusted, usableFrame: rect, generation: generation)
+                if case .accepted = terminal.verdict {
+                    copyVerifiedRatios(from: candidate.root, to: tree.root)
+                    return .accepted(actualFrames: terminal.actualFrames,
+                                     progress: FrameSizingProgressReport(candidate: terminal.progress))
+                }
+            } else {
+                hyprLog(.notice, .tiling, "adjusted layout cannot resolve observed constraints — restoring")
             }
         }
 
