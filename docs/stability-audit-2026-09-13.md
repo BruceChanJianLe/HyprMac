@@ -314,3 +314,17 @@ is a newcomer again. `red-explicit-departure.log`: 1 failure. This unit also
 removes the now-unused overflow callback API and corrects its stale comments
 and test expectations. The signed build and two full runs made before this
 review are superseded by the final runs below.
+Full suite for fix 11 (`green-explicit-departure.log`): `Executed 729 tests, with
+111 tests skipped and 0 failures`.
+
+## Fix 12: usable-frame noise does not restart display reconciliation
+
+Review caught a regression in fix 6's exact usable-bounds signature. A one-point
+Dock/menu-bar variation would now hide scratchpad and trigger a full reconcile.
+The signature keeps a stable per-display bounds anchor and ignores edge changes
+within the existing one-point rect comparison slack. It does not move that
+anchor on noise, so successive one-point shifts cannot accumulate invisibly.
+Physical identity, frame changes, and larger usable-area changes still alter
+the signature. Actual layout geometry and every frame-validation tolerance are
+unchanged. `red-display-noise.log`: 1 failure for the one-point case; the same
+test also asserts a two-point accumulated change is detected.

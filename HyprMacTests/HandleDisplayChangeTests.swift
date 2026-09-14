@@ -122,6 +122,16 @@ final class DisplaySnapshotTests: XCTestCase {
         XCTAssertEqual(manager.screens.first?.frame.width, 1512)
     }
 
+    func testOnePointUsableFrameNoiseKeepsTheSameFingerprint() {
+        let screen = SnapshotScreen()
+        let manager = DisplayManager(screenSource: { [screen] })
+        let before = manager.refreshedFingerprint()
+        screen.usable = screen.bounds.offsetBy(dx: 0, dy: 1)
+        XCTAssertEqual(manager.refreshedFingerprint(), before)
+        screen.usable = screen.bounds.offsetBy(dx: 0, dy: 2)
+        XCTAssertNotEqual(manager.refreshedFingerprint(), before, "noise cannot accumulate against a moving anchor")
+    }
+
     func testUsableBoundsAndPhysicalIdentityChangeTheFingerprint() {
         let screen = SnapshotScreen()
         let manager = DisplayManager(screenSource: { [screen] })

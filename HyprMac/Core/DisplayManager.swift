@@ -21,6 +21,7 @@ class DisplayManager {
     private(set) var primaryScreenHeight: CGFloat = 0
 
     private let screenSource: () -> [NSScreen]
+    private var fingerprintUsableBounds: [String: CGRect] = [:]
 
     init(screenSource: @escaping () -> [NSScreen] = { NSScreen.screens }) {
         self.screenSource = screenSource
@@ -49,10 +50,24 @@ class DisplayManager {
     /// Read the provider at each comparison, independent of observer order.
     func refreshedFingerprint() -> String {
         refresh()
-        return screens.map { screen in
+        var nextBounds: [String: CGRect] = [:]
+        let fingerprint = screens.map { screen in
             let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
-            return "\(id?.uint32Value ?? 0):\(screen.localizedName)@\(screen.frame)/\(screen.visibleFrame)"
+            let key = "\(id?.uint32Value ?? 0):\(screen.localizedName)@\(screen.frame)"
+            let visible = screen.visibleFrame
+            let prior = fingerprintUsableBounds[key]
+            let slack = TilingConfig.rectComparisonSlackPx
+            let unchanged = prior.map {
+                abs($0.minX - visible.minX) <= slack && abs($0.minY - visible.minY) <= slack
+                    && abs($0.maxX - visible.maxX) <= slack && abs($0.maxY - visible.maxY) <= slack
+            } ?? false
+            // keep the anchor so successive one-point shifts cannot accumulate.
+            let stable = unchanged ? prior! : visible
+            nextBounds[key] = stable
+            return "\(key)/\(stable)"
         }.joined(separator: "|")
+        fingerprintUsableBounds = nextBounds
+        return fingerprint
     }
 
     /// Convert `screen.visibleFrame` (NS, bottom-left origin) to CG
