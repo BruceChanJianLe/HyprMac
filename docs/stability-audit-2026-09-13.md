@@ -159,3 +159,15 @@ the provider seam and old signature were extracted before that red run.
 The eleven-second transient mode in the log can still outlast the unchanged
 2-second debounce. This fix does not claim that every intermediate macOS mode
 can be identified before macOS announces the final one.
+Full suite for fix 6 (`green-display.log`): `Executed 724 tests, with 155 tests
+skipped and 0 failures`.
+
+## Fix 7: focus actions preserve pending admissions
+
+Directional focus, floating focus, menu focus, keybind display, and app launch
+no longer cancel admission recovery. Workspace reveal already preserved it.
+Membership-changing actions retain the existing cancellation rule. Five
+assertions fail before the change (`red-focus-action.log`). The full suite
+result is recorded in `green-focus-action.log`. Targeted cancellation for
+unrelated membership actions remains a narrower follow-up; this change closes
+the ordinary focus-key interruption without changing geometry ownership.

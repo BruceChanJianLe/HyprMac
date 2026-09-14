@@ -73,7 +73,14 @@ final class AdmissionRecoveryTests: XCTestCase {
         XCTAssertFalse(WindowManager.cancelsPendingRecovery(.cycleWorkspace(1)))
     }
 
-    func testEveryOtherActionCancelsAPendingRetry() {
+    func testFocusAndOverlayActionsKeepPendingRecovery() {
+        for action: Action in [.focusDirection(.left), .focusFloating, .focusMenuBar,
+                               .showKeybinds, .launchApp(bundleID: "com.apple.Safari")] {
+            XCTAssertFalse(WindowManager.cancelsPendingRecovery(action), "\(action)")
+        }
+    }
+
+    func testMembershipActionsCancelAPendingRetry() {
         XCTAssertTrue(WindowManager.cancelsPendingRecovery(.moveToWorkspace(3)))
         XCTAssertTrue(WindowManager.cancelsPendingRecovery(.toggleFloating))
     }

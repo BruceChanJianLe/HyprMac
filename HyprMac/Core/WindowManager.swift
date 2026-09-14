@@ -1933,7 +1933,9 @@ class WindowManager {
     /// retile instead of its one remaining attempt.
     static func cancelsPendingRecovery(_ action: Action) -> Bool {
         switch action {
-        case .switchWorkspace, .cycleWorkspace: return false
+        case .switchWorkspace, .cycleWorkspace, .focusDirection, .focusFloating,
+             .focusMenuBar, .showKeybinds, .launchApp:
+            return false
         default: return true
         }
     }
