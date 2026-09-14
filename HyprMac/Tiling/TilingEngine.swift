@@ -1173,6 +1173,19 @@ class TilingEngine {
         let t = m.tree
         let rect = m.rect
 
+        let refusedIncumbents = Set(m.refusedWindows.map(\.windowID)).intersection(incumbents)
+        if let id = refusedIncumbents.min(), layoutGeneration == generation {
+            // publishing only the subset would hide an incumbent from geometry tracking.
+            let ids = Set(windows.filter { !$0.isFloating }.map(\.windowID))
+            let inserted = Set(m.insertedWindows.map(\.windowID)).subtracting(incumbents)
+            mark(key, windowIDs: ids, insertedIDs: inserted, restored: false)
+            return admissionResult(.degraded(candidateReason: .noFittingSlot(id),
+                                              restorationReason: nil, restorationAttempted: false,
+                                              actualFrames: [:], progress: FrameSizingProgressReport()),
+                                   workspace: workspace, screen: screen, key: key,
+                                   generation: generation, inserted: inserted,
+                                   refused: Set(m.refusedWindows.map(\.windowID)).subtracting(incumbents))
+        }
         _ = consumePendingInserted(for: key, in: t)
         let outcome = applyTrackedLayout(t, in: rect, generation: generation, key: key,
                                          inserted: m.insertedWindows.map(\.windowID).filter { !incumbents.contains($0) },

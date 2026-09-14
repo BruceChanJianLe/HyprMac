@@ -104,6 +104,30 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertEqual(f.tree.structuralFingerprint(), prior)
     }
 
+    func testAnImpossibleReturnedIncumbentKeepsTheWholeKeyUnverifiedWithoutWrites() {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let windows = [makeWindow(id: 841), makeWindow(id: 842)]
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in windows { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
+        XCTAssertTrue(engine.tileWindows(windows, onWorkspace: 1, screen: screen).published)
+        for w in windows {
+            engine.removeWindowID(w.windowID)
+            w.observedMinSize = rect.size
+        }
+        trace.written = []
+
+        let result = engine.tileWindows(windows, onWorkspace: 1, screen: screen)
+
+        XCTAssertFalse(result.published)
+        XCTAssertTrue(result.strandedIDs.isEmpty, "incumbents are not fallback targets")
+        XCTAssertTrue(trace.written.isEmpty)
+        XCTAssertEqual(engine.unverifiedGeometryWindowIDs, [841, 842])
+        XCTAssertTrue(engine.intendedTileRects().isEmpty)
+    }
+
     func testRejectedMembershipKeepsPriorTreeAndActualFrames() throws {
         let f = try fixture()
         f.trace.rejectNextRead = true

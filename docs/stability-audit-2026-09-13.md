@@ -196,3 +196,18 @@ Every real reconcile now invalidates sizing, even when all keys keep their
 homes. A reentrant same-home display callback during setters fails two
 assertions before the fix (`red-display-generation.log`); afterward it reports
 superseded, retains the old tree, and does not restore over the new operation.
+Full suite for fix 9 (`green-display-generation.log`): `Executed 727 tests, with
+111 tests skipped and 0 failures`.
+
+## Fix 10: do not publish a subset that omits a returning incumbent
+
+When two verified incumbents return with constraints that no longer fit, one
+could be omitted while the other alone published. Recovery must not float that
+incumbent, but it must not disappear from geometry tracking either. A refused
+incumbent now stops the candidate before any setters, preserves the prior tree,
+and marks every affected window unverified. The new `noFittingSlot(id)` failure
+is structural; it never teaches a minimum. The frame writer is unchanged.
+The red test has four failures (`red-returned-refusal.log`): publication, writes,
+missing unverified IDs, and stale intended geometry. The final behavior requires
+a later successful layout or a user decision to float/move a window; it does
+not pretend incompatible incumbents form a valid layout.

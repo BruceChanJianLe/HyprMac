@@ -202,7 +202,7 @@ struct FrameReadbackPoller {
         if progress.phase == .restoration { return .restorationPhase }
         guard case let .rejected(failure) = verdict else { return .notRejected }
         switch failure {
-        case .writeFailed, .readFailed, .cleanupFailed, .windowUnavailable,
+        case .noFittingSlot, .writeFailed, .readFailed, .cleanupFailed, .windowUnavailable,
              .duplicateWindowID, .invalidFrame, .superseded, .deadlineExceeded,
              .attemptsExhausted:
             return .ioFailure

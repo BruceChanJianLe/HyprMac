@@ -6,6 +6,7 @@ enum FrameSizingFailure: Equatable {
     case readFailed(CGWindowID, AXError)
     case deadlineExceeded
     case attemptsExhausted
+    case noFittingSlot(CGWindowID)
     case geometryMismatch(CGWindowID)
     case outsideUsableFrame(CGWindowID)
     case overlap(CGWindowID, CGWindowID)
