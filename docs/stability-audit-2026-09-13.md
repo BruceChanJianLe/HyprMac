@@ -184,3 +184,15 @@ fixture now injects its screen into DisplayManager and runs all 48 cases with
 no display skips. That uncovered one old ordinary-refusal expectation missed
 in fix 3; it now expects the returned refusal ID. `red-return-priority.log`
 records all three failures, distinguishing those two causes.
+Full suite for fix 8 (`green-return-priority.log`): `Executed 726 tests, with
+111 tests skipped and 0 failures`.
+
+## Fix 9: a same-home display change invalidates active sizing
+
+`handleDisplayChange` previously advanced the layout generation only when a
+tree migrated or became orphaned. A resolution/usable-bounds change at the
+same origin could therefore let an active candidate publish stale geometry.
+Every real reconcile now invalidates sizing, even when all keys keep their
+homes. A reentrant same-home display callback during setters fails two
+assertions before the fix (`red-display-generation.log`); afterward it reports
+superseded, retains the old tree, and does not restore over the new operation.

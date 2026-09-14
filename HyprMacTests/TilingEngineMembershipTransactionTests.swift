@@ -87,6 +87,23 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertEqual(result.refusedIDs, [831])
     }
 
+    func testSameHomeDisplayChangeSupersedesAnActiveCandidate() throws {
+        let f = try fixture()
+        let prior = f.tree.structuralFingerprint()
+        var changed = false
+        f.trace.onWrite = {
+            guard !changed else { return }
+            changed = true
+            f.engine.handleDisplayChange(currentScreens: [f.screen], homeScreenForWorkspace: { _ in f.screen })
+        }
+
+        let result = f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+
+        XCTAssertEqual(result.failure, .superseded)
+        XCTAssertFalse(result.restorationVerified)
+        XCTAssertEqual(f.tree.structuralFingerprint(), prior)
+    }
+
     func testRejectedMembershipKeepsPriorTreeAndActualFrames() throws {
         let f = try fixture()
         f.trace.rejectNextRead = true

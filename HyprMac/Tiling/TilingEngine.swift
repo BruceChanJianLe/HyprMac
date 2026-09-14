@@ -575,6 +575,8 @@ class TilingEngine {
     ///   change (see plan §4.2 — deferred for risk reasons).
     func handleDisplayChange(currentScreens: [NSScreen],
                              homeScreenForWorkspace: (Int) -> NSScreen?) {
+        // resolution and usable bounds can change without changing a tree key.
+        invalidatePendingLayout()
         var migrations: [(old: TilingKey, dest: NSScreen)] = []
         var orphans: [TilingKey] = []
 
@@ -601,10 +603,6 @@ class TilingEngine {
             } else {
                 orphans.append(key)
             }
-        }
-
-        if !migrations.isEmpty || !orphans.isEmpty {
-            invalidatePendingLayout()
         }
 
         for (oldKey, newScreen) in migrations {
