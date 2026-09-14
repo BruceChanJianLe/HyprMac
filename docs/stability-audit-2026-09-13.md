@@ -147,3 +147,15 @@ structure (`red-eviction.log`). The actual-layout-refusal test now uses depth 2
 so it continues to exercise I/O failure rather than being stopped by capacity.
 Full suite (`green-eviction.log`): `Executed 722 tests, with 155 tests skipped and
 0 failures`. All 11 force-insertion tests now run with synthetic fallback screens.
+
+## Fix 6: compare fresh display snapshots
+
+Every fingerprint comparison refreshes from the screen provider, including the
+notification's early-exit check and the delayed settle sample. The signature
+includes physical display ID and visible bounds, so a changed usable frame is
+not ignored. This removes reliance on notification observer order. Two injected
+provider regressions fail four assertions against the old cached signature;
+the provider seam and old signature were extracted before that red run.
+The eleven-second transient mode in the log can still outlast the unchanged
+2-second debounce. This fix does not claim that every intermediate macOS mode
+can be identified before macOS announces the final one.

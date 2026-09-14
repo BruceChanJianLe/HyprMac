@@ -108,3 +108,40 @@ private final class MigrationTrace {
                       currentGeneration: generation)
     }
 }
+
+final class DisplaySnapshotTests: XCTestCase {
+    func testFingerprintRefreshesAChangedProviderWithoutNotification() {
+        let first = SnapshotScreen()
+        let second = SnapshotScreen()
+        second.bounds.size.width = 1512
+        var provided: [NSScreen] = [first]
+        let manager = DisplayManager(screenSource: { provided })
+        let before = manager.refreshedFingerprint()
+        provided = [second]
+        XCTAssertNotEqual(manager.refreshedFingerprint(), before)
+        XCTAssertEqual(manager.screens.first?.frame.width, 1512)
+    }
+
+    func testUsableBoundsAndPhysicalIdentityChangeTheFingerprint() {
+        let screen = SnapshotScreen()
+        let manager = DisplayManager(screenSource: { [screen] })
+        let before = manager.refreshedFingerprint()
+        screen.usable = screen.bounds.insetBy(dx: 0, dy: 25)
+        let inset = manager.refreshedFingerprint()
+        XCTAssertNotEqual(inset, before)
+        screen.displayID = 42
+        XCTAssertNotEqual(manager.refreshedFingerprint(), inset)
+    }
+}
+
+private final class SnapshotScreen: NSScreen {
+    var bounds = NSRect(x: 0, y: 0, width: 1920, height: 1080)
+    var usable: NSRect?
+    var displayID = 41
+    override var frame: NSRect { bounds }
+    override var visibleFrame: NSRect { usable ?? bounds }
+    override var localizedName: String { "Test display" }
+    override var deviceDescription: [NSDeviceDescriptionKey: Any] {
+        [NSDeviceDescriptionKey("NSScreenNumber"): NSNumber(value: displayID)]
+    }
+}

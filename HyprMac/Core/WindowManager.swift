@@ -2524,9 +2524,7 @@ class WindowManager {
     /// Stable string identity for the current monitor layout. Used to
     /// drop spurious `didChangeScreenParameters` fires.
     private func displayFingerprint() -> String {
-        displayManager.screens
-            .map { "\($0.localizedName)@\($0.frame)" }
-            .joined(separator: "|")
+        displayManager.refreshedFingerprint()
     }
 
     /// Handler for the `.hyprMacRetileAll` notification posted from the

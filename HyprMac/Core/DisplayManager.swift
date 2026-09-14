@@ -20,7 +20,10 @@ class DisplayManager {
     /// Cached to avoid `NSScreen.screens.first` on every call.
     private(set) var primaryScreenHeight: CGFloat = 0
 
-    init() {
+    private let screenSource: () -> [NSScreen]
+
+    init(screenSource: @escaping () -> [NSScreen] = { NSScreen.screens }) {
+        self.screenSource = screenSource
         refresh()
         NotificationCenter.default.addObserver(
             self, selector: #selector(refresh),
@@ -32,7 +35,7 @@ class DisplayManager {
     /// height. Called automatically on screen parameter changes; safe
     /// to invoke manually.
     @objc func refresh() {
-        screens = NSScreen.screens
+        screens = screenSource()
         primaryScreenHeight = screens.first?.frame.height ?? 0
         hyprLog(.debug, .lifecycle, "displays: \(screens.count)")
         for (i, screen) in screens.enumerated() {
@@ -41,6 +44,15 @@ class DisplayManager {
             let cg = cgRect(for: screen)
             hyprLog(.debug, .lifecycle, "  display \(i): frame=\(frame) visible=\(visible) cg=\(cg)")
         }
+    }
+
+    /// Read the provider at each comparison, independent of observer order.
+    func refreshedFingerprint() -> String {
+        refresh()
+        return screens.map { screen in
+            let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+            return "\(id?.uint32Value ?? 0):\(screen.localizedName)@\(screen.frame)/\(screen.visibleFrame)"
+        }.joined(separator: "|")
     }
 
     /// Convert `screen.visibleFrame` (NS, bottom-left origin) to CG
