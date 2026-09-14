@@ -43,8 +43,6 @@ final class FloatingWindowController {
     var updatePositionCache: (() -> Void)?
     var isMenuTracking: () -> Bool = { false }
     var isScratchpadVisible: () -> Bool = { false }
-    // spill an evicted window into the scratchpad overflow buffer.
-    var adoptIntoScratchpad: ((HyprWindow, CGRect?) -> Void)?
     // red flash on a float→tile the tree or the screen refused.
     var rejectFloatToTile: ((HyprWindow) -> Void)?
 
@@ -81,8 +79,7 @@ final class FloatingWindowController {
     /// Tiled → floating: the window leaves the BSP tree and pops back to
     /// its `originalFrame` (when on-screen) or to a screen-centered
     /// fallback. Floating → tiled: the window enters the BSP tree at the
-    /// best-fit slot; if the tree is full, an existing tile is evicted
-    /// to floating to make room.
+    /// best-fit slot; if the tree is full, the window stays floating.
     ///
     /// On disabled monitors the call is a no-op — everything floats
     /// there by definition. The actual retile is wrapped in
@@ -108,22 +105,6 @@ final class FloatingWindowController {
                 switch forceInsert(window, workspace: workspace, screen: screen) {
                 case .inserted, .alreadyPresent:
                     hyprLog(.debug, .floating, "tiling window '\(window.title ?? "?")'")
-                case let .evicted(evictedID):
-                    // evicted tile spills into the scratchpad overflow buffer.
-                    // the eviction is already committed, so a cache miss has
-                    // to be answered from AX rather than dropped — otherwise
-                    // the window is in no tree and not floating either.
-                    let cached = stateCache.cachedWindows[evictedID]
-                        ?? accessibility.getAllWindows().first { $0.windowID == evictedID }
-                    guard let evicted = cached else {
-                        hyprLog(.notice, .floating, "tiled \(window.windowID) but evicted \(evictedID) is gone")
-                        break
-                    }
-                    let screenRect = displayManager.cgRect(for: screen)
-                    let original = stateCache.originalFrames[evictedID]
-                    let preferred = original.flatMap { $0.isSubstantiallyVisible(on: screenRect) ? $0 : nil }
-                    adoptIntoScratchpad?(evicted, preferred)
-                    hyprLog(.debug, .floating, "tiling '\(window.title ?? "?")' — bumped '\(evicted.title ?? "?")' to scratchpad")
                 case let .failed(reason):
                     // the tree never took it, so it is still a floater. put
                     // both flags back the way they were and say so.
@@ -168,13 +149,6 @@ final class FloatingWindowController {
     /// refuses both times. There is no second bypass and nothing is rearmed —
     /// the next toggle is a new request.
     ///
-    /// The gate is deliberately narrower than the retry it guards.
-    /// `admissionOutlook` asks whether a leaf would take the window;
-    /// `forceInsertWindow` may also evict the deepest right tile to make one.
-    /// So a tree that is out of depth reads as `structural` and buys no
-    /// retry, even though a bypassed force insert could have got the window
-    /// in by evicting someone. Erring that way keeps a depth ceiling from
-    /// quietly costing a tile the user did not offer up.
     private func forceInsert(_ window: HyprWindow, workspace: Int,
                              screen: NSScreen) -> TilingEngine.ForceInsertResult {
         let first = tilingEngine.forceInsertWindow(window, toWorkspace: workspace, on: screen)

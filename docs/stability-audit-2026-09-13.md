@@ -136,3 +136,14 @@ regression observes 18 setters before the fix, versus at most 12 afterward
 `green-adjustment.log`: `Executed 722 tests, with 166 tests skipped and 0 failures`.
 Unknown minima can still require the first candidate and one bounded recovery;
 this removes futile adjustment, not the evidence-gathering attempt.
+
+## Fix 5: float-to-tile does not evict
+
+A force insertion now returns `noFittingSlot` before writing if no leaf takes
+the window. The eviction result and scratchpad adoption callback are removed.
+Explicit learned-minimum revalidation remains available and still obeys depth.
+Two red cases contain five failed assertions for replaced IDs and changed tree
+structure (`red-eviction.log`). The actual-layout-refusal test now uses depth 2
+so it continues to exercise I/O failure rather than being stopped by capacity.
+Full suite (`green-eviction.log`): `Executed 722 tests, with 155 tests skipped and
+0 failures`. All 11 force-insertion tests now run with synthetic fallback screens.

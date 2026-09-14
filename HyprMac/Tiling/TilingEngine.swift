@@ -122,7 +122,6 @@ class TilingEngine {
     enum ForceInsertResult: Equatable {
         case alreadyPresent
         case inserted
-        case evicted(CGWindowID)
         case failed(ForceInsertFailure)
     }
 
@@ -1882,8 +1881,7 @@ class TilingEngine {
         return true
     }
 
-    /// Force `window` into the `(workspace, screen)` tree, evicting
-    /// the deepest-right tile when no room remains.
+    /// Insert `window` into an available slot without replacing an incumbent.
     ///
     /// Used by float→tile toggles when the user explicitly wants
     /// `window` tiled even though smart insert would otherwise reject
@@ -1917,16 +1915,8 @@ class TilingEngine {
         if live?.contains(window) == true { return .alreadyPresent }
         let candidate = live?.deepClone() ?? BSPTree()
 
-        var success = ForceInsertResult.inserted
-        if !smartInsertFitting(window, into: candidate, maxDepth: maxDepth(for: screen), rect: rect) {
-            guard let evicted = candidate.deepestRightLeafWindow() else { return .failed(.noFittingSlot) }
-            candidate.remove(evicted)
-            guard smartInsertFitting(window, into: candidate, maxDepth: maxDepth(for: screen), rect: rect) else {
-                // the candidate is discarded, so the evicted window never left
-                // the live tree and needs no reinsertion
-                return .failed(.noFittingSlot)
-            }
-            success = .evicted(evicted.windowID)
+        guard smartInsertFitting(window, into: candidate, maxDepth: maxDepth(for: screen), rect: rect) else {
+            return .failed(.noFittingSlot)
         }
 
         // only now: a refusal above applies nothing, and cancelling an
@@ -1935,7 +1925,7 @@ class TilingEngine {
         let generation = invalidatePendingLayout()
         _ = consumePendingInserted(for: key, in: candidate)
         return commitForceInsert(candidate, live: live, key: key, rect: rect,
-                                 window: window, generation: generation, success: success)
+                                 window: window, generation: generation, success: .inserted)
     }
 
     private func commitForceInsert(_ candidate: BSPTree, live: BSPTree?, key: TilingKey,

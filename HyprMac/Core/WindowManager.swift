@@ -328,7 +328,6 @@ class WindowManager {
         floatingController.updatePositionCache = { [weak self] in self?.updatePositionCache() }
         floatingController.isMenuTracking = { [weak self] in self?.mouseTracker.menuTracking ?? false }
         floatingController.isScratchpadVisible = { [weak self] in self?.scratchpad.isVisible ?? false }
-        floatingController.adoptIntoScratchpad = { [weak self] w, frame in self?.scratchpad.adopt(w, preferredFrame: frame) }
         floatingController.rejectFloatToTile = { [weak self] w in
             guard let self, let frame = w.frame ?? self.stateCache.cachedWindows[w.windowID]?.frame else { return }
             self.focusBorder.flashError(around: frame, windowID: w.windowID, window: w,

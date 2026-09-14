@@ -17,11 +17,7 @@ final class ForceInsertWindowFallbackTests: XCTestCase {
         displayManager = DisplayManager()
         engine = TilingEngine(displayManager: displayManager,
                               frameSizingIOFactory: acceptingFrameSizingIOFactory())
-        // tests need a real NSScreen — skip if the test runner has none (headless CI).
-        guard let main = NSScreen.main ?? NSScreen.screens.first else {
-            throw XCTSkip("no NSScreen available — test requires a display")
-        }
-        screen = main
+        screen = NSScreen.main ?? NSScreen.screens.first ?? ForceInsertTestScreen()
     }
 
     private func tree() -> BSPTree? {
@@ -61,7 +57,7 @@ final class ForceInsertWindowFallbackTests: XCTestCase {
 
     // MARK: - path A: smartInsertFitting succeeds after eviction
 
-    func testForceInsertEvictsAndReinsertsWhenAtMaxDepth() {
+    func testForceInsertKeepsEveryIncumbentWhenAtMaxDepth() {
         // shrink maxDepth to force the smartInsertFitting precondition (depth < maxDepth) to fail.
         // with maxDepth=1, tree fills at 2 leaves (depth 1 each); a 3rd insert via
         // smartInsertFitting fails the depth check, triggering eviction.
@@ -75,8 +71,8 @@ final class ForceInsertWindowFallbackTests: XCTestCase {
         XCTAssertEqual(tree()?.allWindows.count, 2)
 
         // evict and reinsert path: w2 (deepest-right) is evicted, w3 takes its slot.
-        XCTAssertEqual(engine.forceInsertWindow(w3, toWorkspace: 1, on: screen), .evicted(2))
-        XCTAssertEqual(Set(tree()?.allWindows.map(\.windowID) ?? []), [1, 3])
+        XCTAssertEqual(engine.forceInsertWindow(w3, toWorkspace: 1, on: screen), .failed(.noFittingSlot))
+        XCTAssertEqual(Set(tree()?.allWindows.map(\.windowID) ?? []), [1, 2])
     }
 
     // MARK: - path B: smartInsertFitting STILL fails after eviction
@@ -167,10 +163,9 @@ final class ForceInsertWindowFallbackTests: XCTestCase {
         // the window can only get in by taking someone's place
         let result = engine.forceInsertWindow(w3, toWorkspace: 1, on: screen,
                                               bypassingLearnedMinima: true)
-        XCTAssertEqual(result, .evicted(2))
-        XCTAssertEqual(Set(tree()?.allWindows.map(\.windowID) ?? []), [1, 3],
-                       "two tiles, not three — the depth ceiling still holds")
-        XCTAssertNotEqual(tree()?.structuralFingerprint(), before)
+        XCTAssertEqual(result, .failed(.noFittingSlot))
+        XCTAssertEqual(Set(tree()?.allWindows.map(\.windowID) ?? []), [1, 2])
+        XCTAssertEqual(tree()?.structuralFingerprint(), before)
     }
 
     func testTheBypassDoesNotOutlastTheOneAttempt() throws {
@@ -207,11 +202,11 @@ final class ForceInsertWindowFallbackTests: XCTestCase {
 
     // MARK: - the screen refuses the layout
 
-    func testRefusedLayoutKeepsTheOldTreeAndDoesNotCommitTheEviction() throws {
+    func testRefusedLayoutKeepsTheOldTree() throws {
         let trace = ForceInsertTrace()
         let engine = TilingEngine(displayManager: DisplayManager(),
                                   frameSizingIOFactory: { _, generation in trace.io(generation) })
-        engine.maxSplitsPerMonitor[screen.localizedName] = 1
+        engine.maxSplitsPerMonitor[screen.localizedName] = 2
         let w1 = makeWindow(id: 401)
         let w2 = makeWindow(id: 402)
         let usable = engine.displayManager.cgRect(for: screen)
@@ -262,4 +257,9 @@ private final class ForceInsertTrace {
             now: { [self] in now }, sleep: { [self] in now += $0 },
             currentGeneration: generation)
     }
+}
+
+private final class ForceInsertTestScreen: NSScreen {
+    override var frame: NSRect { NSRect(x: 0, y: 0, width: 1600, height: 1000) }
+    override var visibleFrame: NSRect { frame }
 }
