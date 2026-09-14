@@ -13,9 +13,8 @@ import Cocoa
 /// is the single predicate used by snapshot and discovery to decide
 /// whether a freshly-seen window enters tiling.
 ///
-/// What does not live here: the `onAutoFloat` callback wiring on
-/// `TilingEngine` (stays in `WindowManager` init), workspace assignment
-/// for new floaters (`WindowDiscoveryService`), and per-window focus
+/// What does not live here: workspace assignment for new floaters
+/// (`WindowDiscoveryService`), and per-window focus
 /// border refresh (the focus border itself plus `WindowManager`'s
 /// `updateFocusBorder`).
 ///

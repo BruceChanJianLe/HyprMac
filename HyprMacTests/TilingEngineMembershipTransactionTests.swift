@@ -37,13 +37,10 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         trace.frames[812] = rect.insetBy(dx: 100, dy: 100)
         XCTAssertTrue(engine.tileWindows([incumbent], onWorkspace: 1, screen: screen).published)
         newcomer.observedMinSize = rect.size
-        var routed: [CGWindowID] = []
-        engine.onAutoFloat = { routed.append($0.windowID) }
         trace.written = []
 
         let result = engine.tileWindows([incumbent, newcomer], onWorkspace: 1, screen: screen)
 
-        XCTAssertTrue(routed.isEmpty)
         XCTAssertEqual(result.refusedIDs, [812])
         XCTAssertFalse(trace.written.contains(812))
         XCTAssertEqual(result.publishedIDs, [811])
@@ -126,6 +123,20 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertTrue(trace.written.isEmpty)
         XCTAssertEqual(engine.unverifiedGeometryWindowIDs, [841, 842])
         XCTAssertTrue(engine.intendedTileRects().isEmpty)
+    }
+
+    func testExplicitDepartureEndsIncumbentProtectionForLaterReadmission() throws {
+        let f = try fixture()
+        let window = f.windows[0]
+        XCTAssertTrue(f.engine.tileWindows([window], onWorkspace: 1, screen: f.screen).published)
+        f.engine.removeWindow(window, fromWorkspace: 1)
+        f.trace.forgetWrites()
+        f.trace.rejectNextRead = true
+
+        let result = f.engine.tileWindows([window], onWorkspace: 1, screen: f.screen)
+
+        XCTAssertFalse(result.published)
+        XCTAssertEqual(result.strandedIDs, [window.windowID])
     }
 
     func testRejectedMembershipKeepsPriorTreeAndActualFrames() throws {
@@ -691,21 +702,15 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
 
     func testABypassedPassDoesNotHandAStructuralNoFitToTheOverflowRouter() throws {
         let f = try fixture()
-        var routed: [CGWindowID] = []
-        f.engine.onAutoFloat = { routed.append($0.windowID) }
         f.engine.maxSplitsPerMonitor = [f.screen.localizedName: 1]
         let newcomer = f.windows[2]
 
         let ordinary = f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
-        XCTAssertTrue(routed.isEmpty, "assigned windows stay on their workspace")
         XCTAssertEqual(ordinary.refusedIDs, [newcomer.windowID])
 
-        routed = []
         let revalidated = f.engine.revalidateAdmission(f.windows, incoming: [newcomer.windowID],
                                                        onWorkspace: 1, screen: f.screen)
 
-        XCTAssertTrue(routed.isEmpty,
-                      "routing here would pick the next workspace with the bounds this pass ignores")
         XCTAssertEqual(revalidated.refusedIDs, [newcomer.windowID])
         XCTAssertEqual(revalidated.strandedIDs, [newcomer.windowID],
                        "the caller finishes it instead")
@@ -743,8 +748,6 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         bystander.observedMinSize = CGSize(width: usable.width * 1.2, height: 0)
         bystander.minSizeProvenance = .observed
         f.engine.primeMinimumSizes([bystander])
-        var routed: [CGWindowID] = []
-        f.engine.onAutoFloat = { routed.append($0.windowID) }
 
         let result = f.engine.revalidateAdmission(f.windows + [bystander],
                                                   incoming: [asked.windowID],
@@ -753,7 +756,6 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertFalse(result.insertedIDs.contains(bystander.windowID),
                        "its own learned bound still refuses it")
         XCTAssertTrue(result.refusedIDs.contains(bystander.windowID))
-        XCTAssertTrue(routed.isEmpty)
     }
 
     func testARefusedRevalidationPutsTheIncumbentsBackWhenTheNewcomerCameFromElsewhere() throws {

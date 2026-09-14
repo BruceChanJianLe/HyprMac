@@ -211,3 +211,106 @@ The red test has four failures (`red-returned-refusal.log`): publication, writes
 missing unverified IDs, and stale intended geometry. The final behavior requires
 a later successful layout or a user decision to float/move a window; it does
 not pretend incompatible incumbents form a valid layout.
+Full suite for fix 10 (`green-returned-refusal.log`): `Executed 728 tests, with
+111 tests skipped and 0 failures`.
+
+## Wider audit and prior-work comparison
+
+| Earlier fix or concern | Current source and disposition |
+| --- | --- |
+| Destroy notification PID fallback | Present, `AXNotificationService.swift:225–242`. |
+| Initial window subscriptions | Present, `WindowManager.swift:456–469`, notification service `34–41`. |
+| Mass-gone short rechecks | Present, discovery `168–175`, WindowManager `2248–2254`. |
+| Stale scheduled poll closures | Present, `PollingScheduler.swift:70–115`, generation checked after stop. |
+| Retry unsuccessful destroy subscriptions | Present, notification service `155–170`. |
+| Scratchpad tiled default and saved preference | Present, `UserConfigDefaults.swift:42–44`, `ScratchpadController.swift:319–350`. |
+| Deterministic startup/Retile All packing | Present, `RetileAllPlanner.swift:22–56,98–129`, WindowManager `1671–1707`. Current capacity is `1 << depth`, not the earlier audit's count. |
+| Disabled border cleanup | Present for ordinary chrome. `FocusBorder.swift:56,366–368` deliberately permits rejection feedback while disabled. This later behavior conflicts with the earlier audit but is not ported back: tonight's instruction explicitly preserves Messages drag feedback. |
+| Publish only verified geometry, correspondence restoration, per-key fallback geometry | Present and retained. The older audit's degraded-publication objections were addressed by the seven reviewed commits. No tolerance, writer ordering, or timeout is changed here. |
+
+The prior feature worktree's dirty files are a development snapshot. The
+comparison above follows current mechanisms rather than copying that snapshot.
+
+## Deferred findings and why
+
+- **Display modes can remain transient longer than the debounce.** Evidence
+  247–320 shows 1920×1080 accepted before 1512×982 arrives about eleven seconds
+  later. Fresh snapshots and same-home generation invalidation fix two concrete
+  races. They do not prove a screen is in its final mode. A safe display-specific
+  baseline/fitting policy still needs laptop evidence; adding an arbitrary longer
+  wait or restoring off-screen originals would trade one glitch for another.
+- **Reconcile drops its transition flag before the final workflow.** Baseline
+  `WindowManager.swift:2525–2531` clears it before migration, AX enumeration,
+  parking, and tiling. Removing the synchronous overflow callback closes the
+  confirmed nested route. A complete reentrancy guard around all display and
+  focus callbacks remains unimplemented; it needs an injected orchestration
+  integration test, not just a Boolean predicate test.
+- **Transient window churn remains.** Discovery `235–260` treats an omission as
+  hidden immediately; dispatcher `143–170` removes and retiles it. The evidence
+  at 19703–19983 includes windows that actually disappear shortly after opening.
+  Incumbent identity is now protected, but preserving every reserved hidden BSP
+  leaf would also stop intended expansion on Cmd-H/minimize. A confirmed-absence
+  policy must distinguish genuine hides from incomplete AX snapshots first.
+- **Two-axis ratio adjustment remains skipped.** The 1200×800 regression still
+  exposes axis flipping (`BSPTree.swift:366–399`). Fix 4 avoids writing an
+  adjustment that leaves its observed constraints unsatisfied. A full fix needs
+  direction state that survives verified publication while preserving manual
+  overrides and resetting correctly on later membership changes. It is not
+  silently folded into a frame-write change.
+- **Delayed focus can still be stale.** `HyprWindow.swift:274–303` reasserts focus
+  50 ms after activation without a current-intent token. Floating controller
+  `286–303` restores captured focus after 20 ms. WindowManager's post-drag
+  `916–924` and Hypr-release `1068–1092` callbacks can redraw an old border.
+  A common focus-intent/click generation is needed: checking only cached last
+  focus would still miss a native click that has not been reconciled. No claim
+  of fixing these callbacks is made.
+- **Visible move rollback can degrade.** Source ownership remains while the
+  mover can remain on the destination screen. A later poll can interpret it as
+  drift. The existing restoration reach handles the ordinary case; failed AX
+  restoration still needs explicit move-recovery ownership. This is unverified
+  on two physical displays in this session.
+- **Discovery reservations and subscription lifetime retain prior residuals.**
+  Destroy rechecks are keyed by PID and bounded; an early successful omission
+  can release a real window's reservation; unresolved reservations can survive
+  exhausted read retries; window subscription IDs persist until app detach.
+  No supplied evidence isolates one of these as tonight's root cause.
+- **Timing knobs remain unchanged.** All 298 logged frame attempts were accepted
+  (253) or geometrically rejected (45). There are no `deadlineExceeded` or
+  `cleanupFailed` occurrences; maximum logged attempt elapsed time is 272 ms.
+  This log does not justify raising the 360 ms deadline or 100 ms per-call
+  timeout. Synchronous AX under load and unbounded asynchronous file-log backlog
+  remain broader risks, not measured failures here.
+
+## Required laptop checks after a separately authorized deployment
+
+1. On the built-in screen, open Outlook beside a tile. Check the window stays
+   assigned to the same workspace and eventually floats. A known no-fit should
+   have no newcomer setters; a first unknown minimum may still need a candidate,
+   restoration, and one recovery attempt. Look for the skipped-adjustment log.
+2. Start with one tiled Safari. Hide/unhide it while opening another window;
+   repeat after closing transient Start Page windows. The original must never
+   appear in recovery fallback IDs. Test both window creation and return order.
+3. Fill a workspace to its configured depth. Float-to-tile a separate window.
+   It must stay floating on refusal, with no incumbent entering scratchpad.
+4. Press focus arrows or show keybinds during a pending admission. Recovery must
+   finish once; focus actions must not erase it and grant a later fresh retry.
+5. Undock with four tiled windows, wait through both reported display modes,
+   and redock. Save state dumps plus candidate/adjusted/restoration logs. Check
+   assignments, unverified IDs, visibility, and directional focus. This is still
+   a required acceptance gate; the full undock defect is not claimed solved.
+6. Keep the existing docked Terminal probe gate: compare wrapper/order and
+   delayed reads from a saved baseline before changing the writer. Include a
+   portrait top/bottom split at gap 8. Messages drag feedback is unchanged.
+
+## Fix 11: explicit departure ends incumbent protection
+
+Final review found that remembered admission must distinguish a temporary hide
+from an explicit departure. `removeWindow(_:fromWorkspace:)`, used by moves,
+float toggles, and scratchpad sends, now ends that workspace's protection;
+`removeWindowID`, used by discovery disappearance, preserves it. The red
+regression successfully tiles a window, explicitly removes it, then refuses its
+later readmission. Before the reset it loses its recovery target; afterward it
+is a newcomer again. `red-explicit-departure.log`: 1 failure. This unit also
+removes the now-unused overflow callback API and corrects its stale comments
+and test expectations. The signed build and two full runs made before this
+review are superseded by the final runs below.

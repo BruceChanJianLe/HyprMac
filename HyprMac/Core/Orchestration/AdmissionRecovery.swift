@@ -1,6 +1,6 @@
 // One bounded retry for a newcomer a failed admission stranded, then an
 // explicit float in place. Nothing here routes a window to another
-// workspace — that stays with the pre-insertion overflow path.
+// workspace. Initial count-based assignment is a separate policy.
 
 import Cocoa
 
@@ -144,7 +144,7 @@ final class AdmissionRecovery {
     }
 
     /// Drop everything. Used for a stop, a display change, and any later key
-    /// press, all of which make the captured context stale.
+    /// geometry-changing press, all of which make the captured context stale.
     func cancelAll(reason: String) {
         guard !records.isEmpty else { return }
         let ids = Set(records.keys)

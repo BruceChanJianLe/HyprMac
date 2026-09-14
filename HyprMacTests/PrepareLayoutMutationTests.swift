@@ -69,21 +69,19 @@ final class PrepareLayoutMutationTests: XCTestCase {
         XCTAssertEqual(tree()?.root.splitRatio, TilingConfig.defaultRatio)
     }
 
-    func testPrepareTileLayoutAutoFloatsWhenInsertFails() {
+    func testPrepareTileLayoutLeavesRefusedWindowUntouched() {
         // shrink the depth ceiling so a 3rd window fails smartInsertFitting
         engine.maxSplitsPerMonitor[screen.localizedName] = 1
 
         let w1 = makeWindow(id: 1)
         let w2 = makeWindow(id: 2)
         let w3 = makeWindow(id: 3)
-        var floated: [HyprWindow] = []
-        engine.onAutoFloat = { floated.append($0) }
 
         engine.prepareTileLayout([w1, w2, w3], onWorkspace: 1, screen: screen)
 
-        // w1 + w2 fill the tree; w3 fails to fit and is reported via onAutoFloat.
+        // preparation has no recovery side effects.
         XCTAssertEqual(Set(tree()?.allWindows.map(\.windowID) ?? []), [1, 2])
-        XCTAssertEqual(floated.map(\.windowID), [3])
+        XCTAssertFalse(w3.isFloating)
     }
 
     func testPrepareTileLayoutSkipsFloatingWindows() {

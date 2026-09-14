@@ -576,3 +576,17 @@ Pull with:
 
 `grep -rn 'hyprLog(.notice\|hyprLog(.warning\|hyprLog(.error\|hyprLog(.fault' HyprMac/`
 gives a complete index of diagnostic-tier sites.
+
+
+## Stability audit log changes, September 13 evening
+
+A preflight refusal now logs `no fitting tile slot: wid=<id> ws<N> — staying
+in place`. It does not call the old next-workspace router. Its recovery turn
+checks ownership and floats without running another sizing attempt. An
+impossible adjusted layout logs `adjusted layout cannot resolve observed
+constraints — restoring`; there is no adjusted write in that case.
+
+An incompatible returning incumbent produces `noFittingSlot(id)` and keeps the
+whole key unverified without writing. It is excluded from recovery fallback
+IDs. See [the audit](stability-audit-2026-09-13.md) for the exact test evidence
+and remaining manual gates. Earlier log examples describe their dated builds.

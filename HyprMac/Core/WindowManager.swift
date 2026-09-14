@@ -1927,8 +1927,8 @@ class WindowManager {
     /// Whether `action` makes an armed admission retry stale.
     ///
     /// Whatever the user just asked for is newer than a retry armed off a
-    /// layout they have already moved past. Showing another workspace is the
-    /// exception: that is the evidence a parked newcomer has been waiting
+    /// layout they have already moved past. Focus and informational actions
+    /// preserve recovery, as does showing the workspace a newcomer has been waiting
     /// for, and forgetting it here would hand it a fresh timer on the reveal
     /// retile instead of its one remaining attempt.
     static func cancelsPendingRecovery(_ action: Action) -> Bool {
@@ -2442,16 +2442,15 @@ class WindowManager {
     /// React to a screen configuration change (monitor connect/disconnect,
     /// resolution change, dock position).
     ///
-    /// Order is load-bearing: `DisplayManager.refresh` runs automatically
-    /// via the same notification, then `WorkspaceManager.initializeMonitors`
+    /// Order is load-bearing: fingerprinting refreshes DisplayManager, then
+    /// `WorkspaceManager.initializeMonitors`
     /// must run before `TilingEngine.handleDisplayChange` so the
     /// home-screen lookup the engine consults is current. Reversing the
     /// order would prune the home-screen mapping first and orphan the
     /// migration.
     @objc private func screenParametersChanged() {
         // macOS fires this for events that don't alter the layout — app
-        // quits, color profile changes, 1px visibleFrame jitter (the
-        // fingerprint keys on frame, not visibleFrame). those used to pay
+        // quits and color profile changes. those used to pay
         // the full 3s discovery suppression + scratchpad hide before the
         // debounce concluded "unchanged"; with event-driven discovery a
         // spurious 3s suppression starves window ingestion, so bail first.
@@ -2515,8 +2514,7 @@ class WindowManager {
             self.suppressions.suppress("workspace-transition", for: 3.0)
             self.displayTransitionPending = false
             self.retileSkippedDuringTransition = false
-            // ordering inside reconcileAfterDisplayChange: DisplayManager.refresh
-            // already ran via the same notification; initializeMonitors runs
+            // the fingerprint refreshed DisplayManager; initializeMonitors runs
             // before TilingEngine.handleDisplayChange so the home-screen
             // lookup the engine consults is current.
             self.reconcileAfterDisplayChange()

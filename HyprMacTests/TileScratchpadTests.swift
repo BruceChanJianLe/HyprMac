@@ -70,15 +70,12 @@ final class TileScratchpadTests: XCTestCase {
     func testRejectOnFullReturnsWindowAndDoesNotAutoFloat() {
         // maxDepth 1 fills the tree at 2 leaves; a 3rd can't smart-insert.
         engine.maxSplitsPerMonitor[screen.localizedName] = 1
-        var autoFloated = false
-        engine.onAutoFloat = { _ in autoFloated = true }
 
         let region = CGRect(x: 0, y: 0, width: 1600, height: 1000)
         let rejects = engine.tileScratchpad([makeWindow(id: 1), makeWindow(id: 2), makeWindow(id: 3)],
                                             screen: screen, in: region)
 
         XCTAssertEqual(rejects.map(\.windowID), [3])
-        XCTAssertFalse(autoFloated, "scratchpad reject must NOT route through onAutoFloat")
         // rejected window never entered the tree
         XCTAssertEqual(Set(ws0Tree()?.allWindows.map(\.windowID) ?? []), [1, 2])
     }

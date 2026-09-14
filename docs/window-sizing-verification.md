@@ -1595,3 +1595,15 @@ than that: its trace quantizes every write, restoration writes included, so
 the rollback lands 16 points wide as well and the outcome is `.degraded`. The
 test asserts the candidate reason (`overlap(521, 522)`) and that no minimum
 was learned, and wildcards the restoration fields.
+
+
+## Stability audit follow-up, September 13 evening
+
+[The stability audit](stability-audit-2026-09-13.md) records the subsequent
+hardening, red/green logs, full-suite counts, and remaining laptop checks.
+It supersedes this file's historical claims about ordinary fit-refusal routing,
+force-insert eviction, broad keypress cancellation, and unguarded adjustment
+conflicts. No frame-writer sequence, tolerance, or timeout changed. The two-axis
+adjustment and physical undock/Terminal verification remain open. Git commits
+are blocked by this session's read-only worktree metadata; numbered patch files
+are implementation units, not landed commits.

@@ -25,9 +25,7 @@ private struct TiledDragOccluderContext: Equatable {
 /// Owner of every BSP tree HyprMac maintains.
 ///
 /// One tree per `(workspace, screen)` pair. Keeps gap/padding tunables,
-/// per-screen depth overrides, the `MinSizeMemory` for two-pass layout
-/// resolution, and the `onAutoFloat` callback that fires when a window
-/// cannot fit. Public surface owns smart insert, swap, split toggling,
+/// per-screen depth overrides, min-size memory, and typed admission refusals. Public surface owns smart insert, swap, split toggling,
 /// readback-driven settle/conflict resolution, and tree migration on
 /// monitor reconnect.
 ///
@@ -101,9 +99,7 @@ class TilingEngine {
         /// or it failed, which is also when the prior tree stops speaking
         /// for the screen.
         let restoredIDs: Set<CGWindowID>
-        /// newcomers a bypassed pass would not even insert. Always empty on
-        /// an ordinary pass, where a smart-insert refusal goes to the
-        /// overflow router as it always has.
+        /// newcomers refused before sizing; recovery floats these without a retry.
         let refusedIDs: Set<CGWindowID>
 
         /// newcomers this pass could not leave tiled.
@@ -126,7 +122,7 @@ class TilingEngine {
     }
 
     enum ForceInsertFailure: Equatable {
-        /// no leaf accepts the window, even after evicting the deepest right.
+        /// no available leaf accepts the window.
         case noFittingSlot
         /// the window fit the tree but the screen did not accept the layout.
         case layoutRejected(FrameSizingFailure)
@@ -222,11 +218,6 @@ class TilingEngine {
     var minSlotDimension: CGFloat = TilingConfig.minSlotDimension {
         didSet { if minSlotDimension != oldValue { invalidatePendingLayout() } }
     }
-
-    /// Fired when a window cannot enter the tree (max depth reached
-    /// even after smart-insert backtracking). The caller is expected to
-    /// auto-float the window.
-    var onAutoFloat: ((HyprWindow) -> Void)?
 
     private let minSizes = MinSizeMemory()
     /// generation at which each window last had an `.observed` minimum
@@ -1019,7 +1010,7 @@ class TilingEngine {
         guard let target else { return false }
 
         hyprLog(.notice, .tiling, "overflow detected (NOT auto-floating, may be stale readback): '\(target.title ?? "?")' (\(target.windowID))")
-        // intentionally no longer remove from tree or call onAutoFloat —
+        // no tree removal or routing from readback —
         // returning false lets the caller fall through to applyLayoutFinal.
         _ = tree; _ = key; _ = screen
         return false
@@ -1263,7 +1254,7 @@ class TilingEngine {
     /// `displayManager.cgRect(for:)`. Same membership-diff + two-pass min-size
     /// resolution otherwise. Windows that can't be smart-inserted (tree full at
     /// max depth) are returned as rejects — the caller keeps them floating.
-    /// Deliberately never calls `onAutoFloat`: routing a scratchpad reject
+    /// Returns scratchpad rejects to its own controller: routing a reject
     /// through the overflow-adopt path would loop back into the scratchpad.
     /// - Returns: the windows that didn't fit (stay floating members).
     @discardableResult
@@ -1388,7 +1379,7 @@ class TilingEngine {
     }
 
     /// Add a single window to the `(workspace, screen)` tree and
-    /// retile. Auto-floats via `onAutoFloat` when smart insert cannot
+    /// retile. Returns a refusal when smart insert cannot
     /// place the window without violating `minSlotDimension`. No-op
     /// for floating windows, which report `nil` because no admission ran.
     @discardableResult
@@ -1403,6 +1394,7 @@ class TilingEngine {
     /// holds it. Prunes the tree (sibling promotion preserves the
     /// surviving arrangement), then retiles the affected screen.
     func removeWindow(_ window: HyprWindow, fromWorkspace workspace: Int) {
+        admittedWindowIDs[workspace]?.remove(window.windowID)
         // search all trees for this workspace
         for (key, t) in trees where key.workspace == workspace {
             if t.contains(window) {
@@ -1872,7 +1864,7 @@ class TilingEngine {
     }
 
     /// A capacity probe other subsystems run for their own reasons — the
-    /// overflow router's next-workspace search above all. It answers on the
+    /// workspace fit checks. It answers on the
     /// memory as it stands, never on a bypass belonging to whatever pass it
     /// was called from.
     func canFitWindows(_ windows: [HyprWindow], onWorkspace workspace: Int, screen: NSScreen) -> Bool {
@@ -1903,16 +1895,14 @@ class TilingEngine {
     ///
     /// Everything happens on a private candidate, so a refusal — no leaf
     /// takes the window, or the screen will not accept the layout — leaves
-    /// the live tree exactly as it was, evicted window included. The
-    /// eviction is committed only once the layout that replaces it has been
-    /// accepted, and `.failed` is a refusal the caller has to report, not a
-    /// quiet nil.
+    /// the live tree exactly as it was. `.failed` is an explicit refusal the
+    /// caller reports while keeping the incoming window floating.
     ///
     /// `bypassingLearnedMinima` is the explicit-revalidation pass: the user
     /// asked a second time after a refusal that only learned bounds produced,
     /// so this one attempt ignores the observed bounds of the window and of
     /// the tenants already in the tree. Structure is untouched — the same
-    /// depth, the same slot geometry, the same eviction fallback, and the same
+    /// depth, the same slot geometry, no eviction, and the same
     /// publication gate decide it.
     func forceInsertWindow(_ window: HyprWindow, toWorkspace workspace: Int, on screen: NSScreen,
                            bypassingLearnedMinima: Bool = false) -> ForceInsertResult {

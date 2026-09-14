@@ -4,6 +4,27 @@ HyprMac uses a binary space partition (BSP) tree with dwindle layout.
 This document is the algorithm walkthrough; for the orchestration
 surface that drives it, see `docs/architecture.md`.
 
+## Stability hardening, September 13 evening
+
+The current admission policy supersedes the earlier routing and eviction
+account below. Geometry-fit refusals return as data and leave assigned windows
+on their workspace. A preflight-refused newcomer floats at the scheduled
+recovery turn without another sizing attempt. Count-based initial assignment
+is unchanged. Float-to-tile never evicts a neighbor into scratchpad.
+
+Verified incumbent identity survives temporary tree removal and display
+migration. Returning incumbents take slots before newcomers and never become
+admission fallback targets. If returning incumbents cannot all fit, the engine
+writes nothing and keeps the whole key unverified. Adjustment uses guarded
+refusal evidence and skips an adjusted write when the proposed frames cannot
+accommodate the refused axes within the existing candidate allowance.
+
+Display fingerprints refresh their input and include physical ID and usable
+bounds. Every display reconcile invalidates active sizing, including a mode
+change that leaves tree keys unchanged. Focus and informational actions keep
+pending admission recovery. See [the stability audit](stability-audit-2026-09-13.md)
+for regression evidence and unresolved display/focus limitations.
+
 ## Tree shape
 
 One `BSPTree` per `(workspace, screen)` pair, owned by
