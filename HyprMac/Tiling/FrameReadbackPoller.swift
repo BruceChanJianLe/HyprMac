@@ -156,12 +156,12 @@ struct FrameReadbackPoller {
             let widthConflict = actual.width > target.width + self.configuration.sizeOvershootTolerance
             let heightConflict = actual.height > target.height + self.configuration.sizeOvershootTolerance
             if widthConflict || heightConflict, case .rejected = raw.verdict {
-                conflicts.append(Conflict(window: window, allocated: target, actual: actual.size))
                 let refusal = Self.learningRefusal(windowID: window.windowID,
                                                    target: target, actual: actual,
                                                    verdict: raw.verdict, progress: raw.progress,
                                                    positionTolerance: configuration.positionTolerance)
                 if refusal == nil {
+                    conflicts.append(Conflict(window: window, allocated: target, actual: actual.size))
                     observations.append(Observation(window: window, target: target.size,
                                                     actual: actual.size,
                                                     widthConflict: widthConflict,

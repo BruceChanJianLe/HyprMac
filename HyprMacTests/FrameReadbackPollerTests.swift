@@ -268,7 +268,7 @@ final class FrameReadbackPollerTests: XCTestCase {
                          gap: 8, generation: 1)
 
         XCTAssertEqual(result.verdict, .rejected(.geometryMismatch(60)))
-        XCTAssertEqual(result.conflicts.count, 1)
+        XCTAssertTrue(result.conflicts.isEmpty, "stale geometry must not trigger an adjusted write")
         XCTAssertTrue(result.observations.isEmpty)
     }
 
@@ -299,6 +299,7 @@ final class FrameReadbackPollerTests: XCTestCase {
 
         XCTAssertEqual(result.verdict, .rejected(.geometryMismatch(61)))
         XCTAssertEqual(result.observations.map { $0.window.windowID }, [62])
+        XCTAssertEqual(result.conflicts.map { $0.window.windowID }, [62])
     }
 
     func testOvershootIsLearnedOnlyPastTheRoundingBoundary() {
