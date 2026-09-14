@@ -25,6 +25,30 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertTrue(engine.unverifiedLayouts.contains { $0.windowIDs.contains(incumbent.windowID) })
     }
 
+    func testKnownImpossibleAdmissionReturnsRefusalWithoutRoutingOrWritingNewcomer() {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let incumbent = makeWindow(id: 811)
+        let newcomer = makeWindow(id: 812)
+        let rect = engine.displayManager.cgRect(for: screen)
+        trace.frames[811] = rect.insetBy(dx: 100, dy: 100)
+        trace.frames[812] = rect.insetBy(dx: 100, dy: 100)
+        XCTAssertTrue(engine.tileWindows([incumbent], onWorkspace: 1, screen: screen).published)
+        newcomer.observedMinSize = rect.size
+        var routed: [CGWindowID] = []
+        engine.onAutoFloat = { routed.append($0.windowID) }
+        trace.written = []
+
+        let result = engine.tileWindows([incumbent, newcomer], onWorkspace: 1, screen: screen)
+
+        XCTAssertTrue(routed.isEmpty)
+        XCTAssertEqual(result.refusedIDs, [812])
+        XCTAssertFalse(trace.written.contains(812))
+        XCTAssertEqual(result.publishedIDs, [811])
+    }
+
     func testRejectedMembershipKeepsPriorTreeAndActualFrames() throws {
         let f = try fixture()
         f.trace.rejectNextRead = true
@@ -594,7 +618,7 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         let newcomer = f.windows[2]
 
         let ordinary = f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
-        XCTAssertEqual(routed, [newcomer.windowID], "an ordinary pass routes as it always has")
+        XCTAssertTrue(routed.isEmpty, "assigned windows stay on their workspace")
         XCTAssertTrue(ordinary.refusedIDs.isEmpty)
 
         routed = []
@@ -649,9 +673,8 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
 
         XCTAssertFalse(result.insertedIDs.contains(bystander.windowID),
                        "its own learned bound still refuses it")
-        XCTAssertFalse(result.refusedIDs.contains(bystander.windowID))
-        XCTAssertEqual(routed, [bystander.windowID],
-                       "it goes to the overflow router like any other window this pass did not take")
+        XCTAssertTrue(result.refusedIDs.contains(bystander.windowID))
+        XCTAssertTrue(routed.isEmpty)
     }
 
     func testARefusedRevalidationPutsTheIncumbentsBackWhenTheNewcomerCameFromElsewhere() throws {

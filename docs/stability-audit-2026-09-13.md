@@ -108,3 +108,19 @@ worktree metadata read-only. `git add` and `git commit` both fail creating
 No alternate checkout or permission bypass is used. Numbered patches under
 `build/stability-audit/` preserve independently reviewable implementation units;
 they are not commit hashes.
+
+## Fix 3: assigned fit refusals stay in place
+
+Membership construction returns no-fit IDs as data and invokes no overflow
+callback. The WindowManager router and its scratchpad fallback wiring are
+removed. The bounded recovery recognizes a preflight refusal as already judged:
+it checks current ownership/readability at the scheduled turn and floats in
+place without another sizing attempt. Count-based initial assignment is intact.
+`red-routing.log` has two failed assertions for callback routing and lost refusal
+identity; `red-routing-recovery.log` adds the retry assertion. Its synthetic
+screen initially collided with the alternate screen's identity; distinct fake
+geometries correct that test setup. The old routing expectations are updated.
+Full suite for fix 3 (`green-routing.log`): `Executed 721 tests, with 166 tests
+skipped and 0 failures`. Recovery's injected state-machine tests now run without
+requiring a live screen. Fake NSScreen equality uses instance identity; AppKit's
+empty device metadata otherwise made two synthetic screens compare equal.

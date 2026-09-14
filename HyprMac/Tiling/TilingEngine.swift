@@ -1110,34 +1110,16 @@ class TilingEngine {
         var insertedWindows: [HyprWindow] = []
         var refusedWindows: [HyprWindow] = []
         for w in toInsert {
-            // the bypass belongs to the request, not to the pass. a window the
-            // request never named is judged and routed by the ordinary rules
-            // even though this pass is revalidating someone else's bounds —
-            // otherwise an unrelated newcomer that happens to be assigned here
-            // rides a bypass nobody asked for on its behalf.
-            guard minimaBypass?[w.windowID] != nil else {
-                withoutMinimaBypass {
-                    if smartInsertFitting(w, into: t, maxDepth: maxDepth(for: screen), rect: rect) {
-                        insertedWindows.append(w)
-                    } else {
-                        hyprLog(.debug, .lifecycle, "no fitting tile slot — auto-floating '\(w.title ?? "?")'")
-                        onAutoFloat?(w)
-                    }
-                }
-                continue
+            let insert = {
+                self.smartInsertFitting(w, into: t, maxDepth: self.maxDepth(for: screen), rect: rect)
             }
-            if smartInsertFitting(w, into: t, maxDepth: maxDepth(for: screen), rect: rect) {
+            // an unrelated newcomer must not inherit another request's bypass.
+            let fits = minimaBypass?[w.windowID] == nil ? withoutMinimaBypass(insert) : insert()
+            if fits {
                 insertedWindows.append(w)
             } else {
-                // the request's own window, and it still does not fit: a
-                // structural no-fit. the overflow router must not see it —
-                // routing picks the next workspace with a fit check of its
-                // own, and that check would run inside this pass and decide
-                // with the very bounds the pass is ignoring. it is reported
-                // instead, and the caller finishes it.
                 refusedWindows.append(w)
-                hyprLog(.notice, .lifecycle, "no fitting tile slot for \(w.windowID)"
-                        + " with learned bounds set aside — not routed")
+                hyprLog(.notice, .tiling, "no fitting tile slot: wid=\(w.windowID) ws\(workspace) — staying in place")
             }
         }
 

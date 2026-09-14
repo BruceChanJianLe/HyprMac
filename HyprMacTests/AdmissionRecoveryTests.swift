@@ -15,10 +15,7 @@ final class AdmissionRecoveryTests: XCTestCase {
     private var harness: RecoveryHarness!
 
     override func setUpWithError() throws {
-        guard let main = NSScreen.main ?? NSScreen.screens.first else {
-            throw XCTSkip("requires display geometry")
-        }
-        screen = main
+        screen = NSScreen.main ?? NSScreen.screens.first ?? PrimaryRecoveryScreen()
         other = OtherRecoveryScreen()
         recovery = AdmissionRecovery()
         harness = RecoveryHarness(screen: screen)
@@ -60,6 +57,13 @@ final class AdmissionRecoveryTests: XCTestCase {
                                       refused: [26]))
         XCTAssertEqual(recovery.pendingWindowIDs, [26])
         XCTAssertEqual(harness.scheduled.count, 1)
+    }
+
+    func testPreflightRefusalFloatsWithoutAnotherSizingAttempt() throws {
+        recovery.note(failedAdmission([], published: [11], failure: nil, restored: [], refused: [26]))
+        harness.fire()
+        XCTAssertTrue(harness.attempts.isEmpty)
+        XCTAssertTrue(recovery.pendingWindowIDs.isEmpty)
     }
 
     // MARK: - which key presses cancel
@@ -456,6 +460,11 @@ private final class RecoveryHarness {
 }
 
 private final class OtherRecoveryScreen: NSScreen {
+    override func isEqual(_ object: Any?) -> Bool {
+        guard let screen = object as? NSScreen else { return false }
+        return self === screen
+    }
+    override var hash: Int { ObjectIdentifier(self).hashValue }
     override var frame: NSRect { NSRect(x: 5000, y: 0, width: 1200, height: 900) }
     override var visibleFrame: NSRect { frame }
 }
@@ -537,4 +546,14 @@ final class FloatingFlagConsistencyTests: XCTestCase {
         XCTAssertEqual(Set(tilingEngine.windowIDs(inTreeForWorkspace: workspace, screen: screen)),
                        [781, 782], "the tree the refusal left alone, eviction included")
     }
+}
+
+private final class PrimaryRecoveryScreen: NSScreen {
+    override func isEqual(_ object: Any?) -> Bool {
+        guard let screen = object as? NSScreen else { return false }
+        return self === screen
+    }
+    override var hash: Int { ObjectIdentifier(self).hashValue }
+    override var frame: NSRect { NSRect(x: 0, y: 0, width: 1600, height: 1000) }
+    override var visibleFrame: NSRect { frame }
 }

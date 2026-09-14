@@ -122,7 +122,8 @@ final class AdmissionRecovery {
             records[id] = Record(workspace: result.workspace, screen: result.screen,
                                  sinceGeneration: result.generation,
                                  firstFailure: result.failure,
-                                 phase: .awaitingRetry)
+                                 phase: .awaitingRetry,
+                                 attempted: result.refusedIDs.contains(id))
         }
         hyprLog(.notice, .tiling, "admission retry scheduled: ids=\(Self.list(stranded))"
                 + " ws\(result.workspace) in \(Int(retryDelay * 1000))ms"

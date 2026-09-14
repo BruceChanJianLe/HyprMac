@@ -365,16 +365,6 @@ class WindowManager {
         actionDispatcher.isMenuTracking = { [weak self] in self?.mouseTracker.menuTracking ?? false }
         actionDispatcher.toggleScratchpad = { [weak self] in self?.scratchpad.toggle() }
         actionDispatcher.moveToScratchpad = { [weak self] in self?.scratchpad.sendFocusedWindow() }
-        // tree-fit failures spill into the scratchpad as floating members
-        // (overflow buffer) instead of floating in place. the pre-tile
-        // original frame is the summon-back frame. excluded-bundle and
-        // disabled-monitor floats do NOT route here — they stay plain floating.
-        tilingEngine.onAutoFloat = { [weak self] window in
-            guard let self = self else { return }
-            if self.routeUnfittedWindow(window) { return }
-            self.scratchpad.adopt(window, preferredFrame: self.stateCache.originalFrames[window.windowID])
-        }
-
         // react to enabled toggling (including mid-flight config rewrites from iCloud sync)
         config.$enabled
             .dropFirst() // skip initial value — start() handles that
@@ -2816,34 +2806,6 @@ private extension WindowManager {
         }
     }
 
-    private func routeUnfittedWindow(_ window: HyprWindow) -> Bool {
-        guard let source = workspaceManager.workspaceFor(window.windowID), source > 0,
-              !scratchpad.contains(window.windowID), !stateCache.floatingWindowIDs.contains(window.windowID),
-              let screen = workspaceManager.homeScreenForWorkspace(source) else { return false }
-        let destination = RetileAllPlanner.nextFittingHome(
-            after: source, eligibleWorkspaces: workspaceManager.workspacesAnchoredTo(screen)
-        ) { [self] workspace in
-            // hidden ids have no cached HyprWindow, so leaving them in would
-            // fail the tenant count and reject every destination. reserved
-            // ones still hold a slot, same as admission counts them.
-            let assigned = workspaceManager.windowIDs(onWorkspace: workspace)
-                .subtracting(stateCache.floatingWindowIDs)
-            let reservedCount = assigned.intersection(stateCache.reservedHiddenWindowIDs).count
-            let ids = assigned.subtracting(stateCache.hiddenWindowIDs).union([window.windowID])
-            let capacity = RetileAllPlanner.workspaceCapacity(maxDepth: tilingEngine.maxDepth(for: screen))
-            guard ids.count + reservedCount <= capacity else { return false }
-            let tenants = ids.sorted().compactMap { id in
-                id == window.windowID ? window : stateCache.cachedWindows[id]
-            }
-            guard tenants.count == ids.count else { return false }
-            return tilingEngine.canFitWindows(tenants, onWorkspace: workspace, screen: screen)
-        }
-        guard let destination else { return false }
-        workspaceManager.assignWindow(window.windowID, toWorkspace: destination)
-        workspaceManager.hideInCorner(window, on: screen)
-        hyprLog(.notice, .tiling, "tile fit rejection routed window \(window.windowID) from ws\(source) to ws\(destination)")
-        return true
-    }
 
 }
 
