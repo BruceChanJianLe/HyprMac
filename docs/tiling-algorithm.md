@@ -389,14 +389,28 @@ window that never moved is the case this exists for: its size is whatever
 it already was, and reading it as a minimum is how a stale full-screen
 bound gets invented.
 
-**Provenance.** Each entry records whether it is `seeded` — an
-`AXMinimumSize` value or a per-bundle-id guess, which nothing has
-refused — or `observed`, a bound the app actually refused to shrink
-below. Fit checks read both the same way; the state dump and the logs
-print the source, and the bypass in a later explicit-revalidation path
-is meant to key on it. Real evidence *replaces* a seeded hint rather
-than merging with it, so the axis a readback did not refuse goes back to
-unknown instead of inheriting a guess under an `observed` label.
+**Provenance.** Each entry records one of three things. `seeded` is an
+`AXMinimumSize` value or a per-bundle-id guess, which nothing has refused.
+`observed` is a bound the app actually refused to shrink below. `appHint`
+is another window of the same app's `observed` bound, carried across.
+Fit checks read all three the same way; the state dump and the logs print
+the source, and every bypass keys on `observed` alone. Real evidence
+*replaces* a hint of either kind rather than merging with it, so the axis a
+readback did not refuse goes back to unknown instead of inheriting a guess
+under an `observed` label.
+
+**Per-app hints.** Every `observed` bound also raises a per-bundle-id hint,
+the per-axis max of what that app's windows have refused. A new window of
+that app with no entry of its own is primed from the hint, marked `appHint`,
+so the structural fit check can refuse it before a single frame is written —
+the second Outlook window does not have to prove the same 938 pt floor with
+its own visible resize. The hint outranks the `AXMinimumSize` seed: one of
+the app's own windows really refused that size, while the seed is a number
+the app published without being asked. Only real evidence feeds a hint, so a
+hint cannot ratchet itself upward window after window, and the window's own
+readback replaces its `appHint` entry whichever way it goes. Hints live in
+memory and are gone on restart, because a floor depends on the UI state the
+window was in.
 
 Per-axis evidence stays per axis, and zero means unknown: a window with a
 1200-point width floor and no height evidence is remembered as `1200x0`,

@@ -56,6 +56,11 @@ class HyprWindow: Equatable, Hashable {
     /// a bound the app actually refused to shrink below.
     var minSizeProvenance: MinSizeProvenance = .seeded
 
+    /// The owning app's bundle identifier, as discovery read it. Min-size
+    /// hints are keyed by app, so one Outlook window's floor can spare the
+    /// next Outlook window the same probe.
+    var bundleID: String?
+
     init(element: AXUIElement, windowID: CGWindowID, ownerPID: pid_t) {
         self.element = element
         self.windowID = windowID
@@ -88,6 +93,8 @@ class HyprWindow: Equatable, Hashable {
     /// Both sources are hints, so both are marked `.seeded`: nothing here
     /// has watched the app refuse anything.
     func seedMinimumSize(bundleIdentifier: String?) {
+        // the one place discovery hands us the app's identity
+        bundleID = bundleIdentifier
         if let axSize = axMinimumSize() {
             observedMinSize = axSize
             minSizeProvenance = .seeded

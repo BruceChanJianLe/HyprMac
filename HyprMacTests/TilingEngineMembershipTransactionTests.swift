@@ -551,6 +551,67 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertTrue(retry.insertedIDs.isEmpty)
     }
 
+    /// The second Outlook window. The first one taught the engine a floor
+    /// no slot on this screen can hold; the second must not have to prove it
+    /// again with its own visible resize.
+    func testASecondWindowOfARefusedAppIsJudgedBeforeAnyWriteOfItsOwn() {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let tenant = makeWindow(id: 32513)
+        let first = makeWindow(id: 32836)
+        first.bundleID = "com.microsoft.Outlook"
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in [tenant, first] { trace.frames[w.windowID] = rect }
+        XCTAssertTrue(engine.tileWindows([tenant], onWorkspace: 1, screen: screen).published)
+        trace.minSize[tenant.windowID] = CGSize(width: 620, height: 0)
+        trace.minSize[first.windowID] = CGSize(width: 980, height: 0)
+
+        let admission = engine.tileWindows([tenant, first], onWorkspace: 1, screen: screen)
+        XCTAssertEqual(admission.strandedIDs, [first.windowID])
+
+        // the first one floats; a second window of the same app opens
+        let second = makeWindow(id: 32850)
+        second.bundleID = "com.microsoft.Outlook"
+        trace.frames[second.windowID] = rect
+        trace.minSize[second.windowID] = CGSize(width: 980, height: 0)
+        trace.written = []
+
+        let result = engine.tileWindows([tenant, second], onWorkspace: 1, screen: screen)
+
+        XCTAssertEqual(result.refusedIDs, [second.windowID])
+        XCTAssertFalse(trace.written.contains(second.windowID),
+                       "the app already told us its floor through its other window")
+        XCTAssertEqual(engine.knownMinimumSizes[second.windowID]?.size.width, 980)
+        XCTAssertEqual(engine.knownMinimumSizes[second.windowID]?.provenance, .appHint)
+    }
+
+    func testAnAppHintDoesNotRefuseAWindowTheWorkspaceCanHold() {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let tenant = makeWindow(id: 32601)
+        let first = makeWindow(id: 32602)
+        first.bundleID = "com.apple.Terminal"
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in [tenant, first] { trace.frames[w.windowID] = rect }
+        XCTAssertTrue(engine.tileWindows([tenant, first], onWorkspace: 1, screen: screen).published)
+        // a modest floor, well inside a half-screen slot
+        trace.minSize[first.windowID] = CGSize(width: 400, height: 0)
+        engine.tileWindows([tenant, first], onWorkspace: 1, screen: screen)
+
+        let second = makeWindow(id: 32603)
+        second.bundleID = "com.apple.Terminal"
+        trace.frames[second.windowID] = rect
+
+        let result = engine.tileWindows([tenant, first, second], onWorkspace: 1, screen: screen)
+
+        XCTAssertTrue(result.refusedIDs.isEmpty)
+        XCTAssertTrue(result.publishedIDs.contains(second.windowID))
+    }
+
     func testTheBypassLeavesEveryOtherWindowsMinimumAlone() throws {
         let f = try fixture()
         let newcomer = f.windows[2]

@@ -188,4 +188,113 @@ final class MinSizeMemoryTests: XCTestCase {
         XCTAssertEqual(memory.minimumSize(for: window), .zero)
         XCTAssertNil(window.observedMinSize)
     }
+
+    // MARK: - per-app hints
+
+    private func outlookWindow(_ id: CGWindowID) -> HyprWindow {
+        let window = makeWindow(id: id)
+        window.bundleID = "com.microsoft.Outlook"
+        return window
+    }
+
+    func testANewWindowOfTheSameAppStartsFromWhatItsSiblingRefused() {
+        let memory = MinSizeMemory()
+        let first = outlookWindow(90)
+        memory.recordObserved(first, target: CGSize(width: 744, height: 841),
+                              actual: CGSize(width: 938, height: 841),
+                              widthConflict: true, heightConflict: false,
+                              phase: .candidate)
+
+        let second = outlookWindow(91)
+        memory.prime([second])
+
+        XCTAssertEqual(memory.minimumSize(for: second), CGSize(width: 938, height: 0))
+        XCTAssertEqual(memory.entry(for: 91)?.provenance, .appHint)
+        XCTAssertEqual(second.minSizeProvenance, .appHint)
+    }
+
+    func testAnAppHintDoesNotReachAnotherApp() {
+        let memory = MinSizeMemory()
+        memory.recordObserved(outlookWindow(92), target: CGSize(width: 744, height: 841),
+                              actual: CGSize(width: 938, height: 841),
+                              widthConflict: true, heightConflict: false,
+                              phase: .candidate)
+
+        let safari = makeWindow(id: 93)
+        safari.bundleID = "com.apple.Safari"
+        memory.prime([safari])
+
+        XCTAssertNil(memory.entry(for: 93))
+    }
+
+    func testTheWindowsOwnEvidenceReplacesTheHintEvenWhenItIsLower() {
+        let memory = MinSizeMemory()
+        memory.recordObserved(outlookWindow(94), target: CGSize(width: 744, height: 841),
+                              actual: CGSize(width: 938, height: 841),
+                              widthConflict: true, heightConflict: false,
+                              phase: .candidate)
+        let second = outlookWindow(95)
+        memory.prime([second])
+
+        memory.recordObserved(second, target: CGSize(width: 600, height: 841),
+                              actual: CGSize(width: 700, height: 841),
+                              widthConflict: true, heightConflict: false,
+                              phase: .candidate)
+
+        XCTAssertEqual(memory.entry(for: 95),
+                       MinSizeMemory.Entry(size: CGSize(width: 700, height: 0),
+                                           provenance: .observed))
+    }
+
+    func testTheHintIsThePerAxisMaxOfWhatTheAppsWindowsRefused() {
+        let memory = MinSizeMemory()
+        memory.recordObserved(outlookWindow(96), target: CGSize(width: 744, height: 841),
+                              actual: CGSize(width: 938, height: 841),
+                              widthConflict: true, heightConflict: false,
+                              phase: .candidate)
+        memory.recordObserved(outlookWindow(97), target: CGSize(width: 900, height: 400),
+                              actual: CGSize(width: 900, height: 620),
+                              widthConflict: false, heightConflict: true,
+                              phase: .candidate)
+
+        let third = outlookWindow(98)
+        memory.prime([third])
+
+        XCTAssertEqual(memory.minimumSize(for: third), CGSize(width: 938, height: 620))
+    }
+
+    func testAHintNeverOverwritesAWindowThatAlreadyHasAnEntry() {
+        let memory = MinSizeMemory()
+        let veteran = outlookWindow(99)
+        memory.recordObserved(veteran, target: CGSize(width: 600, height: 841),
+                              actual: CGSize(width: 700, height: 841),
+                              widthConflict: true, heightConflict: false,
+                              phase: .candidate)
+        memory.recordObserved(outlookWindow(100), target: CGSize(width: 744, height: 841),
+                              actual: CGSize(width: 938, height: 841),
+                              widthConflict: true, heightConflict: false,
+                              phase: .candidate)
+
+        memory.prime([veteran])
+
+        XCTAssertEqual(memory.entry(for: 99),
+                       MinSizeMemory.Entry(size: CGSize(width: 700, height: 0),
+                                           provenance: .observed))
+    }
+
+    func testAHintDoesNotCountAsObservedEvidence() {
+        let memory = MinSizeMemory()
+        memory.recordObserved(outlookWindow(101), target: CGSize(width: 744, height: 841),
+                              actual: CGSize(width: 938, height: 841),
+                              widthConflict: true, heightConflict: false,
+                              phase: .candidate)
+        let second = outlookWindow(102)
+        memory.prime([second])
+
+        memory.lowerIfAccepted(second, actual: CGSize(width: 800, height: 0))
+
+        // lowering relaxes the estimate; it does not promote a guess into a
+        // bound the app imposed
+        XCTAssertEqual(memory.entry(for: 102)?.provenance, .appHint)
+    }
 }

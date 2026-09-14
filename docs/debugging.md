@@ -206,12 +206,17 @@ lines at all.
 `category: lifecycle`, in three shapes:
 
 - `min-size record: wid=<id> old=none new=<w>x<h> axis=width+height
-  source=<seeded|observed>` — the mirror on a window being picked up as
-  a starting estimate. No `target=` or `actual=`: nothing was measured
-  in this step. `source` is whatever provenance that window carries,
-  which is `seeded` in every ordinary case (`AXMinimumSize` or a
-  per-bundle-id guess); it could only read `observed` for a window
-  object that outlived the memory being told to forget it.
+  source=<seeded|appHint|observed>` — the mirror on a window being picked
+  up as a starting estimate. No `target=` or `actual=`: nothing was
+  measured in this step. `source=appHint` means the number came from
+  another window of the same app; `seeded` is the ordinary case
+  (`AXMinimumSize` or a per-bundle-id guess); it could only read
+  `observed` for a window object that outlived the memory being told to
+  forget it.
+- `min-size app hint: bundle=<id> old=<none|<w>x<h>> new=<w>x<h>
+  from=<id>` — one of the app's windows refused something no earlier
+  window of that app had, so the app's hint rose. Per-axis max, and only
+  real readback evidence ever writes it.
 - `min-size record: wid=<id> old=<none|<w>x<h> source=<seeded|observed>>
   new=<w>x<h> target=<w>x<h> actual=<w>x<h> axis=<…> phase=<…>
   source=readback` — guarded refusal evidence. The `old=` field names
@@ -318,7 +323,7 @@ screen=S34C65xT visible=ws2
 ws1 home=Built-in Retina Display visible=true assigned=[104, 118] hidden=[] reserved=[] floating=[118] tree(Built-in Retina Display)=[104]
 ws2 home=S34C65xT visible=true assigned=[221] hidden=[] reserved=[] floating=[] tree(S34C65xT)=[221]
 scratchpad=[319]
-minima=[104:400x260(seeded), 221:1496x841(observed)]
+minima=[104:400x260(seeded), 118:938x0(appHint), 221:1496x841(observed)]
 recovery pending=[] unverified=[221]
 known=4 hidden=0 reserved=0 floating=1
 ```
@@ -334,10 +339,11 @@ titles never enter the dump.
 `minima` is everything `MinSizeMemory` believes, with the evidence
 behind each entry in brackets: `observed` is a bound the app refused to
 shrink below, `seeded` a hint from `AXMinimumSize` or a per-bundle-id
-guess that nothing has tested. A window refused by a fit check should
-have an entry here explaining why, and the source says how much that
-entry is worth. Zero on an axis means nothing has refused anything
-there.
+guess that nothing has tested, and `appHint` a bound another window of the
+same app refused, carried over so this one does not have to prove it again.
+A window refused by a fit check should have an entry here explaining why,
+and the source says how much that entry is worth. Zero on an axis means
+nothing has refused anything there.
 
 `unverified` lists every window under a `(workspace, screen)` whose last
 layout attempt did not end accepted — a partial write, an unreadable or

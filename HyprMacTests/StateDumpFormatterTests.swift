@@ -23,6 +23,7 @@ final class StateDumpFormatterTests: XCTestCase {
             scratchpad: [99],
             knownCount: 5,
             minima: [20: .init(size: CGSize(width: 520, height: 360), provenance: .seeded),
+                     11: .init(size: CGSize(width: 938, height: 0), provenance: .appHint),
                      10: .init(size: CGSize(width: 400, height: 260), provenance: .observed)]
         )
     }
@@ -35,7 +36,7 @@ final class StateDumpFormatterTests: XCTestCase {
             "ws2 home=Display B visible=true assigned=[20] hidden=[] reserved=[] floating=[20] tree(Display B)=[]",
             "ws4 home=Display B visible=false assigned=[40] hidden=[40] reserved=[40] floating=[] tree(Display B)=[40]",
             "scratchpad=[99]",
-            "minima=[10:400x260(observed), 20:520x360(seeded)]",
+            "minima=[10:400x260(observed), 11:938x0(appHint), 20:520x360(seeded)]",
             "recovery pending=[] unverified=[]",
             "known=5 hidden=2 reserved=1 floating=1"
         ])
