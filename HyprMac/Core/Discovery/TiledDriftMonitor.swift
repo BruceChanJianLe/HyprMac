@@ -36,7 +36,8 @@ enum TiledDriftDecision: Equatable {
 /// episode, and if the app takes its frame back again straight away the
 /// monitor stops rather than trading writes with it forever. Two
 /// consecutive polls must agree on the drifted frame first, so a window
-/// mid-animation is not chased.
+/// mid-animation is not chased — before the re-apply and before the abandon
+/// alike.
 ///
 /// Threading: main-thread only. No timers of its own — the discovery poll
 /// drives it.
@@ -69,6 +70,9 @@ final class TiledDriftMonitor {
         case seen(CGRect)
         /// its one re-apply went out at this time.
         case reapplied(Date)
+        /// it drifted once since that re-apply, at this frame. Same two-poll
+        /// rule as the entry: one sample could be the layout still landing.
+        case recurred(Date, CGRect)
         /// it drifted again straight after that. No more writes.
         case abandoned
     }
@@ -118,6 +122,17 @@ final class TiledDriftMonitor {
             case let .reapplied(at):
                 guard now().timeIntervalSince(at) <= recurrenceWindow else {
                     states[reading.windowID] = .seen(reading.actual)
+                    continue
+                }
+                states[reading.windowID] = .recurred(at, reading.actual)
+            case let .recurred(at, previous):
+                guard now().timeIntervalSince(at) <= recurrenceWindow else {
+                    states[reading.windowID] = .seen(reading.actual)
+                    continue
+                }
+                guard Self.settled(previous, reading.actual) else {
+                    // still moving — the re-apply may yet be landing
+                    states[reading.windowID] = .recurred(at, reading.actual)
                     continue
                 }
                 states[reading.windowID] = .abandoned

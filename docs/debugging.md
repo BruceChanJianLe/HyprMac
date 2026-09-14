@@ -217,6 +217,15 @@ lines at all.
   from=<id>` — one of the app's windows refused something no earlier
   window of that app had, so the app's hint rose. Per-axis max, and only
   real readback evidence ever writes it.
+- `min-size app hint: bundle=<id> old=<w>x<h> new=<<w>x<h>|none> from=<id>
+  source=accepted` — the same hint coming down: a window of that app took a
+  size below it, which is the app saying one window's floor is not the
+  app's. Hints are session-only and move both ways; an empty bundle id
+  never gets one.
+- `min-size record: wid=<id> old=<w>x<h> new=<w>x<h> actual=<w>x<h>
+  source=own-measurement was=appHint` — an explicit request set the app's
+  hint aside, the attempt was accepted, and the entry became this window's
+  own record at the size it actually took.
 - `min-size record: wid=<id> old=<none|<w>x<h> source=<seeded|observed>>
   new=<w>x<h> target=<w>x<h> actual=<w>x<h> axis=<…> phase=<…>
   source=readback` — guarded refusal evidence. The `old=` field names
@@ -236,13 +245,16 @@ lines at all.
 ```
 fit refusal: incoming=<id> ws<N> tenant=<id|none> slot=<w>x<h>
   needIncoming=<w>x<h> needTenant=<w>x<h>
-  axis=<width|height|width+height|depth> source=<learned|seeded|structural>
+  axis=<width|height|width+height|depth> source=<learned|appHint|seeded|structural>
 fit outlook: incoming=<id> ws<N> verdict=<fits|revalidatable|refused> refusals=<n>
 ```
 
 `source` is where the bound that said no came from. `learned` is
-`observed` provenance — the app actually refused that size once. `seeded`
-is an `AXMinimumSize` value or a per-bundle guess nothing has tested, and it
+`observed` provenance — the app actually refused that size once. `appHint`
+is a bound another window of the same app refused, carried across; an
+explicit request sets it aside the way it sets a `learned` bound aside, so
+it reads as `revalidatable` rather than `refused`. `seeded`
+is an `AXMinimumSize` value nothing has tested, and it
 covers a bound `MinSizeMemory` holds no entry for: priming refuses a value at
 or above `usableMinSizeMaxPx` or one that is not finite, and the fit check
 still reads it off the window's own mirror. That is the app talking, not
@@ -257,8 +269,8 @@ a single "largest free slot" figure would be a fiction. `minSlotDimension`
 never appears as a source: `fittingLeaf`'s second pass ignores it, so it is
 a preference rather than a refusal.
 
-`verdict=revalidatable` means only learned bounds refused, and the request
-gets one attempt with them set aside. Look for what follows:
+`verdict=revalidatable` means only learned bounds or app hints refused, and
+the request gets one attempt with them set aside. Look for what follows:
 
 - `minima revalidation attempt: ws<N> incoming=[…] bypassing=[…]` — the
   attempt itself. `bypassing` is the incoming window plus every tenant of
@@ -395,9 +407,10 @@ unverified mark set for ws1: 32913 drifted again after its one re-apply
 ```
 
 The first needs two consecutive polls reading the same drifted frame, and
-there is exactly one per workspace per poll. The second is the bound: the
-app won, and the key stops advertising intended rects until a layout for it
-is accepted. Neither fires while a mouse button is down, while a tiled drag
+there is exactly one per workspace per poll. The second needs two of its own
+after the re-apply, so a layout still landing does not read as the app
+fighting back. It is the bound: the app won, and the key stops advertising
+intended rects until a layout for it is accepted. Neither fires while a mouse button is down, while a tiled drag
 is settling, during a display change or a workspace transition, or on a poll
 that retiled anyway.
 

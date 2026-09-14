@@ -482,6 +482,45 @@ final class AdmissionRecoveryTests: XCTestCase {
         XCTAssertEqual(target?.id, 11)
         XCTAssertEqual(target?.reason, "syncTracker-tiled")
     }
+
+    // MARK: - the bookkeeping every pass owes
+
+    /// The drift monitor's re-apply runs the same pass the ordinary retile
+    /// does, so a window it strands has to reach the recovery either way.
+    func testAnAdmissionPassReportsWhatItStrandedWhoeverRanIt() throws {
+        let passScreen = PrimaryRecoveryScreen()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [passScreen] }),
+                                  frameSizingIOFactory: acceptingFrameSizingIOFactory())
+        let revalidation = MinimaRevalidation()
+        let pass = AdmissionPass(engine: engine, revalidation: revalidation, recovery: recovery)
+        let incumbent = makeWindow(id: 61)
+        let newcomer = makeWindow(id: 62)
+        XCTAssertEqual(engine.forceInsertWindow(incumbent, toWorkspace: 4, on: passScreen),
+                       .inserted)
+        newcomer.observedMinSize = CGSize(width: 100_000, height: 100_000)
+
+        let result = pass.run([incumbent, newcomer], onWorkspace: 4, screen: passScreen)
+
+        XCTAssertEqual(result.strandedIDs, [62])
+        XCTAssertEqual(recovery.pendingWindowIDs, [62], "the pass told the recovery")
+    }
+
+    func testAnAdmissionPassSpendsTheRevalidationMarkerItConsumed() throws {
+        let passScreen = PrimaryRecoveryScreen()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [passScreen] }),
+                                  frameSizingIOFactory: acceptingFrameSizingIOFactory())
+        let revalidation = MinimaRevalidation()
+        revalidation.workspaceFor = { _ in 5 }
+        let pass = AdmissionPass(engine: engine, revalidation: revalidation, recovery: recovery)
+        let parked = makeWindow(id: 63)
+        revalidation.park(63, toWorkspace: 5, screen: passScreen,
+                          sourceWorkspace: 4, sourceScreen: passScreen)
+        XCTAssertEqual(revalidation.pendingWindowIDs, [63])
+
+        _ = pass.run([parked], onWorkspace: 5, screen: passScreen)
+
+        XCTAssertTrue(revalidation.pendingWindowIDs.isEmpty, "the marker is spent on the reveal")
+    }
 }
 
 /// Drives every seam `AdmissionRecovery` has, and records what it asked for.

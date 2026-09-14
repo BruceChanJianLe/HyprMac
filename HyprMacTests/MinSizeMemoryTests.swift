@@ -282,6 +282,71 @@ final class MinSizeMemoryTests: XCTestCase {
                                            provenance: .observed))
     }
 
+    func testAnAcceptedSizeBelowTheHintLowersItForTheNextWindow() {
+        let memory = MinSizeMemory()
+        memory.recordObserved(outlookWindow(103), target: CGSize(width: 744, height: 841),
+                              actual: CGSize(width: 938, height: 841),
+                              widthConflict: true, heightConflict: false,
+                              phase: .candidate)
+        let second = outlookWindow(104)
+        memory.prime([second])
+
+        // this window took 744 without complaint, so 938 is one window's
+        // floor and not the app's
+        memory.lowerIfAccepted(second, actual: CGSize(width: 744, height: 841))
+
+        let third = outlookWindow(105)
+        memory.prime([third])
+        XCTAssertEqual(memory.minimumSize(for: third), CGSize(width: 744, height: 0))
+    }
+
+    func testAWindowWithItsOwnEvidenceAlsoLowersTheAppsHint() {
+        let memory = MinSizeMemory()
+        let veteran = outlookWindow(106)
+        memory.recordObserved(veteran, target: CGSize(width: 744, height: 841),
+                              actual: CGSize(width: 938, height: 841),
+                              widthConflict: true, heightConflict: false,
+                              phase: .candidate)
+
+        memory.lowerIfAccepted(veteran, actual: CGSize(width: 700, height: 841))
+
+        let next = outlookWindow(107)
+        memory.prime([next])
+        XCTAssertEqual(memory.minimumSize(for: next), CGSize(width: 700, height: 0))
+    }
+
+    func testWindowsWithNoBundleIDDoNotShareAHintBucket() {
+        let memory = MinSizeMemory()
+        let anonymous = makeWindow(id: 108)
+        anonymous.bundleID = ""
+        memory.recordObserved(anonymous, target: CGSize(width: 744, height: 841),
+                              actual: CGSize(width: 938, height: 841),
+                              widthConflict: true, heightConflict: false,
+                              phase: .candidate)
+
+        let stranger = makeWindow(id: 109)
+        stranger.bundleID = ""
+        memory.prime([stranger])
+
+        XCTAssertNil(memory.entry(for: 109), "an empty bundle id names no app")
+    }
+
+    func testTheWindowsOwnMeasurementReplacesAHintTheAttemptSetAside() {
+        let memory = MinSizeMemory()
+        memory.recordObserved(outlookWindow(112), target: CGSize(width: 744, height: 841),
+                              actual: CGSize(width: 938, height: 841),
+                              widthConflict: true, heightConflict: false,
+                              phase: .candidate)
+        let second = outlookWindow(113)
+        memory.prime([second])
+
+        memory.adoptOwnEvidence(second, accepted: CGSize(width: 744, height: 841))
+
+        XCTAssertEqual(memory.entry(for: 113),
+                       MinSizeMemory.Entry(size: CGSize(width: 744, height: 0),
+                                           provenance: .observed))
+    }
+
     func testAHintDoesNotCountAsObservedEvidence() {
         let memory = MinSizeMemory()
         memory.recordObserved(outlookWindow(101), target: CGSize(width: 744, height: 841),

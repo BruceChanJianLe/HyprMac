@@ -82,6 +82,13 @@ class WindowManager {
     private let admissionRecovery = AdmissionRecovery()
     private let minimaRevalidation = MinimaRevalidation()
 
+    // one tiling pass plus the bookkeeping it owes. every production retile
+    // goes through this, so nothing it strands goes untracked.
+    private var admissionPass: AdmissionPass {
+        AdmissionPass(engine: tilingEngine, revalidation: minimaRevalidation,
+                      recovery: admissionRecovery)
+    }
+
     // a tiled window whose app put it back where it wanted, after our write
     // was accepted. one bounded re-apply per episode, driven by the poll.
     private let driftMonitor = TiledDriftMonitor()
@@ -1620,17 +1627,7 @@ class WindowManager {
             // a workspace being shown is where an explicit move to a hidden
             // destination finally gets its one attempt. the marker is spent
             // on this pass whatever it says.
-            // only windows this pass can actually judge. one that AX did not
-            // return keeps its marker rather than spending it on a pass that
-            // was never going to look at it.
-            let incoming = minimaRevalidation.incomingIDs(forWorkspace: workspace, screen: screen)
-                .intersection(workspaceWindows.map(\.windowID))
-            let result = incoming.isEmpty
-                ? tilingEngine.tileWindows(workspaceWindows, onWorkspace: workspace, screen: screen)
-                : tilingEngine.revalidateAdmission(workspaceWindows, incoming: incoming,
-                                                   onWorkspace: workspace, screen: screen)
-            minimaRevalidation.noteReveal(incoming, accepted: result.publishedIDs)
-            admissionRecovery.note(result)
+            admissionPass.run(workspaceWindows, onWorkspace: workspace, screen: screen)
         }
 
         updatePositionCache(windows: allWindows)
@@ -2279,8 +2276,7 @@ class WindowManager {
             guard let workspace = workspaceManager.workspaceFor(window.windowID),
                   workspace != ScratchpadController.workspace,
                   workspaceManager.isWorkspaceVisible(workspace),
-                  !stateCache.floatingWindowIDs.contains(window.windowID),
-                  !window.isFloating,
+                  !isFloating(window.windowID),
                   let rect = intended[window.windowID],
                   let screen = workspaceManager.homeScreenForWorkspace(workspace),
                   let actual = window.cachedFrame ?? window.frame
@@ -2301,9 +2297,18 @@ class WindowManager {
         }
     }
 
+    /// Floating by either store. The fresh window objects a poll builds
+    /// carry no flag of their own, so asking one is asking nothing; the
+    /// recovery and the revalidation ask the same question this way.
+    private func isFloating(_ id: CGWindowID) -> Bool {
+        stateCache.floatingWindowIDs.contains(id)
+            || (stateCache.cachedWindows[id]?.isFloating ?? false)
+    }
+
     /// One ordinary verified layout pass for a key whose windows drifted.
-    /// Nothing special: the same path a retile takes, so a refusal rolls
-    /// back and marks the key exactly as it always would.
+    /// Nothing special: the same path a retile takes, down to the
+    /// bookkeeping, so a refusal rolls back, marks the key, and hands
+    /// whatever it stranded to the recovery exactly as it always would.
     private func reapplyLayout(onWorkspace workspace: Int, screen: NSScreen) {
         let allWindows = accessibility.getAllWindows()
         tilingEngine.primeMinimumSizes(allWindows)
@@ -2312,7 +2317,7 @@ class WindowManager {
         }
         let assigned = workspaceManager.windowIDs(onWorkspace: workspace)
         let windows = allWindows.filter { assigned.contains($0.windowID) }
-        tilingEngine.tileWindows(windows, onWorkspace: workspace, screen: screen)
+        admissionPass.run(windows, onWorkspace: workspace, screen: screen)
         updatePositionCache(windows: allWindows)
     }
 
@@ -2807,11 +2812,7 @@ private extension WindowManager {
             self?.admissionRecovery.pendingWindowIDs ?? []
         }
         minimaRevalidation.workspaceFor = { [weak self] id in self?.workspaceManager.workspaceFor(id) }
-        minimaRevalidation.isFloating = { [weak self] id in
-            guard let self else { return true }
-            return self.stateCache.floatingWindowIDs.contains(id)
-                || (self.stateCache.cachedWindows[id]?.isFloating ?? false)
-        }
+        minimaRevalidation.isFloating = { [weak self] id in self?.isFloating(id) ?? true }
         admissionRecovery.workspaceFor = { [weak self] id in self?.workspaceManager.workspaceFor(id) }
         admissionRecovery.homeScreenForWorkspace = { [weak self] ws in
             self?.workspaceManager.homeScreenForWorkspace(ws)
@@ -2819,11 +2820,7 @@ private extension WindowManager {
         admissionRecovery.isWorkspaceVisible = { [weak self] ws in
             self?.workspaceManager.isWorkspaceVisible(ws) ?? false
         }
-        admissionRecovery.isFloating = { [weak self] id in
-            guard let self else { return true }
-            return self.stateCache.floatingWindowIDs.contains(id)
-                || (self.stateCache.cachedWindows[id]?.isFloating ?? false)
-        }
+        admissionRecovery.isFloating = { [weak self] id in self?.isFloating(id) ?? true }
         admissionRecovery.isDisplayTransitionPending = { [weak self] in
             self?.displayTransitionPending ?? true
         }

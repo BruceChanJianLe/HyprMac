@@ -23,6 +23,36 @@ import Cocoa
 /// and waits for a real discovery or activation event instead of a new
 /// timer, so nothing spins and no frame is invented.
 ///
+/// One admission pass for a key, plus the bookkeeping every pass owes.
+///
+/// Both production retiles run through here — the ordinary per-screen retile
+/// and the drift monitor's re-apply — so a pass that strands a window always
+/// reaches the recovery, and a revalidation marker the pass consumed is
+/// always spent. A retile that reported neither used to leave a stranded
+/// window untracked.
+struct AdmissionPass {
+    let engine: TilingEngine
+    let revalidation: MinimaRevalidation
+    let recovery: AdmissionRecovery
+
+    @discardableResult
+    func run(_ windows: [HyprWindow], onWorkspace workspace: Int,
+             screen: NSScreen) -> TilingEngine.AdmissionResult {
+        // only windows this pass can actually judge. one that AX did not
+        // return keeps its marker rather than spending it on a pass that was
+        // never going to look at it.
+        let incoming = revalidation.incomingIDs(forWorkspace: workspace, screen: screen)
+            .intersection(windows.map(\.windowID))
+        let result = incoming.isEmpty
+            ? engine.tileWindows(windows, onWorkspace: workspace, screen: screen)
+            : engine.revalidateAdmission(windows, incoming: incoming,
+                                         onWorkspace: workspace, screen: screen)
+        revalidation.noteReveal(incoming, accepted: result.publishedIDs)
+        recovery.note(result)
+        return result
+    }
+}
+
 /// Threading: main-thread only.
 final class AdmissionRecovery {
 

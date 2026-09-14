@@ -14,8 +14,10 @@ import Cocoa
 /// `appHint` is another window of the same app's `observed` bound, carried
 /// over so a second Outlook window does not have to prove the same floor
 /// with its own visible resize. It is stronger than a guess and weaker than
-/// evidence: fit checks honour it, and nothing that keys on `observed`
-/// — the minima bypass, the refusal diagnostics' `learned` source — does.
+/// evidence: fit checks honour it, the refusal diagnostics name it as its
+/// own `appHint` source, and an explicit user request sets it aside the way
+/// it sets an `observed` bound aside — it is somebody else's evidence, and
+/// this window has never been asked.
 enum MinSizeProvenance: String {
     case seeded, observed, appHint
 }
@@ -33,8 +35,11 @@ enum MinSizeProvenance: String {
 /// refused anything there, and a fit check reads it as no constraint.
 ///
 /// A window with no entry of its own starts from its app's hint when one
-/// of the app's other windows has refused something. Hints live in memory
-/// only and are keyed by bundle id; nothing persists across a restart.
+/// of the app's other windows has refused something. A hint rises on a
+/// refusal and falls on an accepted smaller size, so one stubborn window
+/// cannot speak for the app forever. Hints live in memory only and are
+/// keyed by bundle id; an empty id names no app, and nothing persists
+/// across a restart.
 ///
 /// Hysteresis on both ends:
 /// - Record: only raises, and only on the axis the app refused. A seeded
@@ -80,7 +85,8 @@ class MinSizeMemory {
                 continue
             }
             var candidate: Entry?
-            if let bundleID = window.bundleID, let hint = appHints[bundleID], isUsable(hint) {
+            if let bundleID = window.bundleID, !bundleID.isEmpty,
+               let hint = appHints[bundleID], isUsable(hint) {
                 candidate = Entry(size: hint, provenance: .appHint)
             } else if let seeded = window.observedMinSize, isUsable(seeded) {
                 candidate = Entry(size: seeded, provenance: window.minSizeProvenance)
@@ -156,6 +162,9 @@ class MinSizeMemory {
     /// accepts its whole slot, which is not evidence it can be smaller.
     func lowerIfAccepted(_ window: HyprWindow, actual: CGSize) {
         guard let existing = known[window.windowID] else { return }
+        // a size this app's window took is evidence about the app, not just
+        // about the window. a seeded guess is nobody's evidence.
+        if existing.provenance != .seeded { lowerAppHint(for: window, accepted: actual) }
         let knownSize = existing.size
         guard actual.width < knownSize.width - TilingConfig.lowerMinSizeAcceptedDeltaPx
             || actual.height < knownSize.height - TilingConfig.lowerMinSizeAcceptedDeltaPx else { return }
@@ -182,6 +191,60 @@ class MinSizeMemory {
         }
     }
 
+    /// The window has been measured under a pass that set its app's hint
+    /// aside, and it took `accepted`. Another window's evidence is no longer
+    /// the best thing known about it, so the entry becomes its own.
+    ///
+    /// Per axis, and never upward: acceptance is not a refusal, so an axis
+    /// the hint said nothing about stays unknown and one it did say
+    /// something about comes down to what this window actually took.
+    func adoptOwnEvidence(_ window: HyprWindow, accepted: CGSize) {
+        guard let existing = known[window.windowID], existing.provenance == .appHint else { return }
+        let old = existing.size
+        let updated = CGSize(width: old.width > 0 ? min(old.width, accepted.width) : 0,
+                             height: old.height > 0 ? min(old.height, accepted.height) : 0)
+        lowerAppHint(for: window, accepted: accepted)
+        guard isUsable(updated) else {
+            known.removeValue(forKey: window.windowID)
+            window.observedMinSize = nil
+            window.minSizeProvenance = .seeded
+            return
+        }
+        let entry = Entry(size: updated, provenance: .observed)
+        known[window.windowID] = entry
+        mirror(entry, onto: window)
+        hyprLog(.debug, .lifecycle, "min-size record: wid=\(window.windowID) "
+                + "old=\(Self.text(old)) new=\(Self.text(updated)) "
+                + "actual=\(Self.text(accepted)) source=own-measurement was=appHint")
+    }
+
+    /// Lower the owning app's hint to a size one of its windows accepted.
+    ///
+    /// A hint rises on refusals and falls on accepted smaller sizes: one
+    /// window's floor is not the app's floor, and without this a single
+    /// stubborn window would speak for every window the app ever opens.
+    /// Per-axis, same delta as the per-window lowering, and an axis the
+    /// accept says nothing about (zero) is left alone.
+    private func lowerAppHint(for window: HyprWindow, accepted: CGSize) {
+        guard let bundleID = window.bundleID, !bundleID.isEmpty,
+              let existing = appHints[bundleID] else { return }
+        let delta = TilingConfig.lowerMinSizeAcceptedDeltaPx
+        let lowered = CGSize(
+            width: accepted.width > 0 && accepted.width < existing.width - delta
+                ? accepted.width : existing.width,
+            height: accepted.height > 0 && accepted.height < existing.height - delta
+                ? accepted.height : existing.height)
+        guard lowered != existing else { return }
+        if isUsable(lowered) {
+            appHints[bundleID] = lowered
+        } else {
+            appHints.removeValue(forKey: bundleID)
+        }
+        hyprLog(.debug, .lifecycle, "min-size app hint: bundle=\(bundleID) "
+                + "old=\(Self.text(existing)) new=\(isUsable(lowered) ? Self.text(lowered) : "none") "
+                + "from=\(window.windowID) source=accepted")
+    }
+
     /// Raise the owning app's hint to cover what this window refused.
     ///
     /// Only real evidence feeds the hint — a hint never feeds itself, so an
@@ -189,7 +252,7 @@ class MinSizeMemory {
     /// after window. Per-axis max, because one window may have refused on
     /// width and another on height.
     private func rememberAppHint(for window: HyprWindow, _ size: CGSize) {
-        guard let bundleID = window.bundleID else { return }
+        guard let bundleID = window.bundleID, !bundleID.isEmpty else { return }
         let existing = appHints[bundleID] ?? .zero
         let raised = CGSize(width: max(existing.width, size.width),
                             height: max(existing.height, size.height))

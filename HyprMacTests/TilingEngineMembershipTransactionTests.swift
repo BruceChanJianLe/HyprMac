@@ -587,29 +587,104 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertEqual(engine.knownMinimumSizes[second.windowID]?.provenance, .appHint)
     }
 
-    func testAnAppHintDoesNotRefuseAWindowTheWorkspaceCanHold() {
+    /// A real hint: one Safari window refused `floor` points of width, so
+    /// the app's hint is that floor and the next window of that app starts
+    /// from it. The next window has no floor of its own — the hint is the
+    /// only thing that can refuse it.
+    private func safariHint(floor: CGFloat = 900, tenantFloor: CGFloat = 700)
+    -> (engine: TilingEngine, screen: NSScreen, trace: MembershipTrace,
+        tenant: HyprWindow, second: HyprWindow) {
         let screen = MembershipTestScreen()
         let trace = MembershipTrace()
         let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
                                   frameSizingIOFactory: { _, generation in trace.io(generation) })
         let tenant = makeWindow(id: 32601)
         let first = makeWindow(id: 32602)
-        first.bundleID = "com.apple.Terminal"
+        first.bundleID = "com.apple.Safari"
         let rect = engine.displayManager.cgRect(for: screen)
         for w in [tenant, first] { trace.frames[w.windowID] = rect }
-        XCTAssertTrue(engine.tileWindows([tenant, first], onWorkspace: 1, screen: screen).published)
-        // a modest floor, well inside a half-screen slot
-        trace.minSize[first.windowID] = CGSize(width: 400, height: 0)
+        engine.tileWindows([tenant], onWorkspace: 1, screen: screen)
+        if tenantFloor > 0 { trace.minSize[tenant.windowID] = CGSize(width: tenantFloor, height: 0) }
+        trace.minSize[first.windowID] = CGSize(width: floor, height: 0)
         engine.tileWindows([tenant, first], onWorkspace: 1, screen: screen)
+        XCTAssertEqual(engine.knownMinimumSizes[first.windowID]?.size.width, floor,
+                       "the first window's refusal is what makes the hint")
 
         let second = makeWindow(id: 32603)
-        second.bundleID = "com.apple.Terminal"
+        second.bundleID = "com.apple.Safari"
         trace.frames[second.windowID] = rect
+        trace.written = []
+        return (engine, screen, trace, tenant, second)
+    }
 
-        let result = engine.tileWindows([tenant, first, second], onWorkspace: 1, screen: screen)
+    func testAnAppHintDoesNotRefuseAWindowTheSlotIsBigEnoughFor() {
+        let f = safariHint()
 
-        XCTAssertTrue(result.refusedIDs.isEmpty)
-        XCTAssertTrue(result.publishedIDs.contains(second.windowID))
+        // ws2 holds nothing, so the slot is the whole 1584 pt usable width
+        let result = f.engine.tileWindows([f.second], onWorkspace: 2, screen: f.screen)
+
+        XCTAssertTrue(result.refusedIDs.isEmpty, "900 fits in 1584")
+        XCTAssertTrue(result.publishedIDs.contains(f.second.windowID))
+        XCTAssertEqual(f.engine.knownMinimumSizes[f.second.windowID]?.provenance, .appHint)
+    }
+
+    func testAnAppHintRefusesAWindowTheSlotIsTooSmallForWithoutWriting() {
+        let f = safariHint()
+
+        // ws1's half-slot is 788 pt, and the app has already said 900
+        let result = f.engine.tileWindows([f.tenant, f.second], onWorkspace: 1, screen: f.screen)
+
+        XCTAssertEqual(result.refusedIDs, [f.second.windowID])
+        XCTAssertFalse(f.trace.written.contains(f.second.windowID),
+                       "the app already told us its floor through its other window")
+    }
+
+    func testAnExplicitFloatToTileProbesPastTheAppHint() {
+        // 1700 is wider than the whole 1584 pt usable frame, so no
+        // arrangement can hold the hint and the ordinary pass has no way in
+        let f = safariHint(floor: 1700, tenantFloor: 0)
+        let refused = f.engine.tileWindows([f.tenant, f.second], onWorkspace: 1, screen: f.screen)
+        XCTAssertEqual(refused.refusedIDs, [f.second.windowID])
+        XCTAssertFalse(f.trace.written.contains(f.second.windowID))
+        f.trace.written = []
+
+        // the user asks by hand. the hint is another window's evidence, so
+        // this attempt sets it aside and asks the app itself
+        let forced = f.engine.forceInsertWindow(f.second, toWorkspace: 1, on: f.screen,
+                                                bypassingLearnedMinima: true)
+
+        XCTAssertEqual(forced, .inserted)
+        XCTAssertTrue(f.trace.written.contains(f.second.windowID), "one real attempt runs")
+        let entry = f.engine.knownMinimumSizes[f.second.windowID]
+        XCTAssertEqual(entry?.provenance, .observed,
+                       "the window's own measurement replaces the hint")
+        XCTAssertEqual(entry?.size.width, 788, "at the size it actually took")
+    }
+
+    func testARetryJudgesItsNewcomerAgainstTheTreeNotTheHeldWindowsBesideIt() {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let tenant = makeWindow(id: 32701)
+        let held = makeWindow(id: 32702)
+        let newcomer = makeWindow(id: 32703)
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in [tenant, held, newcomer] { trace.frames[w.windowID] = rect }
+        XCTAssertTrue(engine.tileWindows([tenant], onWorkspace: 1, screen: screen).published)
+        // a held window: assigned to the workspace, in no tree, and with a
+        // floor no slot here can hold
+        held.observedMinSize = CGSize(width: 1500, height: 0)
+        held.minSizeProvenance = .observed
+        engine.primeMinimumSizes([held])
+
+        let retry = engine.retryAdmission([tenant, held, newcomer], onWorkspace: 1, screen: screen,
+                                          bypassingMinimaBefore: [newcomer.windowID: 999],
+                                          refusingImpossibleArrangements: true)
+
+        XCTAssertTrue(retry.publishedIDs.contains(newcomer.windowID),
+                      "the newcomer fits beside the tenant; the held window is not its problem")
+        XCTAssertFalse(retry.publishedIDs.contains(held.windowID))
     }
 
     func testTheBypassLeavesEveryOtherWindowsMinimumAlone() throws {

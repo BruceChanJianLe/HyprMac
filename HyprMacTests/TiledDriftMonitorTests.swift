@@ -75,10 +75,31 @@ final class TiledDriftMonitorTests: XCTestCase {
 
     // MARK: - the bound
 
+    func testOneDriftedPollAfterTheReapplyIsNotEnoughToStop() {
+        _ = monitor.note([reading(32913, at: fullScreen)])
+        _ = monitor.note([reading(32913, at: fullScreen)])
+        clock = clock.addingTimeInterval(1)
+
+        XCTAssertTrue(monitor.note([reading(32913, at: fullScreen)]).isEmpty,
+                      "one sample could be the layout still landing")
+    }
+
+    func testAWindowStillMovingAfterTheReapplyIsNotAbandoned() {
+        _ = monitor.note([reading(32913, at: fullScreen)])
+        _ = monitor.note([reading(32913, at: fullScreen)])
+        clock = clock.addingTimeInterval(1)
+
+        _ = monitor.note([reading(32913, at: fullScreen)])
+        let moving = monitor.note([reading(32913, at: fullScreen.insetBy(dx: 40, dy: 40))])
+
+        XCTAssertTrue(moving.isEmpty, "the frame changed between polls")
+    }
+
     func testAnAppThatTakesItsFrameBackStopsTheEpisode() {
         _ = monitor.note([reading(32913, at: fullScreen)])
         _ = monitor.note([reading(32913, at: fullScreen)])
         clock = clock.addingTimeInterval(1)
+        _ = monitor.note([reading(32913, at: fullScreen)])
 
         let again = monitor.note([reading(32913, at: fullScreen)])
 

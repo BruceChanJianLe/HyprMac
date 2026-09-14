@@ -137,10 +137,11 @@ class TilingEngine {
     /// number would be a fiction.
     struct FitRefusal: Equatable {
         /// `learned` is a bound the app refused (`observed` provenance),
-        /// `seeded` an `AXMinimumSize` or per-bundle hint nothing has tested,
-        /// `structural` a depth, count or slot-geometry limit no attempt can
-        /// talk its way out of.
-        enum Source: String { case learned, seeded, structural }
+        /// `appHint` a bound another window of the same app refused, `seeded`
+        /// an `AXMinimumSize` value nothing has tested, and `structural` a
+        /// depth, count or slot-geometry limit no attempt can talk its way
+        /// out of.
+        enum Source: String { case learned, appHint, seeded, structural }
 
         let incoming: CGWindowID
         /// the tenant of the leaf that refused. nil for an empty leaf.
@@ -155,8 +156,8 @@ class TilingEngine {
     /// What a fit check says about an explicit user request.
     enum AdmissionOutlook: Equatable {
         case fits
-        /// nothing but learned bounds is in the way. One real attempt would
-        /// settle whether they are still true.
+        /// nothing but learned bounds or app hints is in the way. One real
+        /// attempt would settle whether they are still true.
         case revalidatable([FitRefusal])
         /// refused for something an attempt cannot change — a seeded bound
         /// that survived the bypass, or structure.
@@ -311,16 +312,33 @@ class TilingEngine {
     /// the best thing anyone knows about the window, and probing it again
     /// only repeats the resize the user just watched.
     ///
-    /// Seeded hints, app hints and every other window's memory all still
-    /// count, and the memory itself is untouched either way.
+    /// An explicit request — a float→tile, a move, the fit diagnostic —
+    /// sets aside an app hint too. A hint is another window's evidence, and
+    /// this window has never been asked; without this the hinted window has
+    /// no way back into a tree and only a restart clears it.
+    ///
+    /// Seeded hints and every other window's memory all still count, and the
+    /// memory itself is untouched either way.
     private func minimumSize(for window: HyprWindow?) -> CGSize {
         guard let window else { return .zero }
-        if let before = minimaBypass?[window.windowID],
-           minSizes.entry(for: window.windowID)?.provenance == .observed,
-           (observedMinimumGeneration[window.windowID] ?? 0) < before {
+        if let before = minimaBypass?[window.windowID], bypasses(window.windowID, before: before) {
             return .zero
         }
         return minSizes.minimumSize(for: window)
+    }
+
+    /// Whether a bypass reaching back to `before` covers this window's entry.
+    private func bypasses(_ windowID: CGWindowID, before: UInt64) -> Bool {
+        switch minSizes.entry(for: windowID)?.provenance {
+        case .observed:
+            return (observedMinimumGeneration[windowID] ?? 0) < before
+        case .appHint:
+            // only the explicit kind. an admission retry keeps the hint: it
+            // is what the app just told us through its other window.
+            return before == Self.revalidationBypassBefore
+        default:
+            return false
+        }
     }
 
     private func tree(for key: TilingKey) -> BSPTree {
@@ -802,17 +820,6 @@ class TilingEngine {
     /// Set by `WindowManager` to the admission recovery's pending set.
     var pendingRecoverySource: () -> Set<CGWindowID> = { [] }
 
-    /// Drop the unverified mark for `(workspace, screen)` without laying
-    /// anything out, if the incumbents are provably back where the tree
-    /// says. For the admission recovery, which gives up on a key once it has
-    /// floated the newcomer in place.
-    ///
-    /// The engine decides, not the caller: the mark belongs to the key and
-    /// any number of attempts may have set it, so only the engine knows
-    /// whether every one of them put its originals back. Ordinary clearing
-    /// still happens on its own, when a layout for the key is accepted.
-    ///
-    /// - Returns: whether the mark was dropped.
     /// Mark `(workspace, screen)` unverified on somebody else's evidence.
     ///
     /// For the drift monitor, which watches a tiled window's app take its
@@ -826,6 +833,17 @@ class TilingEngine {
         hyprLog(.notice, .tiling, "unverified mark set for ws\(workspace): \(reason)")
     }
 
+    /// Drop the unverified mark for `(workspace, screen)` without laying
+    /// anything out, if the incumbents are provably back where the tree
+    /// says. For the admission recovery, which gives up on a key once it has
+    /// floated the newcomer in place.
+    ///
+    /// The engine decides, not the caller: the mark belongs to the key and
+    /// any number of attempts may have set it, so only the engine knows
+    /// whether every one of them put its originals back. Ordinary clearing
+    /// still happens on its own, when a layout for the key is accepted.
+    ///
+    /// - Returns: whether the mark was dropped.
     @discardableResult
     func clearUnverifiedGeometry(forWorkspace workspace: Int, screen: NSScreen) -> Bool {
         let key = TilingKey(workspace: workspace, screen: screen)
@@ -985,6 +1003,11 @@ class TilingEngine {
             }
         }
         for (window, size) in result.accepted {
+            // a window whose app hint this pass set aside has now been
+            // measured on its own, so its entry stops being somebody else's
+            if minimaBypass?[window.windowID] != nil {
+                minSizes.adoptOwnEvidence(window, accepted: size)
+            }
             minSizes.lowerIfAccepted(window, actual: size)
         }
         return result
@@ -1277,9 +1300,19 @@ class TilingEngine {
         let previous = minimaBypass
         minimaBypass = bypass
         defer { minimaBypass = previous }
-        if refusingImpossibleArrangements,
-           !fitWindows(windows.filter { !$0.isFloating }, onWorkspace: workspace, screen: screen) {
-            return structuralRefusal(Set(bypass.keys), workspace: workspace, screen: screen)
+        if refusingImpossibleArrangements {
+            // only the newcomers this retry is for, against the live tree's
+            // incumbents. a held window or a second stranded newcomer beside
+            // them is not part of the arrangement being judged — the
+            // ordinary pass would simply leave it out.
+            let key = TilingKey(workspace: workspace, screen: screen)
+            let published = Set(trees[key]?.allWindows.map(\.windowID) ?? [])
+            let judged = windows.filter {
+                !$0.isFloating && (published.contains($0.windowID) || bypass[$0.windowID] != nil)
+            }
+            if !fitWindows(judged, onWorkspace: workspace, screen: screen) {
+                return structuralRefusal(Set(bypass.keys), workspace: workspace, screen: screen)
+            }
         }
         return tileWindows(windows, onWorkspace: workspace, screen: screen,
                            alsoRestoringWithin: restorationReach)
@@ -1826,6 +1859,8 @@ class TilingEngine {
             }
             if provenances.contains(.observed) {
                 source = .learned
+            } else if provenances.contains(.appHint) {
+                source = .appHint
             } else if provenances.contains(.seeded) {
                 source = .seeded
             }

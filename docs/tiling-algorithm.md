@@ -275,7 +275,10 @@ opened.
    and `MinSizeMemory` is never cleared.
 
    With every tenant's floor in hand the retry runs the structural fit check
-   first. When the arrangement cannot exist — the Outlook case, where a
+   first, over the newcomers it is retrying and the live tree's incumbents
+   and nothing else: a held window or a second stranded newcomer sitting on
+   the same workspace is not part of the arrangement being judged, and the
+   ordinary pass would simply leave it out. When the arrangement cannot exist — the Outlook case, where a
    938 pt floor, a 574 pt floor, the gap and the padding do not fit in
    1496 pt of usable width — it resolves there, without a single setter, and
    logs `admission retry refused pre-write`. Before acting the recovery
@@ -347,8 +350,10 @@ poll, however many of its windows drifted, because the pass lays out the
 whole key.
 
 The bound is the point. If the app takes its frame back again within five
-seconds, the monitor stops and marks the key unverified instead of trading
-writes with it. A window back on its tile ends the episode, and a window that
+seconds — two consecutive polls agreeing on the drifted frame, the same rule
+the entry uses, so a layout still landing is not mistaken for a fight — the
+monitor stops and marks the key unverified instead of trading writes with
+it. A window back on its tile ends the episode, and a window that
 drifts again long after the re-apply held gets a fresh one. Nothing runs
 while something else owns the geometry: a mouse press, a tiled drag settling,
 a display reconfiguration, or a workspace transition.
@@ -425,7 +430,10 @@ bound gets invented.
 `observed` is a bound the app actually refused to shrink below. `appHint`
 is another window of the same app's `observed` bound, carried across.
 Fit checks read all three the same way; the state dump and the logs print
-the source, and every bypass keys on `observed` alone. Real evidence
+the source. A bypass keys on `observed`, and an explicit user request — a
+float→tile, a move, the fit diagnostic — sets an `appHint` aside as well,
+because a hint is somebody else's evidence and the window it is refusing has
+never been asked. Real evidence
 *replaces* a hint of either kind rather than merging with it, so the axis a
 readback did not refuse goes back to unknown instead of inheriting a guess
 under an `observed` label.
@@ -437,11 +445,32 @@ so the structural fit check can refuse it before a single frame is written —
 the second Outlook window does not have to prove the same 938 pt floor with
 its own visible resize. The hint outranks the `AXMinimumSize` seed: one of
 the app's own windows really refused that size, while the seed is a number
-the app published without being asked. Only real evidence feeds a hint, so a
-hint cannot ratchet itself upward window after window, and the window's own
-readback replaces its `appHint` entry whichever way it goes. Hints live in
-memory and are gone on restart, because a floor depends on the UI state the
-window was in.
+the app published without being asked. An empty bundle id names no app and
+gets no hint.
+
+A hint is session-only, it moves both ways, and the user can always step
+past it:
+
+- **It rises** on a window's `observed` refusal, per axis, and only on real
+  readback evidence — a hint never feeds a hint, so it cannot ratchet itself
+  upward window after window.
+- **It falls** when a window of that app accepts a size below it, by the
+  same `lowerMinSizeAcceptedDeltaPx` margin the per-window bound uses. One
+  stubborn window's floor is not the app's floor: Safari has many kinds of
+  window, and the one that refused 938 is not the Start Page.
+- **An explicit user action sets it aside** for one attempt: a float→tile,
+  a move, and the fit diagnostic all ignore the `appHint` the way they
+  ignore an `observed` bound, so the window is probed for real instead of
+  being refused on a sibling's word. When that attempt is accepted the entry
+  becomes the window's own `observed` record at the size it took, and the
+  app's hint comes down with it. Without this a hinted window could never
+  get back into a tree — the recovery floats it, and a floating window never
+  reaches the code that would lower anything.
+- **It is gone on restart**, because a floor depends on the UI state the
+  window was in.
+
+Watch `min-size app hint: bundle=…` at `[debug] [lifecycle]` to see a hint
+rise (`from=<id>`) or fall (`source=accepted`).
 
 Per-axis evidence stays per axis, and zero means unknown: a window with a
 1200-point width floor and no height evidence is remembered as `1200x0`,
