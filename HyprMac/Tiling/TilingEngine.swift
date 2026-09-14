@@ -184,6 +184,8 @@ class TilingEngine {
     static let scratchpadWorkspace = 0
 
     private var trees: [TilingKey: BSPTree] = [:]
+    // verified admission survives a temporary hide and a screen migration.
+    private var admittedWindowIDs: [Int: Set<CGWindowID>] = [:]
     private var pendingInsertedWindowIDs: [TilingKey: [CGWindowID]] = [:]
     /// Keys whose last layout attempt did not produce verified geometry.
     /// Set by any non-accepted attempt, cleared by an accepted one or by
@@ -274,6 +276,9 @@ class TilingEngine {
     /// Drop any stored min-size memory for `windowID`. Called when a
     /// window is forgotten by the discovery layer.
     func forgetMinimumSize(windowID: CGWindowID) {
+        for workspace in Array(admittedWindowIDs.keys) {
+            admittedWindowIDs[workspace]?.remove(windowID)
+        }
         minSizes.forget(windowID: windowID)
         observedMinimumGeneration.removeValue(forKey: windowID)
     }
@@ -1169,6 +1174,7 @@ class TilingEngine {
         pendingSwapRevert = nil
         let live = trees[TilingKey(workspace: workspace, screen: screen)]
         let candidate = live?.deepClone() ?? BSPTree()
+        let incumbents = admittedWindowIDs[workspace, default: []]
         let m = updateTreeMembership(windows, onWorkspace: workspace, screen: screen, candidate: candidate)
         let key = m.key
         let t = m.tree
@@ -1176,10 +1182,11 @@ class TilingEngine {
 
         _ = consumePendingInserted(for: key, in: t)
         let outcome = applyTrackedLayout(t, in: rect, generation: generation, key: key,
-                                         inserted: m.insertedWindows.map(\.windowID),
+                                         inserted: m.insertedWindows.map(\.windowID).filter { !incumbents.contains($0) },
                                          restorationUsableFrame: extraReach.map { rect.union($0) })
         if publishes(outcome), layoutGeneration == generation {
             if let live { live.root = candidate.root } else { trees[key] = candidate }
+            admittedWindowIDs[workspace, default: []].formUnion(candidate.allWindows.map(\.windowID))
         }
 
         // clean up empty trees for this workspace on other screens
@@ -1193,8 +1200,8 @@ class TilingEngine {
 
         return admissionResult(outcome, workspace: workspace, screen: screen, key: key,
                                generation: generation,
-                               inserted: Set(m.insertedWindows.map(\.windowID)),
-                               refused: Set(m.refusedWindows.map(\.windowID)))
+                               inserted: Set(m.insertedWindows.map(\.windowID)).subtracting(incumbents),
+                               refused: Set(m.refusedWindows.map(\.windowID)).subtracting(incumbents))
     }
 
     /// Build the typed admission result from what the live tree holds now.
@@ -1956,6 +1963,7 @@ class TilingEngine {
             return .failed(.layoutRejected(reason))
         }
         if let live { live.root = candidate.root } else { trees[key] = candidate }
+        admittedWindowIDs[key.workspace, default: []].formUnion(candidate.allWindows.map(\.windowID))
         return success
     }
 }

@@ -88,3 +88,23 @@ assertions before the change (`build/stability-audit/red-guard.log`). Full
 suite after the fix (`green-guard.log`): `Executed 718 tests, with 201 tests
 skipped and 0 failures`. Baseline had the same counts. This environment has
 no live NSScreen; new geometry regressions will use synthetic screens.
+
+## Fix 2: retain verified incumbent identity
+
+The engine now remembers verified admissions by workspace independently of BSP
+nodes. Hiding or migrating a window preserves that identity; final lifecycle
+forgetting removes it. Returning incumbents remain visible in the unverified
+geometry record, but are excluded from recovery targets. The synthetic-screen
+regression reproduces successful tile → gone-node removal → returned incumbent
+plus newcomer → failed candidate. Before the fix it reports both IDs; after it
+only the newcomer is stranded. `red-identity.log`: 1 assertion failure.
+`green-identity.log`: `Executed 719 tests, with 201 tests skipped and 0 failures`.
+This protects previously verified incumbents, not windows that have never had
+an accepted admission. It does not suppress legitimate minimize/unhide retiles.
+
+Git commits are blocked: the session's filesystem profile makes resolved
+worktree metadata read-only. `git add` and `git commit` both fail creating
+`/Users/zgray/GitHub/HyprMac/.git/worktrees/stability-hardening/index.lock`.
+No alternate checkout or permission bypass is used. Numbered patches under
+`build/stability-audit/` preserve independently reviewable implementation units;
+they are not commit hashes.

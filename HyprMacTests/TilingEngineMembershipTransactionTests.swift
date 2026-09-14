@@ -2,6 +2,29 @@ import XCTest
 @testable import HyprMac
 
 final class TilingEngineMembershipTransactionTests: XCTestCase {
+    func testReturnedIncumbentIsNotRecoveredAsANewAdmission() throws {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let incumbent = makeWindow(id: 801)
+        let newcomer = makeWindow(id: 802)
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in [incumbent, newcomer] {
+            trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100)
+        }
+        XCTAssertTrue(engine.tileWindows([incumbent], onWorkspace: 1, screen: screen).published)
+        engine.removeWindowID(incumbent.windowID)
+        trace.forgetWrites()
+        trace.rejectNextRead = true
+
+        let result = engine.tileWindows([incumbent, newcomer], onWorkspace: 1, screen: screen)
+
+        XCTAssertFalse(result.published)
+        XCTAssertEqual(result.strandedIDs, [newcomer.windowID])
+        XCTAssertTrue(engine.unverifiedLayouts.contains { $0.windowIDs.contains(incumbent.windowID) })
+    }
+
     func testRejectedMembershipKeepsPriorTreeAndActualFrames() throws {
         let f = try fixture()
         f.trace.rejectNextRead = true
