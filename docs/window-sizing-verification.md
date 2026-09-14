@@ -1607,3 +1607,40 @@ conflicts. No frame-writer sequence, tolerance, or timeout changed. The two-axis
 adjustment and physical undock/Terminal verification remain open. The numbered
 patches landed as thirteen commits, `6373c79` through `3ed40b7`, on branch
 `feature/window-sizing-recovery`.
+
+## Retry probing and the recovery outcome, September 13 night
+
+Evidence: `mailbox-audit-astra/evidence/07-since-install.txt`, lines 1975-2063
+and 2118-2204. A new Outlook window joined a Safari tile on ws1. The admission
+probed twice and learned both floors — Outlook 938 pt wide, Safari 574 — then
+restored. The 250 ms retry ran with `bypassMinimaSince=[32836:256]`, which
+ignored the 938 the same admission had just learned, so it repeated the
+candidate pass, the adjusted pass and the restoration byte for byte, learned
+nothing, and floated the window anyway. Seven visible resizes for one window
+opening.
+
+The bypass now reaches the other way. It sets aside observed bounds recorded
+*below* its generation, not at or above it, so a retry honours what its own
+admission learned and distrusts only older evidence. With both floors in hand
+the retry runs the structural fit check before writing anything, and refuses
+there when the arrangement cannot exist.
+
+Red:
+- `TilingEngineMembershipTransactionTests.testARetryWithNothingNewToLearnResolvesWithoutWriting`
+  — the Outlook shape at 1600 pt of usable width (980 and 620 pt floors).
+  Red: 18 setter calls in the retry, `refusedIDs` empty, `insertedIDs`
+  non-empty. Green: 0 setter calls, `refusedIDs=[32836]`,
+  `publishedIDs=[32513]`.
+- `...testTheRetryHonoursWhatItsOwnAdmissionObserved` — red: the retry
+  inserted the newcomer by ignoring the bound the admission had just learned.
+- `...testTheRetryStillIgnoresABoundOlderThanItsAdmission` — red: a bound
+  older than the admission was honoured, so the one case the bypass exists
+  for did not work.
+
+Green, no red: the end state is unchanged, so the outcome policy is a
+refactor of where that choice is written down.
+`AdmissionRecoveryTests.testTheOutcomePolicyDefaultsToFloatingInPlace` and
+`...testTheUnwiredRoutingOutcomeStillFloatsTheWindow` pin that
+`.floatInPlace` is the default and that selecting the unwired
+`.routeToFittingWorkspace` still floats the window rather than leaving it
+untracked.

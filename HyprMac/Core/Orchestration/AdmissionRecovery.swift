@@ -9,9 +9,9 @@ import Cocoa
 /// A tiling pass that inserts a new window and is then refused by the screen
 /// keeps its prior tree, which means the newcomer is visible, assigned, not
 /// floating and in no tree at all. This owns the two steps that finish it:
-/// one retry about 250 ms later under a fresh owned context with the minima
-/// that attempt itself observed ignored, and, if that is refused too, an
-/// explicit float where the window already is.
+/// one retry about 250 ms later under a fresh owned context with only the
+/// minima recorded *before* that attempt ignored, and, if that is refused
+/// too, an explicit float where the window already is.
 ///
 /// Once a workspace's newcomers are floated the key gets one ordinary
 /// retile, so incumbents the refused pass left out of the tree are admitted
@@ -40,6 +40,20 @@ final class AdmissionRecovery {
         case held
     }
 
+    /// Where a newcomer ends up when the retry cannot tile it.
+    ///
+    /// One named policy point so the end state is a single line to change
+    /// once Zach picks one. `.floatInPlace` is the shipped behaviour;
+    /// `.routeToFittingWorkspace` is not wired, and the fallback still
+    /// floats so no window is ever left untracked.
+    enum Outcome: String {
+        case floatInPlace
+        case routeToFittingWorkspace
+    }
+
+    /// The end state for a newcomer the retry could not tile.
+    var outcome: Outcome = .floatInPlace
+
     /// What one recovery attempt found out.
     struct AttemptResult {
         /// newcomers the attempt left in the published tree.
@@ -51,8 +65,9 @@ final class AdmissionRecovery {
     private struct Record {
         let workspace: Int
         let screen: NSScreen
-        /// generation of the admission whose observed minima the retry
-        /// ignores for this window.
+        /// generation of the admission. The retry ignores observed minima
+        /// recorded before it for this window, and honours what the
+        /// admission itself learned.
         let sinceGeneration: UInt64
         /// the admission's own failure, kept for the fallback log line.
         let firstFailure: FrameSizingFailure?
@@ -85,8 +100,8 @@ final class AdmissionRecovery {
     var isDisplayTransitionPending: () -> Bool = { false }
 
     // actions
-    /// `bypass` maps each newcomer to the generation whose observed minima
-    /// the attempt must ignore for it.
+    /// `bypass` maps each newcomer to the generation below which the
+    /// attempt must ignore its observed minima.
     var attempt: (_ workspace: Int, _ screen: NSScreen,
                   _ bypass: [CGWindowID: UInt64]) -> AttemptResult = { _, _, _ in AttemptResult() }
     var floatInPlace: (HyprWindow, String) -> Void = { _, _ in }
@@ -236,7 +251,7 @@ final class AdmissionRecovery {
             let trace = entry.bypass.keys.sorted().map { "\($0):\(entry.bypass[$0]!)" }
                 .joined(separator: ",")
             hyprLog(.notice, .tiling, "admission retry attempt: ws\(workspace)"
-                    + " bypassMinimaSince=[\(trace)]")
+                    + " bypassMinimaBefore=[\(trace)]")
             let result = attempt(workspace, entry.screen, entry.bypass)
             for id in entry.bypass.keys.sorted() {
                 if result.placed.contains(id) {
@@ -323,8 +338,15 @@ final class AdmissionRecovery {
         }
         guard let window = liveWindow(id) else { forget(id); return false }
         let cause = "first=\(Self.text(record.firstFailure)) retry=\(Self.text(retryFailure))"
-        hyprLog(.notice, .tiling, "admission recovery fallback: floated \(id) in place"
-                + " on ws\(record.workspace) \(cause)")
+        if outcome == .routeToFittingWorkspace {
+            // not wired. nothing here can pick a workspace, and inventing a
+            // router inside the fallback is how a refusal turns into a move
+            // the user never asked for.
+            hyprLog(.notice, .tiling, "admission recovery policy routeToFittingWorkspace"
+                    + " is not wired — floating \(id) in place instead")
+        }
+        hyprLog(.notice, .tiling, "admission recovery fallback: policy=\(outcome.rawValue)"
+                + " floated \(id) in place on ws\(record.workspace) \(cause)")
         floatInPlace(window, cause)
         records.removeValue(forKey: id)
         // the key may be able to speak for itself again now that nothing is

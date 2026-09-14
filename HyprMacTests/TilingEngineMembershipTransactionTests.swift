@@ -463,7 +463,7 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
 
     // MARK: - the retry's minima bypass
 
-    func testTheRetryIgnoresOnlyTheMinimumTheFailedAttemptObserved() throws {
+    func testTheRetryHonoursWhatItsOwnAdmissionObserved() throws {
         let f = try fixture()
         let newcomer = f.windows[2]
         let usable = f.engine.displayManager.cgRect(for: f.screen)
@@ -482,21 +482,73 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertTrue(plain.insertedIDs.isEmpty, "the learned bound refuses the insert outright")
         XCTAssertFalse(f.engine.windowIDs(inTreeForWorkspace: 1, screen: f.screen).contains(newcomer.windowID))
 
-        // a bypass that only reaches back to a later generation changes nothing
-        let tooLate = f.engine.retryAdmission(
-            f.windows, onWorkspace: 1, screen: f.screen,
-            bypassingMinimaSince: [newcomer.windowID: admission.generation &+ 100])
-        XCTAssertTrue(tooLate.insertedIDs.isEmpty)
-
+        // the bound this admission itself observed passed the learning
+        // guards, so the retry keeps it
         let retry = f.engine.retryAdmission(
             f.windows, onWorkspace: 1, screen: f.screen,
-            bypassingMinimaSince: [newcomer.windowID: admission.generation])
+            bypassingMinimaBefore: [newcomer.windowID: admission.generation])
+        XCTAssertTrue(retry.insertedIDs.isEmpty)
+        XCTAssertEqual(retry.refusedIDs, [newcomer.windowID])
+    }
+
+    func testTheRetryStillIgnoresABoundOlderThanItsAdmission() throws {
+        let f = try fixture()
+        let newcomer = f.windows[2]
+        let usable = f.engine.displayManager.cgRect(for: f.screen)
+        f.trace.minSize[newcomer.windowID] = CGSize(width: usable.width * 1.2, height: 0)
+
+        let admission = f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
+        XCTAssertEqual(f.engine.knownMinimumSizes[newcomer.windowID]?.provenance, .observed)
+        f.trace.minSize.removeValue(forKey: newcomer.windowID)
+
+        // a later admission's reach covers this one, so the bound is the
+        // possibly-stale kind the bypass exists for
+        let retry = f.engine.retryAdmission(
+            f.windows, onWorkspace: 1, screen: f.screen,
+            bypassingMinimaBefore: [newcomer.windowID: admission.generation &+ 100])
 
         XCTAssertEqual(retry.insertedIDs, [newcomer.windowID])
         XCTAssertTrue(retry.published)
         XCTAssertTrue(retry.publishedIDs.contains(newcomer.windowID))
         XCTAssertNotNil(f.engine.knownMinimumSizes[newcomer.windowID],
                         "the bypass lasts one pass; it does not erase the memory")
+    }
+
+    /// The Outlook thrash: two tenants whose learned floors cannot both sit
+    /// on one screen. The admission probes and learns; the retry has nothing
+    /// left to find out, so it must not probe again.
+    func testARetryWithNothingNewToLearnResolvesWithoutWriting() {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let tenant = makeWindow(id: 32513)
+        let newcomer = makeWindow(id: 32836)
+        let rect = engine.displayManager.cgRect(for: screen)
+        trace.frames[tenant.windowID] = rect
+        trace.frames[newcomer.windowID] = rect
+        XCTAssertTrue(engine.tileWindows([tenant], onWorkspace: 1, screen: screen).published)
+        // 980 + 620 + gap + padding is wider than the 1600 pt usable frame
+        trace.minSize[tenant.windowID] = CGSize(width: 620, height: 0)
+        trace.minSize[newcomer.windowID] = CGSize(width: 980, height: 0)
+        var writes = 0
+        trace.onWrite = { writes += 1 }
+
+        let admission = engine.tileWindows([tenant, newcomer], onWorkspace: 1, screen: screen)
+        XCTAssertEqual(admission.strandedIDs, [newcomer.windowID])
+        XCTAssertEqual(engine.knownMinimumSizes[newcomer.windowID]?.size.width, 980)
+        XCTAssertEqual(engine.knownMinimumSizes[tenant.windowID]?.size.width, 620)
+        XCTAssertGreaterThan(writes, 0, "the admission is where the probing belongs")
+        writes = 0
+
+        let retry = engine.retryAdmission([tenant, newcomer], onWorkspace: 1, screen: screen,
+                                          bypassingMinimaBefore: [newcomer.windowID: admission.generation],
+                                          refusingImpossibleArrangements: true)
+
+        XCTAssertEqual(writes, 0, "both floors are known, so the arrangement is refused pre-write")
+        XCTAssertEqual(retry.refusedIDs, [newcomer.windowID])
+        XCTAssertEqual(retry.publishedIDs, [tenant.windowID])
+        XCTAssertTrue(retry.insertedIDs.isEmpty)
     }
 
     func testTheBypassLeavesEveryOtherWindowsMinimumAlone() throws {
@@ -511,7 +563,7 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
 
         _ = f.engine.retryAdmission(
             f.windows, onWorkspace: 1, screen: f.screen,
-            bypassingMinimaSince: [newcomer.windowID: admission.generation])
+            bypassingMinimaBefore: [newcomer.windowID: admission.generation &+ 100])
 
         XCTAssertEqual(f.engine.knownMinimumSizes[f.windows[0].windowID]?.provenance, .observed)
     }

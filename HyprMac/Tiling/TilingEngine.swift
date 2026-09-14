@@ -163,15 +163,16 @@ class TilingEngine {
         case refused([FitRefusal])
     }
 
-    /// How far back an explicit revalidation's bypass reaches: all the way.
+    /// How far forward an explicit revalidation's bypass reaches: past every
+    /// generation there will ever be, so every observed entry is covered.
     ///
-    /// The admission retry ignores only what one failed attempt observed,
-    /// because that is the bound it has reason to distrust. A user asking
-    /// again, by hand, is distrusting the whole observed record for these
-    /// windows, so the bypass covers every observed entry however old. It
-    /// still erases nothing: the entries stand unless the attempt is accepted
-    /// and lowers them through the ordinary reconcile path.
-    static let revalidationSinceGeneration: UInt64 = 0
+    /// The admission retry ignores only bounds recorded *before* the
+    /// admission it is retrying, because those are the ones that might be
+    /// stale. A user asking again, by hand, is distrusting the whole observed
+    /// record for these windows. It still erases nothing: the entries stand
+    /// unless the attempt is accepted and lowers them through the ordinary
+    /// reconcile path.
+    static let revalidationBypassBefore: UInt64 = .max
 
     /// Pseudo-workspace the scratchpad layer's tree lives on. Matches
     /// `ScratchpadController.workspace`; kept local so the engine has no
@@ -223,10 +224,10 @@ class TilingEngine {
     /// generation at which each window last had an `.observed` minimum
     /// recorded. Only the bypass reads it.
     private var observedMinimumGeneration: [CGWindowID: UInt64] = [:]
-    /// windows whose freshly observed minima one pass is ignoring, each with
-    /// the generation to ignore them from. Per window, because two newcomers
+    /// windows whose older observed minima one pass is ignoring, each with
+    /// the generation to ignore them below. Per window, because two newcomers
     /// retried together were admitted at different generations and one must
-    /// not inherit the other's earlier reach. Set for one retry only.
+    /// not inherit the other's reach. Set for one retry only.
     private var minimaBypass: [CGWindowID: UInt64]?
     private var layoutGeneration: UInt64 = 0
     private let frameSizingIOFactory: ([CGWindowID: HyprWindow], @escaping () -> UInt64) -> FrameSizingIO
@@ -302,18 +303,21 @@ class TilingEngine {
 
     /// The bound a fit check should honour for `window`.
     ///
-    /// A retry ignores whatever the attempt it is retrying claimed to learn
-    /// about the newcomer. That bound came out of a readback the same failed
-    /// candidate produced, and honouring it would refuse the retry before a
-    /// single setter went out — the window would never get to say whether it
-    /// can take the slot. Seeded hints, older observed bounds and every
-    /// other window's memory all still count, and the memory itself is
-    /// untouched.
+    /// A bypass sets aside an observed bound recorded *before* its own
+    /// generation — evidence old enough that the app may have changed its
+    /// mind since. Anything the current admission itself observed stands:
+    /// that readback passed the learning guards (complete writes, a complete
+    /// stable readback at the target origin, a geometric refusal), so it is
+    /// the best thing anyone knows about the window, and probing it again
+    /// only repeats the resize the user just watched.
+    ///
+    /// Seeded hints, app hints and every other window's memory all still
+    /// count, and the memory itself is untouched either way.
     private func minimumSize(for window: HyprWindow?) -> CGSize {
         guard let window else { return .zero }
-        if let since = minimaBypass?[window.windowID],
+        if let before = minimaBypass?[window.windowID],
            minSizes.entry(for: window.windowID)?.provenance == .observed,
-           (observedMinimumGeneration[window.windowID] ?? 0) >= since {
+           (observedMinimumGeneration[window.windowID] ?? 0) < before {
             return .zero
         }
         return minSizes.minimumSize(for: window)
@@ -1238,21 +1242,52 @@ class TilingEngine {
     }
 
     /// One more admission attempt for `(workspace, screen)`, ignoring for
-    /// each id in `bypass` the minima observed at or after its own
-    /// generation.
+    /// each id in `bypass` the minima observed before its own generation.
     ///
     /// Everything else is an ordinary tiling pass: fresh generation, private
     /// candidate, same publication gate. Nothing is erased from
     /// `MinSizeMemory` — the bypass lasts exactly as long as this call.
+    ///
+    /// `refusingImpossibleArrangements` is the bounded recovery's retry. It
+    /// asks the structural fit check first, with every tenant's known floor
+    /// in hand, and refuses without a single setter when the arrangement
+    /// cannot exist. The retry has no reason to probe: every bound it is
+    /// honouring came from a guarded readback of the admission it is
+    /// retrying, so writing the same frames again would only repeat the
+    /// resize the user just watched. An explicit revalidation does not set
+    /// it — the user asking by hand is asking for a real attempt.
     @discardableResult
     func retryAdmission(_ windows: [HyprWindow], onWorkspace workspace: Int, screen: NSScreen,
-                        bypassingMinimaSince bypass: [CGWindowID: UInt64],
+                        bypassingMinimaBefore bypass: [CGWindowID: UInt64],
+                        refusingImpossibleArrangements: Bool = false,
                         restorationReach: CGRect? = nil) -> AdmissionResult {
         let previous = minimaBypass
         minimaBypass = bypass
         defer { minimaBypass = previous }
+        if refusingImpossibleArrangements,
+           !fitWindows(windows.filter { !$0.isFloating }, onWorkspace: workspace, screen: screen) {
+            return structuralRefusal(Set(bypass.keys), workspace: workspace, screen: screen)
+        }
         return tileWindows(windows, onWorkspace: workspace, screen: screen,
                            alsoRestoringWithin: restorationReach)
+    }
+
+    /// The result of a retry that never ran: the known minima cannot be
+    /// arranged in the usable frame, so nothing was written and the live
+    /// tree is exactly as the admission left it.
+    private func structuralRefusal(_ newcomers: Set<CGWindowID>,
+                                   workspace: Int, screen: NSScreen) -> AdmissionResult {
+        let key = TilingKey(workspace: workspace, screen: screen)
+        let published = Set(trees[key]?.allWindows.map(\.windowID) ?? [])
+        let refused = newcomers.subtracting(published)
+        hyprLog(.notice, .tiling, "admission retry refused pre-write: ids="
+                + "[" + refused.sorted().map(String.init).joined(separator: ", ") + "]"
+                + " ws\(workspace) — the known minima do not fit the usable frame")
+        return AdmissionResult(workspace: workspace, screen: screen,
+                               generation: layoutGeneration,
+                               insertedIDs: [], publishedIDs: published,
+                               failure: refused.min().map { FrameSizingFailure.noFittingSlot($0) },
+                               restoredIDs: [], refusedIDs: refused)
     }
 
     /// Tile scratchpad members into a caller-supplied `rect` on the layer's
@@ -1832,9 +1867,9 @@ class TilingEngine {
 
     private func revalidationBypass(incoming: Set<CGWindowID>, key: TilingKey) -> [CGWindowID: UInt64] {
         var bypass: [CGWindowID: UInt64] = [:]
-        for id in incoming { bypass[id] = Self.revalidationSinceGeneration }
+        for id in incoming { bypass[id] = Self.revalidationBypassBefore }
         for window in trees[key]?.allWindows ?? [] {
-            bypass[window.windowID] = Self.revalidationSinceGeneration
+            bypass[window.windowID] = Self.revalidationBypassBefore
         }
         return bypass
     }
@@ -1868,7 +1903,7 @@ class TilingEngine {
                 + " incoming=[\(incoming.sorted().map(String.init).joined(separator: ", "))]"
                 + " bypassing=[\(bypass.keys.sorted().map(String.init).joined(separator: ", "))]")
         return retryAdmission(windows, onWorkspace: workspace, screen: screen,
-                              bypassingMinimaSince: bypass,
+                              bypassingMinimaBefore: bypass,
                               restorationReach: restorationReach)
     }
 

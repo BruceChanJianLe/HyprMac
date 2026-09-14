@@ -363,12 +363,14 @@ The recovery's own lines, all `[notice] [tiling]`:
 ```
 admission retry scheduled: ids=[26016] ws2 in 250ms cause=geometryMismatch(21611)
 admission refusal judged: ids=[26017] ws2 — floating in place at the next turn cause=geometryMismatch(21611)
-admission retry attempt: ws2 bypassMinimaSince=[26016:418]
+admission retry attempt: ws2 bypassMinimaBefore=[26016:418]
+admission retry refused pre-write: ids=[26016] ws2 — the known minima do not fit the usable frame
 admission retry cancelled: ids=[26016] reason=later press
 admission recovery pending: 26016 not judgeable yet — waiting for evidence
 admission recovery held: ids=[26018] ws2 — in no tree, not floated
 admission recovery resolved: 26016 (retry tiled it)
-admission recovery fallback: floated 26016 in place on ws2 first=geometryMismatch(21611) retry=geometryMismatch(21611)
+admission recovery policy routeToFittingWorkspace is not wired — floating 26016 in place instead
+admission recovery fallback: policy=floatInPlace floated 26016 in place on ws2 first=geometryMismatch(21611) retry=geometryMismatch(21611)
 ```
 
 One stranded window gets one of the first two lines, never both.
@@ -385,11 +387,22 @@ after that retile. It is held: no timer, no float, an explicit record so the
 state dump's `recovery pending=` shows it. It clears when a later layout for
 that key publishes it, when the window is removed, or when it is forgotten.
 
+`admission retry refused pre-write:` is a retry that wrote nothing. Every
+bound it was honouring came from a guarded readback of the admission it was
+retrying, and with all of them in hand the arrangement does not fit the
+usable frame. It goes straight to the fallback instead of repeating the
+resize the user just watched. There is no `frame write:` line between this
+and the fallback.
+
 `cause` and `first`/`retry` are the layout failures, which name whichever
 window refused — usually an incumbent, not the newcomer being recovered.
-`bypassMinimaSince` maps each newcomer in the attempt to the generation it
-ignores freshly observed minima from — one reach per window, because two
-newcomers retried together were admitted at different times. Cancellation
+`bypassMinimaBefore` maps each newcomer in the attempt to the generation
+*below* which it ignores observed minima — normally its own admission's
+generation, so anything that admission learned still counts and only older,
+possibly stale evidence is set aside. One reach per window, because two
+newcomers retried together were admitted at different times.
+`policy=` on the fallback line names the end-state policy that applied;
+`floatInPlace` is the only one wired. Cancellation
 reasons are `stop`, `later press`, `display change`, `moved workspace`,
 `screen changed` and `user floated it`; showing another workspace is not one
 of them. A separate `unverified mark kept for wsN: a rollback did not

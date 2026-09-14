@@ -2727,10 +2727,10 @@ private extension WindowManager {
 
     /// Give `admissionRecovery` its probes and its two actions.
     ///
-    /// Everything it can do is here: run one more tiling pass with the
-    /// newcomer's freshly learned minima ignored, and float a window where
-    /// it stands. It has no handle on workspace assignment, so the fallback
-    /// cannot turn into `routeUnfittedWindow` by another name.
+    /// Everything it can do is here: run one more tiling pass with only the
+    /// newcomer's older minima ignored, and float a window where it stands.
+    /// It has no handle on workspace assignment, so the fallback cannot turn
+    /// into `routeUnfittedWindow` by another name.
     private func wireAdmissionRecovery() {
         tilingEngine.pendingRecoverySource = { [weak self] in
             self?.admissionRecovery.pendingWindowIDs ?? []
@@ -2777,7 +2777,8 @@ private extension WindowManager {
             let windows = allWindows.filter { assigned.contains($0.windowID) }
             let result = self.tilingEngine.retryAdmission(
                 windows, onWorkspace: workspace, screen: screen,
-                bypassingMinimaSince: bypass)
+                bypassingMinimaBefore: bypass,
+                refusingImpossibleArrangements: true)
             self.updatePositionCache(windows: allWindows)
             return AdmissionRecovery.AttemptResult(
                 placed: result.publishedIDs.intersection(bypass.keys),

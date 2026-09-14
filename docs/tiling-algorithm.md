@@ -262,21 +262,36 @@ opened.
 `AdmissionRecovery` finishes those windows in at most two steps.
 
 1. **One retry, about 250 ms later**, through an injected scheduler and
-   under a fresh generation. It ignores the minima that failed attempt
-   itself observed for the newcomer — a bound learned from the readback of
-   the candidate that just failed would refuse the retry at the fit check,
-   before a single setter went out. The reach is per window: two newcomers
-   retried together were admitted at different generations, and neither
-   inherits the other's. Nothing else is ignored: seeded hints, older
-   observed bounds and every other window's memory all still count, and
-   `MinSizeMemory` is never cleared. Before acting the recovery
+   under a fresh generation. It honours everything the failed attempt
+   observed. That readback passed the learning guards — complete writes, a
+   complete stable readback at the target origin, a geometric refusal — so
+   it is the best thing anyone knows about the window, and writing the same
+   frames again only repeats the resize the user just watched. What the
+   retry does ignore is an observed bound recorded *before* its own
+   admission: evidence old enough that the app may have changed its mind
+   since. The reach is per window: two newcomers retried together were
+   admitted at different generations, and neither inherits the other's.
+   Seeded hints, app hints and every other window's memory all still count,
+   and `MinSizeMemory` is never cleared.
+
+   With every tenant's floor in hand the retry runs the structural fit check
+   first. When the arrangement cannot exist — the Outlook case, where a
+   938 pt floor, a 574 pt floor, the gap and the padding do not fit in
+   1496 pt of usable width — it resolves there, without a single setter, and
+   logs `admission retry refused pre-write`. Before acting the recovery
    re-checks the assignment, the workspace's home screen, whether the
    workspace is visible, whether the app is running, whether the window
    still exists and can be read, and whether the user has floated it.
-2. **Float in place.** A second failure — geometry or I/O — leaves a
-   readable visible newcomer floating exactly where it is, with both
-   floating flags set and the cause logged. It is not sent to another
-   workspace. The recovery then asks the engine to drop the key's unverified
+2. **The recovery outcome.** A second failure — geometry, I/O, or a
+   pre-write refusal — ends in the outcome policy, `AdmissionRecovery.Outcome`.
+   `.floatInPlace` is the default and the only one wired: a readable visible
+   newcomer is left floating exactly where it is, with both floating flags
+   set and the cause and the policy logged. It is not sent to another
+   workspace. `.routeToFittingWorkspace` is the placeholder for the other
+   answer; nothing implements it, and selecting it still floats the window
+   so nothing is left untracked. One named policy point, one line to change.
+
+   The recovery then asks the engine to drop the key's unverified
    mark, and the engine decides: `clearUnverifiedGeometry` drops it only if
    every attempt on that key since the last accepted layout put its own
    originals back. A restoration restores the frames it captured when it
@@ -447,12 +462,16 @@ Priming can still record a new `seeded` entry and asking about an untiled
 workspace still creates its empty tree — both inherited from the plain fit
 check — but no `observed` bound is touched.
 
-Where the bypass reaches differs by who is asking. The admission retry
-ignores only what the attempt it is retrying observed, because that is the
-bound it has reason to distrust. An explicit request ignores the whole
-observed record for those ids, because the user asking by hand is
-distrusting all of it. Neither erases anything: the entries stand unless an
-attempt is accepted and lowers them through the ordinary reconcile path.
+Where the bypass reaches differs by who is asking. Both spell it as one
+generation per window, and both set aside observed bounds recorded *below*
+it. The admission retry passes its own admission's generation, so what that
+admission learned stands and only older evidence is distrusted. An explicit
+request passes `revalidationBypassBefore`, which is past every generation
+there will ever be, because the user asking by hand is distrusting the whole
+observed record for those ids. Neither erases anything: the entries stand
+unless an attempt is accepted and lowers them through the ordinary reconcile
+path. The retry is also the only one that can refuse before writing: an
+explicit request is a request for a real attempt, so it always makes one.
 
 The bypass belongs to the request, not to the pass. A window the request
 never named — an unrelated newcomer that happens to be assigned to the same

@@ -107,14 +107,14 @@ final class AdmissionRecoveryTests: XCTestCase {
         XCTAssertEqual(harness.scheduled.map(\.delay), [0.25])
     }
 
-    func testRetryBypassesTheMinimaObservedSinceTheAdmissionStarted() throws {
+    func testRetryCarriesItsAdmissionGenerationAsTheBypassBound() throws {
         recovery.note(failedAdmission([26], generation: 42))
         harness.fire()
         let attempt = try XCTUnwrap(harness.attempts.first)
         XCTAssertEqual(attempt.bypass, [26: 42])
     }
 
-    func testEachNewcomerBypassesOnlyBackToItsOwnAdmission() throws {
+    func testEachNewcomerCarriesOnlyItsOwnAdmissionGeneration() throws {
         recovery.note(failedAdmission([26], generation: 40))
         // a later pass strands 27 while 26 is still pending and still not in
         // the published tree
@@ -126,6 +126,20 @@ final class AdmissionRecoveryTests: XCTestCase {
     }
 
     // MARK: - final policy
+
+    func testTheOutcomePolicyDefaultsToFloatingInPlace() {
+        XCTAssertEqual(AdmissionRecovery().outcome, .floatInPlace)
+    }
+
+    func testTheUnwiredRoutingOutcomeStillFloatsTheWindow() {
+        recovery.outcome = .routeToFittingWorkspace
+        recovery.note(failedAdmission([26]))
+        harness.fire()
+
+        XCTAssertEqual(harness.floated.map(\.id), [26],
+                       "no router exists, so the window is never left untracked")
+        XCTAssertTrue(recovery.pendingWindowIDs.isEmpty)
+    }
 
     func testRepeatedGeometryFailureFloatsTheNewcomerInPlace() {
         harness.failure = .geometryMismatch(11)
