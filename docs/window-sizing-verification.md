@@ -1644,3 +1644,39 @@ refactor of where that choice is written down.
 `.floatInPlace` is the default and that selecting the unwired
 `.routeToFittingWorkspace` still floats the window rather than leaving it
 untracked.
+
+## Same-screen drift, September 13 night
+
+Evidence: `mailbox-audit-astra/evidence/07-since-install.txt`, lines 2544-2726.
+A second Safari window joined ws1. The candidate pass was accepted at
+generation 308 in 93 ms — both frames written, read back complete and stable
+at 744 pt wide. After that the log shows only polls and a flood of Safari's
+own `windowCreated` events, and no frame attempt at all until a new Terminal
+window triggered a retile at generation 357, about two minutes later. Safari's
+Start Page had re-expanded its window over the whole screen the moment our
+write verified, and nothing was watching: `WindowDiscoveryService.screenDrift`
+only notices a window that changes screens.
+
+`TiledDriftMonitor` watches the same-screen case on the discovery poll, with
+no timer of its own. New suite, red against a stub with the same API and an
+empty `note`, so every failure is an assertion about a decision that was not
+made:
+
+- `TiledDriftMonitorTests.testTwoStablePollsOfTheSameDriftedFrameAskForOneReapply`
+  — red: no decision. Green: one `.reapply`.
+- `...testAnAppThatTakesItsFrameBackStopsTheEpisode` — red: no decision.
+  Green: one `.abandon`, then nothing at all however many more polls drift.
+- `...testALayoutThatHeldForAWhileEarnsAFreshEpisode` — red: no decision after
+  the recurrence window. Green: a second episode is allowed.
+- `...testAWindowBackOnItsTileEndsTheEpisode`,
+  `...testOneWorkspaceGetsOneReapplyHoweverManyOfItsWindowsDrifted`,
+  `...testTwoWorkspacesAreJudgedSeparately`,
+  `...testDriftIsIgnoredWhileSomethingElseOwnsTheGeometry` — all red on the
+  same stub.
+- Green with no red, because the stub already answered them:
+  `...testOneDriftedPollAsksForNothing`, `...testAWindowStillMovingIsNeverReapplied`,
+  `...testDriftBelowTheTolerancesIsIgnored`, `...testAWindowThatLeavesTheReadingsIsForgotten`.
+
+Not pinned by a test: the `WindowManager` side — which windows become
+readings, and that a `.reapply` runs an ordinary `tileWindows` pass. That
+wiring has no seam today and the laptop check is what covers it.

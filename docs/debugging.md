@@ -386,6 +386,21 @@ retry at all: the pass already judged them with the bounds it was told to
 ignore, so a second attempt would decide the same way. Their next turn floats
 them where they stand.
 
+Same-screen drift has two lines of its own, both `[notice] [tiling]`:
+
+```
+tiled drift: 32913 ws1 actual=(0,0,1512,900) intended=(8,41,744,841) — re-applying the layout once
+tiled drift: 32913 ws1 took its frame back after the re-apply — leaving ws1 unverified rather than fighting the app
+unverified mark set for ws1: 32913 drifted again after its one re-apply
+```
+
+The first needs two consecutive polls reading the same drifted frame, and
+there is exactly one per workspace per poll. The second is the bound: the
+app won, and the key stops advertising intended rects until a layout for it
+is accepted. Neither fires while a mouse button is down, while a tiled drag
+is settling, during a display change or a workspace transition, or on a poll
+that retiled anyway.
+
 `admission recovery held:` is the other end of the fallback. After the
 fallback floats a workspace's newcomers, one ordinary retile runs for that
 key. A window this line names is visible, not floating, and in no tree even

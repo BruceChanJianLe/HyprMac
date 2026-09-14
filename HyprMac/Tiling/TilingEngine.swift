@@ -813,6 +813,19 @@ class TilingEngine {
     /// still happens on its own, when a layout for the key is accepted.
     ///
     /// - Returns: whether the mark was dropped.
+    /// Mark `(workspace, screen)` unverified on somebody else's evidence.
+    ///
+    /// For the drift monitor, which watches a tiled window's app take its
+    /// frame back after an accepted layout. The tree stopped describing the
+    /// screen, and nothing here should pretend otherwise until a layout for
+    /// the key is accepted again. No-op for a key with no tree.
+    func markUnverifiedGeometry(forWorkspace workspace: Int, screen: NSScreen, reason: String) {
+        let key = TilingKey(workspace: workspace, screen: screen)
+        guard let tree = trees[key] else { return }
+        mark(key, windowIDs: Set(tree.allWindows.map(\.windowID)), insertedIDs: [], restored: false)
+        hyprLog(.notice, .tiling, "unverified mark set for ws\(workspace): \(reason)")
+    }
+
     @discardableResult
     func clearUnverifiedGeometry(forWorkspace workspace: Int, screen: NSScreen) -> Bool {
         let key = TilingKey(workspace: workspace, screen: screen)

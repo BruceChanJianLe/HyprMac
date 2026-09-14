@@ -322,6 +322,37 @@ against it before the tiled rects — otherwise the click lands on the
 incumbent whose slot it overlaps and `syncTracker-tiled` pulls focus away
 from the window the user just clicked.
 
+### Same-screen drift
+
+An accepted layout is not a promise the app will stay put. Safari's Start
+Page takes its own saved frame back a moment after the write verifies, so a
+second Safari window covered the screen for two minutes — until an unrelated
+Terminal window triggered a retile. Nothing was watching: discovery's `drift`
+only ever noticed a window that changed *screens*.
+
+`TiledDriftMonitor` watches the other case, on the ordinary discovery poll
+and with no timer of its own. A window is offered to it only if it is a
+member of a published tree on a visible workspace and is not floating;
+`intendedTileRects` omits an unverified key whole, so a window whose geometry
+the engine cannot speak for never produces a reading, and the scratchpad
+layer is skipped outright. A poll that retiled is skipped too — that retile
+is the re-apply.
+
+Drift is more than a point of position or twenty points of size away from the
+intended rect, the same tolerances a candidate pass accepts. One reading is
+never enough: two consecutive polls must agree on the drifted frame, so a
+window mid-animation is not chased. Then one re-apply of that workspace's
+layout goes out through the ordinary verified path — one per workspace per
+poll, however many of its windows drifted, because the pass lays out the
+whole key.
+
+The bound is the point. If the app takes its frame back again within five
+seconds, the monitor stops and marks the key unverified instead of trading
+writes with it. A window back on its tile ends the episode, and a window that
+drifts again long after the re-apply held gets a fresh one. Nothing runs
+while something else owns the geometry: a mouse press, a tiled drag settling,
+a display reconfiguration, or a workspace transition.
+
 ### Forced insertion
 
 `forceInsertWindow` is the float→tile entry point. It works on a private

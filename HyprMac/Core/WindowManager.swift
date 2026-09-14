@@ -82,6 +82,10 @@ class WindowManager {
     private let admissionRecovery = AdmissionRecovery()
     private let minimaRevalidation = MinimaRevalidation()
 
+    // a tiled window whose app put it back where it wanted, after our write
+    // was accepted. one bounded re-apply per episode, driven by the poll.
+    private let driftMonitor = TiledDriftMonitor()
+
     // SIGUSR1 → dumpState. armed in start(), cancelled in stop().
     private var dumpStateSignalSource: DispatchSourceSignal?
 
@@ -337,6 +341,13 @@ class WindowManager {
         wireAdmissionRecovery()
 
         self.tiledDragHandler = makeTiledDragHandler()
+        driftMonitor.isSuspended = { [weak self] in
+            guard let self else { return true }
+            return self.mouseButtonDown
+                || self.tiledDragHandler.isFinishingDrag
+                || self.displayTransitionPending
+                || self.suppressions.isSuppressed("workspace-transition")
+        }
 
         // action dispatcher — owns the per-Action routing previously in handleAction.
         self.actionDispatcher = ActionDispatcher(
@@ -682,6 +693,7 @@ class WindowManager {
         isRunning = false
         admissionRecovery.cancelAll(reason: "stop")
         minimaRevalidation.cancelAll(reason: "stop")
+        driftMonitor.reset()
         dumpStateSignalSource?.cancel()
         dumpStateSignalSource = nil
         tiledDragHandler.cancel()
@@ -1532,6 +1544,7 @@ class WindowManager {
         // every pending recovery captured a screen that may no longer own
         // its workspace
         admissionRecovery.cancelAll(reason: "display change")
+        driftMonitor.reset()
         minimaRevalidation.cancelAll(reason: "display change")
         workspaceManager.initializeMonitors()
         tilingEngine.handleDisplayChange(
@@ -1955,6 +1968,7 @@ class WindowManager {
     private func applyForgottenIDExternalCleanup(_ id: CGWindowID) {
         admissionRecovery.forget(id)
         minimaRevalidation.forget(id)
+        driftMonitor.forget(id)
         tilingEngine.forgetMinimumSize(windowID: id)
         workspaceManager.removeWindow(id)
         scratchpad.forget(id)
@@ -2232,6 +2246,10 @@ class WindowManager {
         // readable, or went away — the only thing that can unblock a
         // recovery waiting on evidence
         offerRecoveryEvidence()
+        // a retile already rewrote every frame on the affected keys, so the
+        // frames in this snapshot are what it replaced. drift is the
+        // question for a poll that changed nothing.
+        if !changes.needsRetile { applyTiledDrift(allWindows) }
         repairParkedWindows(allWindows)
         // a guarded cycle diffed nothing, so it can't have seen the close —
         // don't spend a recheck attempt on it, and don't let the slower
@@ -2243,6 +2261,59 @@ class WindowManager {
             hyprLog(.debug, .discovery, "destroy recheck: closed window not yet gone from the snapshot — re-polling")
             pollingScheduler.schedule(after: DestroyRecheck.delay)
         }
+    }
+
+    /// Same-screen drift: hand this poll's tiled frames to the monitor and
+    /// carry out whatever it decides.
+    ///
+    /// Only members of a published tree on a visible workspace are offered.
+    /// `intendedTileRects` omits an unverified key whole, so a window whose
+    /// geometry the engine cannot speak for never produces a reading, and
+    /// the scratchpad layer is skipped outright — its rects come from the
+    /// layer region, not the screen.
+    private func applyTiledDrift(_ allWindows: [HyprWindow]) {
+        let intended = tilingEngine.intendedTileRects()
+        guard !intended.isEmpty else { return }
+        var readings: [TiledDriftReading] = []
+        for window in allWindows {
+            guard let workspace = workspaceManager.workspaceFor(window.windowID),
+                  workspace != ScratchpadController.workspace,
+                  workspaceManager.isWorkspaceVisible(workspace),
+                  !stateCache.floatingWindowIDs.contains(window.windowID),
+                  !window.isFloating,
+                  let rect = intended[window.windowID],
+                  let screen = workspaceManager.homeScreenForWorkspace(workspace),
+                  let actual = window.cachedFrame ?? window.frame
+            else { continue }
+            readings.append(TiledDriftReading(windowID: window.windowID, workspace: workspace,
+                                              screen: screen, actual: actual, intended: rect))
+        }
+
+        for decision in driftMonitor.note(readings) {
+            switch decision {
+            case let .reapply(workspace, screen, _):
+                reapplyLayout(onWorkspace: workspace, screen: screen)
+            case let .abandon(workspace, screen, windowID):
+                tilingEngine.markUnverifiedGeometry(
+                    forWorkspace: workspace, screen: screen,
+                    reason: "\(windowID) drifted again after its one re-apply")
+            }
+        }
+    }
+
+    /// One ordinary verified layout pass for a key whose windows drifted.
+    /// Nothing special: the same path a retile takes, so a refusal rolls
+    /// back and marks the key exactly as it always would.
+    private func reapplyLayout(onWorkspace workspace: Int, screen: NSScreen) {
+        let allWindows = accessibility.getAllWindows()
+        tilingEngine.primeMinimumSizes(allWindows)
+        for w in allWindows where stateCache.floatingWindowIDs.contains(w.windowID) {
+            w.isFloating = true
+        }
+        let assigned = workspaceManager.windowIDs(onWorkspace: workspace)
+        let windows = allWindows.filter { assigned.contains($0.windowID) }
+        tilingEngine.tileWindows(windows, onWorkspace: workspace, screen: screen)
+        updatePositionCache(windows: allWindows)
     }
 
     /// Park self-repair: a hidden-workspace window the OS (or its own app)
