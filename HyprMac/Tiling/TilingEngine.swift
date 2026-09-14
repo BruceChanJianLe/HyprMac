@@ -1109,6 +1109,9 @@ class TilingEngine {
         if toInsert.count > 1 {
             let frames = Dictionary(uniqueKeysWithValues: toInsert.map { ($0.windowID, $0.frame ?? .zero) })
             toInsert.sort { a, b in
+                let aIncumbent = admittedWindowIDs[workspace]?.contains(a.windowID) ?? false
+                let bIncumbent = admittedWindowIDs[workspace]?.contains(b.windowID) ?? false
+                if aIncumbent != bIncumbent { return aIncumbent }
                 let fa = frames[a.windowID] ?? .zero
                 let fb = frames[b.windowID] ?? .zero
                 if fa.origin.x != fb.origin.x { return fa.origin.x < fb.origin.x }

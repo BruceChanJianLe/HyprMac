@@ -68,6 +68,25 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertLessThanOrEqual(writes, 12, "two windows: candidate and restoration only")
     }
 
+    func testReturnedIncumbentGetsItsSlotBeforeALowerIDNewcomer() {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let incumbent = makeWindow(id: 832)
+        let newcomer = makeWindow(id: 831)
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in [incumbent, newcomer] { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
+        XCTAssertTrue(engine.tileWindows([incumbent], onWorkspace: 1, screen: screen).published)
+        engine.removeWindowID(832)
+        incumbent.observedMinSize = rect.size
+
+        let result = engine.tileWindows([newcomer, incumbent], onWorkspace: 1, screen: screen)
+
+        XCTAssertEqual(result.publishedIDs, [832])
+        XCTAssertEqual(result.refusedIDs, [831])
+    }
+
     func testRejectedMembershipKeepsPriorTreeAndActualFrames() throws {
         let f = try fixture()
         f.trace.rejectNextRead = true
@@ -638,7 +657,7 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
 
         let ordinary = f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
         XCTAssertTrue(routed.isEmpty, "assigned windows stay on their workspace")
-        XCTAssertTrue(ordinary.refusedIDs.isEmpty)
+        XCTAssertEqual(ordinary.refusedIDs, [newcomer.windowID])
 
         routed = []
         let revalidated = f.engine.revalidateAdmission(f.windows, incoming: [newcomer.windowID],
@@ -828,12 +847,12 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
     }
 
     private func fixture() throws -> (engine: TilingEngine, tree: BSPTree, windows: [HyprWindow], screen: NSScreen, trace: MembershipTrace) {
-        guard let screen = NSScreen.main ?? NSScreen.screens.first else { throw XCTSkip("requires display geometry") }
+        let screen = NSScreen.main ?? NSScreen.screens.first ?? MembershipHomeScreen()
         let windows = (901...903).map { id in
             HyprWindow(element: AXUIElementCreateApplication(99999), windowID: CGWindowID(id), ownerPID: 99999)
         }
         let trace = MembershipTrace()
-        let engine = TilingEngine(displayManager: DisplayManager(), frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }), frameSizingIOFactory: { _, generation in trace.io(generation) })
         _ = engine.prepareTileLayout(Array(windows.prefix(2)), onWorkspace: 1, screen: screen)
         let tree = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen))
         tree.root.splitRatio = 0.6
@@ -907,5 +926,10 @@ private final class MembershipTrace {
 
 private final class MembershipTestScreen: NSScreen {
     override var frame: NSRect { NSRect(x: 4000, y: 0, width: 1600, height: 1000) }
+    override var visibleFrame: NSRect { frame }
+}
+
+private final class MembershipHomeScreen: NSScreen {
+    override var frame: NSRect { NSRect(x: 0, y: 0, width: 1920, height: 1080) }
     override var visibleFrame: NSRect { frame }
 }

@@ -171,3 +171,16 @@ assertions fail before the change (`red-focus-action.log`). The full suite
 result is recorded in `green-focus-action.log`. Targeted cancellation for
 unrelated membership actions remains a narrower follow-up; this change closes
 the ordinary focus-key interruption without changing geometry ownership.
+Full suite for fix 7: `Executed 725 tests, with 155 tests skipped and 0 failures`.
+
+## Fix 8: restore incumbents before admitting newcomers
+
+The verified-admission history also orders a rebuild: returned incumbents get
+first choice of slots before frame/ID sorting of new arrivals. Without this,
+a lower-ID newcomer can take the empty root and a known large returning
+incumbent is refused, even though recovery correctly excludes that incumbent.
+The new red case fails both membership and refusal assertions. The membership
+fixture now injects its screen into DisplayManager and runs all 48 cases with
+no display skips. That uncovered one old ordinary-refusal expectation missed
+in fix 3; it now expects the returned refusal ID. `red-return-priority.log`
+records all three failures, distinguishing those two causes.
