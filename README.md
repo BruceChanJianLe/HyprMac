@@ -154,7 +154,7 @@ HotkeyManager (CGEventTap)
 Polling and discovery run in parallel:
 
 ```
-PollingScheduler (1 Hz timer + coalesced notification triggers)
+AX notifications + PollingScheduler (10-second fallback timer)
     └→ WindowDiscoveryService.computeChanges
         └→ ActionDispatcher.applyChanges
 ```
@@ -164,6 +164,8 @@ Window-keyed state lives in `WindowStateCache`; focus state in `FocusStateContro
 Everything runs on the main thread. UI-touching classes (`FocusBorder`, `DimmingOverlay`, `KeybindOverlayController`, `CursorManager`, `MouseTrackingManager`) assert this in DEBUG via `mainThreadOnly()`.
 
 For deeper reading:
+
+- [`docs/settings-polish.md`](docs/settings-polish.md) — hover response, focus appearance, and live-update guarantees.
 
 - [`docs/architecture.md`](docs/architecture.md) — long-form architecture, ownership rules, threading.
 - [`docs/tiling-algorithm.md`](docs/tiling-algorithm.md) — BSP dwindle, smart insert, two-pass layout, min-size memory.

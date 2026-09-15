@@ -5,7 +5,8 @@
 // dynamic probing both produced inconsistent results across apps, so
 // we use one user-configurable global radius. Its default remains keyed
 // to the macOS version so existing installations keep their appearance.
-// The same value drives all focus chrome so its curves stay in sync.
+// The value aligns dim cut-outs with optional borders. Hypr key marks
+// have their own stylistic roundness setting.
 
 import Cocoa
 

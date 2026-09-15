@@ -20,6 +20,14 @@ enum ConfigMigration {
         saved.version ?? 1
     }
 
+    /// Brackets shared the persistent focus-border color before they gained
+    /// their own preference. Preserve an explicit legacy color; otherwise nil
+    /// selects the new neutral default.
+    static func resolveFocusBracketColor(saved: SavedConfig) -> String? {
+        guard saved.focusBracketStyle == nil else { return saved.focusBracketColorHex }
+        return saved.focusBracketColorHex ?? saved.focusBorderColorHex
+    }
+
     /// Resolve monitor config, preferring the local file and falling
     /// back to the monitor fields embedded in an older
     /// `SavedConfig`.

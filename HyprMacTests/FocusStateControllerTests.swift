@@ -242,3 +242,53 @@ final class FocusBorderCornerRadiusTests: XCTestCase {
         XCTAssertEqual(renderedRadius, expectedRadius, accuracy: 0.001)
     }
 }
+
+final class FocusBracketAppearanceTests: XCTestCase {
+    override func setUpWithError() throws {
+        if ProcessInfo.processInfo.environment["HYPRMAC_HEADLESS_TESTS"] == "1" {
+            throw XCTSkip("hostless run excludes tests that create AppKit panels")
+        }
+    }
+
+    func testAppearanceUpdatesVisibleBracketsAndOffHidesThem() throws {
+        let brackets = FocusBrackets()
+        brackets.primaryScreenHeight = 1080
+        brackets.show(
+            around: CGRect(x: 100, y: 100, width: 400, height: 300),
+            windowID: 42)
+        XCTAssertEqual(brackets.currentPathCount(), 4)
+
+        brackets.applyAppearance(
+            style: .rounded,
+            color: NSColor.systemGray.cgColor,
+            radius: 6)
+
+        XCTAssertEqual(brackets.currentAppearance().style, .rounded)
+        XCTAssertEqual(brackets.currentAppearance().radius, 6)
+        XCTAssertTrue(brackets.isVisible)
+        let rendered = try XCTUnwrap(brackets.currentAppearance().color)
+        XCTAssertEqual(NSColor(cgColor: rendered)?.usingColorSpace(.sRGB),
+                       NSColor.systemGray.usingColorSpace(.sRGB))
+
+        brackets.applyAppearance(style: .off, color: NSColor.white.cgColor, radius: 14)
+        XCTAssertFalse(brackets.isVisible)
+        XCTAssertNil(brackets.trackedWindowID)
+    }
+
+
+    @MainActor
+    func testRapidHideAndReshowKeepsReusablePanelVisible() async {
+        let brackets = FocusBrackets()
+        brackets.primaryScreenHeight = 1080
+        let frame = CGRect(x: 100, y: 100, width: 400, height: 300)
+        brackets.show(around: frame, windowID: 42)
+        brackets.hide()
+        brackets.show(around: frame, windowID: 42)
+
+        try? await Task.sleep(nanoseconds: 180_000_000)
+
+        XCTAssertTrue(brackets.isVisible)
+        XCTAssertEqual(brackets.trackedWindowID, 42)
+        XCTAssertEqual(brackets.currentPathCount(), 4)
+    }
+}

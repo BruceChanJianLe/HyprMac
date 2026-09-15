@@ -5,6 +5,11 @@
 
 import Foundation
 
+enum FocusBracketStyle: String, Codable {
+    case rounded
+    case off
+}
+
 /// Scalar defaults for `UserConfig`.
 ///
 /// Keybinds and excluded bundle ids live in their type-specific
@@ -19,16 +24,19 @@ enum UserConfigDefaults {
     static let mouseHoverPollHz: Int = 120
     static let hyprKey: HyprKey = .capsLock
     static let showMenuBarIndicator: Bool = true
-    static let showFocusBorder: Bool = true
-    static let dimInactiveWindows: Bool = false
-    static let dimIntensity: Double = 0.2
+    static let showFocusBorder: Bool = false
+    static let focusBracketStyle: FocusBracketStyle = .rounded
+    static let focusBracketRadius: CGFloat = 14
+    static let dimInactiveWindows: Bool = true
+    static let dimIntensity: Double = 0.135
     // shared fade duration for both the focus border (show/hide) and the
     // dim overlay (per-window opacity transitions on focus traversal and
     // global enable/disable). settle and shake on FocusBorder stay at
     // their own constants.
-    static let chromeFadeDurationSec: Double = 0.22
-    // Match the hard-coded radius used before this became configurable:
-    // Tahoe windows are rounder than windows on Sequoia and earlier.
+    static let chromeFadeDurationSec: Double = 0.13
+    // compatibility suggestions, not a per-window measurement. Apple
+    // documents 16/20/26 pt on Tahoe; Golden Gate's exact unified value
+    // is unverified. keep the existing fallback; see docs/settings-polish.md.
     static func windowCornerRadius(forOSMajorVersion majorVersion: Int) -> CGFloat {
         majorVersion >= 26 ? 16 : 10
     }
