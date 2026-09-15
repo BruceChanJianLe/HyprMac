@@ -10,6 +10,7 @@ struct GeneralSettingsView: View {
     let showTutorial: () -> Void
     @ObservedObject var config = UserConfig.shared
     @State private var accessibilityGranted = AccessibilityManager.isAccessibilityEnabled()
+    @StateObject private var loginItem = LoginItemController()
 
     var body: some View {
         VStack(spacing: HyprSpacing.lg) {
@@ -21,6 +22,10 @@ struct GeneralSettingsView: View {
         }
         .onAppear {
             accessibilityGranted = AccessibilityManager.isAccessibilityEnabled()
+            loginItem.refresh()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            loginItem.refresh()
         }
     }
 
@@ -137,7 +142,7 @@ struct GeneralSettingsView: View {
 
     private var systemPanel: some View {
         HyprPanel("System",
-                  footer: "Add HyprMac to Login Items in System Settings → General → Login Items to launch at startup.") {
+                  footer: loginItemFooter) {
             HyprRow("Menu bar workspace indicator", icon: "rectangle.fill.on.rectangle.fill") {
                 Toggle("", isOn: $config.showMenuBarIndicator)
                     .toggleStyle(HyprToggleStyle())
@@ -155,14 +160,33 @@ struct GeneralSettingsView: View {
                         subtitle: "Enable iCloud Drive in System Settings") { EmptyView() }
             }
 
-            Button { openLoginItems() } label: {
-                HyprRow("Launch at login", icon: "power", divider: false) {
-                    HyprChip("MANUAL ↗")
+            HyprRow("Launch at login", icon: "power", divider: false) {
+                switch loginItem.state {
+                case .enabled:
+                    HStack(spacing: HyprSpacing.sm) {
+                        HyprAccentBadge("ENABLED", icon: "checkmark")
+                        Button("Manage") { loginItem.openLoginItems() }
+                            .controlSize(.small)
+                    }
+                case .notEnabled:
+                    Button("Enable") { loginItem.enable() }
+                        .controlSize(.small)
+                case .requiresApproval, .failed:
+                    Button("Open Login Items") { loginItem.openLoginItems() }
+                        .controlSize(.small)
                 }
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
         }
+    }
+
+    private var loginItemFooter: String {
+        if let instruction = loginItem.instructionText {
+            return instruction
+        }
+        if loginItem.state == .enabled {
+            return "\(loginItem.appName) will launch automatically when you sign in. You can turn it off in System Settings → General → Login Items."
+        }
+        return "Start \(loginItem.appName) automatically when you sign in."
     }
 
     // MARK: footer — replay tour + reset
@@ -193,12 +217,6 @@ struct GeneralSettingsView: View {
     }
 
     // MARK: helpers
-
-    private func openLoginItems() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension") {
-            NSWorkspace.shared.open(url)
-        }
-    }
 
     private func pickExcludedApp() {
         let panel = NSOpenPanel()

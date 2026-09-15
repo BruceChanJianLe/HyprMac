@@ -40,18 +40,18 @@ The default uses dimming and corner cues while the Hypr key is held. Persistent 
 | Dim amount | 20% | 13.5% |
 | Dim slider | 5–60% | 0–27% |
 | Persistent borders | On | Off |
-| Corner cue color | Shared focus color, cyan by default | Neutral |
+| Corner cue color | Shared focus color, cyan by default | Black |
 | Dimming/border fade | 220 ms | 130 ms |
 
 Zach requested his current dim level at the midpoint. The new 0–27% range puts the observed 13.46% almost exactly halfway. Existing stronger saved amounts remain intact; opening settings does not clamp or rewrite them. The displayed percentage reports the saved amount, and using the slider chooses a value in the new range.
 
-Window shape and key-press marks have separate controls. **Window corner radius** keeps the existing `windowCornerRadius` override and shapes only dimming cut-outs and optional window borders. **Mark roundness** shapes only the four Hypr-key marks; zero gives square marks and higher values round their corner arcs. The marks have a 14-point design default. The follow-up below consolidates their visibility with the border choice. Changing either radius updates only appearance. Color is independent of the persistent border and defaults to white with a black contrast stroke. Both stroke widths are quieter than before (3-point foreground, 5-point contrast). The fixed corner entrance/release timings remain unchanged; the fade slider controls borders, dimming, and the scratchpad scrim.
+Window shape and key-press marks have separate controls. **Window corner radius** keeps the existing `windowCornerRadius` override and shapes only dimming cut-outs and optional window borders. **Mark roundness** shapes only the four Hypr-key marks; zero gives square marks and higher values round their corner arcs. The marks default to 20-point roundness, 15-point straight segments, and 4.5-point thickness, matching the saved MacBook settings. The follow-up below consolidates their visibility with the border choice. Changing either radius updates only appearance. Color is independent of the persistent border and defaults to black with a white contrast stroke (4.5-point foreground, 6.5-point contrast). The fixed corner entrance/release timings remain unchanged; the fade slider controls borders, dimming, and the scratchpad scrim.
 
 Explicit saved dimming, border, color, radius, and fade preferences remain authoritative. Missing fields, fresh configurations, and Reset to Defaults use the new baseline. Error feedback still shows a red overlay shake and message after rejection even when persistent borders or corner cues are off. It does not shake application windows.
 
 ### Corner compatibility
 
-The optional `focusBracketStyle`, `focusBracketColorHex`, and `focusBracketRadius` fields extend the existing configuration without renaming its keys. For an older file with no style field, an explicit focus-border color becomes the initial bracket color. Once the new style field is saved, an absent bracket color means neutral and never reimports the old border color. Thus the laptop's saved black cue is preserved until changed deliberately. Old builds can ignore the new fields, but may discard them if they rewrite the shared file; cross-version iCloud writes cannot preserve preferences unknown to the old writer.
+The optional `focusBracketStyle`, `focusBracketColorHex`, and `focusBracketRadius` fields extend the existing configuration without renaming its keys. For an older file with no style field, an explicit focus-border color becomes the initial bracket color. Once the new style field is saved, an absent bracket color means the black default and never reimports the old border color. Thus the laptop's saved black cue is preserved until changed deliberately. Old builds can ignore the new fields, but may discard them if they rewrite the shared file; cross-version iCloud writes cannot preserve preferences unknown to the old writer.
 
 ### Window-radius research
 
@@ -102,13 +102,13 @@ Deterministic routing tests establish the routing boundary; they do not establis
 
 ## Tutorial and appearance follow-up
 
-The first-run screen is now a six-page **HyprMac tutorial** covering the Hypr key, tiled and floating windows, focus and swaps, workspaces, the menu-bar workspace glyphs, and recovery/help. It uses the configured Hypr key and bindings. The menu bar has a Tutorial action, and the searchable keymap opened by the default **Caps + K** includes a Tutorial button. The misleading Command-Q label has been removed from Quit in the menu bar.
+The first-run screen is now a seven-page **HyprMac tutorial** covering the Hypr key, tiled and floating windows, focus and swaps, workspaces, the menu-bar workspace glyphs, recovery/help, and the launch-at-login choice. It uses the configured Hypr key and bindings. The menu bar has a Tutorial action, and the searchable keymap opened by the default **Caps + K** includes a Tutorial button. The misleading Command-Q label has been removed from Quit in the menu bar.
 
 **Caps + P** is the default pause/resume shortcut. The keyboard event tap stays alive while tiling is paused, including when the app starts paused. Layout and mouse tracking stop; pause/resume and keyboard help remain available. Repeated key-down events do not toggle tiling repeatedly. Existing custom bindings remain authoritative: if Caps + P is already occupied, the new action is not injected over it and can be assigned in Settings. The existing default-merge rules also apply to configuration reloads.
 
 The Focus indicator picker offers **Corners**, **Window borders**, or **None**. Dimming remains independent. Existing configurations with both enabled show **Both (saved)** until the user chooses another mode; the UI does not encourage creating that combined configuration. Color and shape controls appear with their corresponding indicator. Border colors are labelled **Tiled window color** and **Floating window color**. **Fade duration** replaces the internal-sounding Chrome fade label.
 
-Corner marks gain a **Mark thickness** slider. The straight segments and entrance offset scale with thickness, while mark roundness remains independently adjustable. Both corner-radius controls have reset buttons. **Reset appearance defaults** restores the appearance baseline without changing layout, shortcuts, exclusions, or monitors. General settings retains the separate reset for all settings.
+Corner marks have separate **Mark thickness** and **Mark length** sliders. Thickness controls the stroke width; length controls each straight segment. Mark roundness remains independently adjustable. Older saved thickness settings retain their previous segment length on upgrade, after which the two values can be changed independently. Both corner-radius controls have reset buttons. **Reset appearance defaults** restores the appearance baseline without changing layout, shortcuts, exclusions, or monitors. General settings retains the separate reset for all settings.
 
 HyprMac's Settings, Tutorial, and keyboard-help windows now use a window level immediately above the passive border panels. Previously, they shared the same floating level, so ordering a border forward could draw it over the app's own interface. This changes overlay ordering only; it does not mutate managed window geometry or assignments.
 
@@ -150,3 +150,13 @@ The clicked menu retains the simpler monitor-name/current-workspace rows from th
 Both keyboard help and Settings → Keys now list **HYPR + drag** as a mouse gesture. Settings explains that holding HYPR while dragging a tiled window by its title bar onto another tile swaps them within the same workspace. This is a help entry, not a new editable keyboard binding.
 
 Validation passed all 6 focused menu-presentation tests and the full isolated suite: **846 tests, 94 display-dependent skips, zero failures** (752 non-skipped passes). Signed Debug and unsigned Release builds passed for arm64 and x86_64. The signed `d38c064` Debug build was installed and launched on the MacBook after resetting its onboarding flag. Startup confirmed Accessibility trust and a running manager. Both configuration files and the release app remained byte-for-byte unchanged. Logs: `build/polish/glyph-focused-tests.log`, `build/polish/glyph-full-tests.log`, `build/polish/glyph-signed-debug-build.log`, `build/polish/glyph-release-build.log`, and `build/polish/glyph-deployment.log`.
+
+### Control groups
+
+Mark roundness, length, thickness, and corner color form one group without internal dividers. With window borders enabled, tiled color, floating color, and fade duration form one group. Fade remains available for dimming even when window borders are disabled. Fresh installs select Corners with persistent window borders off. Explicit saved choices remain intact.
+
+### Launch at login setup
+
+The tutorial ends with an optional launch-at-login prompt. Skip goes directly to this prompt; Not now closes setup without changing login items. Yes registers the current app through Apple's `SMAppService.mainApp`. An enabled service is confirmed from macOS status. If approval is required or registration fails, HyprMac opens Login Items and displays the remaining steps. General settings provides the same enable/status controls and a way to manage Login Items later. Returning from System Settings refreshes the status. The choice is local to this Mac and is not synced through UserConfig.
+
+Registration is tested with injected service actions so the suite does not modify real login items. Actual first-login launching and approval UI need a manual macOS check. References: [Apple SMAppService](https://developer.apple.com/documentation/servicemanagement/smappservice) and [Login Items instructions](https://support.apple.com/en-ca/guide/mac-help/-mh15189/mac).

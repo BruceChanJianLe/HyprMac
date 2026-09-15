@@ -253,6 +253,8 @@ final class FocusBracketAppearanceTests: XCTestCase {
     func testAppearanceUpdatesVisibleBracketsAndOffHidesThem() throws {
         let brackets = FocusBrackets()
         brackets.primaryScreenHeight = 1080
+        brackets.applyAppearance(style: .rounded, color: NSColor.white.cgColor,
+                                 radius: 14, thickness: 3, length: 14)
         brackets.show(
             around: CGRect(x: 100, y: 100, width: 400, height: 300),
             windowID: 42)
@@ -263,12 +265,19 @@ final class FocusBracketAppearanceTests: XCTestCase {
             style: .rounded,
             color: NSColor.systemGray.cgColor,
             radius: 14,
-            thickness: 5)
+            thickness: 5,
+            length: 14)
         XCTAssertEqual(brackets.currentStrokeWidths().mark, 5)
         XCTAssertEqual(brackets.currentStrokeWidths().outline, 7)
         let thickBounds = try XCTUnwrap(brackets.currentPathBounds())
-        XCTAssertGreaterThan(thickBounds.width, defaultBounds.width)
-        XCTAssertGreaterThan(thickBounds.height, defaultBounds.height)
+        XCTAssertEqual(thickBounds, defaultBounds)
+        brackets.applyAppearance(
+            style: .rounded, color: NSColor.systemGray.cgColor,
+            radius: 14, thickness: 5, length: 28)
+        let longBounds = try XCTUnwrap(brackets.currentPathBounds())
+        XCTAssertGreaterThan(longBounds.width, thickBounds.width)
+        XCTAssertGreaterThan(longBounds.height, thickBounds.height)
+        XCTAssertEqual(brackets.currentStrokeWidths().mark, 5)
 
         brackets.applyAppearance(
             style: .rounded,
@@ -304,5 +313,22 @@ final class FocusBracketAppearanceTests: XCTestCase {
         XCTAssertTrue(brackets.isVisible)
         XCTAssertEqual(brackets.trackedWindowID, 42)
         XCTAssertEqual(brackets.currentPathCount(), 4)
+    }
+}
+
+final class FocusBracketDimensionTests: XCTestCase {
+    func testLengthAndThicknessUpdateIndependentlyWithoutShowingPanels() {
+        let brackets = FocusBrackets()
+        brackets.applyAppearance(style: .rounded, color: NSColor.white.cgColor,
+                                 radius: 14, thickness: 3, length: 20)
+        brackets.applyAppearance(style: .rounded, color: NSColor.white.cgColor,
+                                 radius: 14, thickness: 6, length: 20)
+        XCTAssertEqual(brackets.currentAppearance().length, 20)
+        XCTAssertEqual(brackets.currentAppearance().thickness, 6)
+        brackets.applyAppearance(style: .rounded, color: NSColor.white.cgColor,
+                                 radius: 14, thickness: 6, length: 10)
+        XCTAssertEqual(brackets.currentAppearance().length, 10)
+        XCTAssertEqual(brackets.currentAppearance().thickness, 6)
+        XCTAssertFalse(brackets.isVisible)
     }
 }

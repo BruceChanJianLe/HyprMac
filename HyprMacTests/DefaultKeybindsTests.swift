@@ -8,6 +8,45 @@ import Carbon
 
 final class DefaultKeybindsTests: XCTestCase {
 
+    func testToggleFloatDefaultAndDisplaysOmitShift() throws {
+        let binds = Keybind.defaults.filter { $0.action == .toggleFloating }
+        XCTAssertEqual(binds.count, 1)
+        let bind = try XCTUnwrap(binds.first)
+        XCTAssertEqual(bind.keyCode, UInt16(kVK_ANSI_T))
+        XCTAssertEqual(bind.modifiers, .hypr)
+        XCTAssertFalse(bind.modifiers.contains(.shift))
+        XCTAssertEqual(bind.displayString, "HYPR+T")
+        XCTAssertEqual(bind.badgeLabels(hyprLabel: "⇪"), ["⇪", "T"])
+        XCTAssertEqual(bind.overlayChord, "HYPR T")
+        XCTAssertEqual(Keybind.defaults.filter { $0.id == bind.id }, [bind])
+    }
+
+    func testFloatDispatchRequiresHyprWithoutShift() {
+        let manager = HotkeyManager()
+        manager.updateKeybinds(Keybind.defaults)
+        let dispatched = expectation(description: "float dispatched once")
+        var actions: [Action] = []
+        manager.onAction = { actions.append($0); dispatched.fulfill() }
+        let hypr = CGEvent(keyboardEventSource: nil,
+                           virtualKey: CGKeyCode(HyprKey.capsLock.keyCode), keyDown: true)!
+        XCTAssertNil(manager.handleEvent(.keyDown, hypr))
+        let shifted = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(kVK_ANSI_T), keyDown: true)!
+        shifted.flags = .maskShift
+        XCTAssertNotNil(manager.handleEvent(.keyDown, shifted))
+        let plain = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(kVK_ANSI_T), keyDown: true)!
+        plain.flags = []
+        XCTAssertNil(manager.handleEvent(.keyDown, plain))
+        wait(for: [dispatched], timeout: 1)
+        XCTAssertEqual(actions, [.toggleFloating])
+    }
+
+    func testBadgeFormatterPreservesModifierOrder() {
+        let bind = Keybind(keyCode: UInt16(kVK_ANSI_T),
+                          modifiers: [.hypr, .control, .option, .shift, .command], action: .toggleFloating)
+        XCTAssertEqual(bind.badgeLabels(), ["HYPR", "⌃", "⌥", "⇧", "⌘", "T"])
+        XCTAssertEqual(bind.overlayChord, "HYPR ⌃ ⌥ ⇧ ⌘ T")
+    }
+
     func testEveryDefaultRoundTripsThroughCodable() throws {
         let encoder = JSONEncoder()
         let decoder = JSONDecoder()

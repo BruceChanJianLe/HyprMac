@@ -224,7 +224,7 @@ Sparkle to detect it) and walk through:
   workspace move.
 - Drag-swap on a single monitor and across monitors (if
   multi-display setup is available).
-- Float toggle (`Hypr+Shift+T`) and float cycle (`Hypr+F`).
+- Float toggle (`Hypr+T`) and float cycle (`Hypr+F`).
 - App quit + reopen — windows return to their workspaces.
 - Welcome / What's-New panel appears on first launch of the new
   version.

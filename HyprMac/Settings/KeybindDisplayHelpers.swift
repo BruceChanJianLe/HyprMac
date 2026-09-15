@@ -7,6 +7,19 @@ import SwiftUI
 extension Keybind {
     var keyCodeName: String { keyCodeToName(keyCode) }
 
+    func badgeLabels(hyprLabel: String = "HYPR") -> [String] {
+        var parts: [String] = []
+        if modifiers.contains(.hypr) { parts.append(hyprLabel) }
+        if modifiers.contains(.control) { parts.append("⌃") }
+        if modifiers.contains(.option) { parts.append("⌥") }
+        if modifiers.contains(.shift) { parts.append("⇧") }
+        if modifiers.contains(.command) { parts.append("⌘") }
+        parts.append(keyCodeName)
+        return parts
+    }
+
+    var overlayChord: String { badgeLabels().joined(separator: " ") }
+
     var displayString: String {
         var parts: [String] = []
         if modifiers.contains(.hypr)    { parts.append("HYPR") }

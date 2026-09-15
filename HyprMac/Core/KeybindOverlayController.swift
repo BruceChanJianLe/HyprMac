@@ -471,7 +471,7 @@ private struct KeybindOverlayView: View {
     }
 
     private func plainRow(_ bind: Keybind) -> OverlayRow {
-        let chord = chordString(modifiers: bind.modifiers, key: bind.keyCodeName)
+        let chord = bind.overlayChord
         return OverlayRow(description: bind.actionDescription,
                           chord: chord,
                           isFloating: isFloatingAction(bind.action))

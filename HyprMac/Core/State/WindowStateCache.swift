@@ -56,7 +56,7 @@ final class WindowStateCache {
     /// the window disappears, mark hidden and keep state; if dead, forget.
     var windowOwners: [CGWindowID: pid_t] = [:]
 
-    /// Windows excluded from tiling. User-toggled via `Hypr+Shift+T` or
+    /// Windows excluded from tiling. User-toggled via `Hypr+T` or
     /// auto-floated by depth, min-size, or excluded-app rules. BSP
     /// membership is computed; floating membership is the negation.
     var floatingWindowIDs: Set<CGWindowID> = []

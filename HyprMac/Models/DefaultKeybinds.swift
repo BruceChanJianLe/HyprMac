@@ -61,8 +61,8 @@ extension Keybind {
         binds.append(Keybind(keyCode: UInt16(kVK_DownArrow), modifiers: [.hypr, .control, .shift],
                              action: .resizeDirection(.down)))
 
-        // hypr + shift + t: toggle floating
-        binds.append(Keybind(keyCode: UInt16(kVK_ANSI_T), modifiers: [.hypr, .shift],
+        // hypr + t: toggle floating
+        binds.append(Keybind(keyCode: UInt16(kVK_ANSI_T), modifiers: .hypr,
                              action: .toggleFloating))
 
         // hypr + j: toggle split direction (transpose)

@@ -11,12 +11,9 @@ struct KeybadgeView: View {
 
     var body: some View {
         HStack(spacing: 3) {
-            if bind.modifiers.contains(.hypr)    { KeyChip(config.hyprKey.badgeLabel) }
-            if bind.modifiers.contains(.control) { KeyChip("⌃") }
-            if bind.modifiers.contains(.option)  { KeyChip("⌥") }
-            if bind.modifiers.contains(.shift)   { KeyChip("⇧") }
-            if bind.modifiers.contains(.command) { KeyChip("⌘") }
-            KeyChip(bind.keyCodeName)
+            ForEach(Array(bind.badgeLabels(hyprLabel: config.hyprKey.badgeLabel).enumerated()), id: \.offset) { _, label in
+                KeyChip(label)
+            }
         }
     }
 }

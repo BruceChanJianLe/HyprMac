@@ -468,7 +468,8 @@ class WindowManager {
     private func applyChromeConfig(_ state: RuntimeConfigState, changes: ChromeConfigChanges) {
         let focusColor = state.focusBorderColorHex.flatMap(NSColor.fromHex) ?? .hyprCyan
         let floatingColor = state.floatingBorderColorHex.flatMap(NSColor.fromHex) ?? .hyprMagenta
-        let bracketColor = state.focusBracketColorHex.flatMap(NSColor.fromHex) ?? .white
+        let bracketColor = state.focusBracketColorHex.flatMap(NSColor.fromHex)
+            ?? UserConfigDefaults.focusBracketColor
 
         if changes.contains(.colors) {
             let trackedID = focusBorder.trackedWindowID ?? 0
@@ -483,7 +484,8 @@ class WindowManager {
                 style: state.focusBracketStyle,
                 color: bracketColor.cgColor,
                 radius: state.focusBracketRadius,
-                thickness: state.focusBracketThickness)
+                thickness: state.focusBracketThickness,
+                length: state.focusBracketLength)
             if FocusBracketAppearanceUpdate.shouldShow(
                 isRunning: isRunning,
                 hyprHeld: hyprHeld,
@@ -565,7 +567,8 @@ class WindowManager {
             style: config.focusBracketStyle,
             color: config.resolvedFocusBracketColor.cgColor,
             radius: config.resolvedFocusBracketRadius,
-            thickness: config.resolvedFocusBracketThickness)
+            thickness: config.resolvedFocusBracketThickness,
+            length: config.resolvedFocusBracketLength)
         focusBorder.refreshAppearance(
             focusColor: config.resolvedFocusBorderColor.cgColor,
             floatingColor: config.resolvedFloatingBorderColor.cgColor)
@@ -1025,7 +1028,8 @@ class WindowManager {
                 style: config.focusBracketStyle,
                 color: config.resolvedFocusBracketColor.cgColor,
                 radius: config.resolvedFocusBracketRadius,
-                thickness: config.resolvedFocusBracketThickness)
+                thickness: config.resolvedFocusBracketThickness,
+                length: config.resolvedFocusBracketLength)
             focusBrackets.show(around: frame, windowID: window.windowID)
         }
         if config.showFocusBorder, let frame = window.frame {
@@ -1061,7 +1065,8 @@ class WindowManager {
             style: config.focusBracketStyle,
             color: config.resolvedFocusBracketColor.cgColor,
             radius: config.resolvedFocusBracketRadius,
-            thickness: config.resolvedFocusBracketThickness)
+            thickness: config.resolvedFocusBracketThickness,
+            length: config.resolvedFocusBracketLength)
         focusBrackets.show(around: frame, windowID: fid)
     }
 
@@ -1359,7 +1364,7 @@ class WindowManager {
             case .switchWorkspace, .cycleWorkspace:
                 scratchpad.hide(reason: .workspaceAction)
             case .toggleFloating:
-                // Shift+T on a summoned member toggles it tiled<->floating
+                // Hypr+T on a summoned member toggles it tiled<->floating
                 // within the layer (membership stays sticky — only Shift+S /
                 // Shift+N take a member out). non-member focus while the layer
                 // is up still treats the key as a send.
@@ -1808,7 +1813,7 @@ class WindowManager {
     private func isSelectableInCurrentContext(_ windowID: CGWindowID, workspaceWindows: Set<CGWindowID>) -> Bool {
         // a summoned scratchpad member is a valid target while the layer is up,
         // whether floating or tiled-within-the-layer. tiled members aren't in
-        // floatingWindowIDs, so without this the untile (Hypr+Shift+T) resolver
+        // floatingWindowIDs, so without this the untile (Hypr+T) resolver
         // can't find them and the toggle silently no-ops.
         if scratchpad.isVisible && scratchpad.isSummoned(windowID) { return true }
         if workspaceWindows.contains(windowID) { return true }

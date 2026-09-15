@@ -74,6 +74,8 @@ cp -r build/Build/Products/Debug/HyprMac.app /Applications/
 ## Keybinds
 
 All keybinds are configurable in Settings (menubar icon → Settings → Keybinds).
+Toggle Float uses **Hypr+T**, without Shift. On startup and config reload, an exact legacy Hypr+Shift+T Toggle Float binding moves to Hypr+T only if the new chord is free and there is a single, unambiguous Toggle Float binding. Customized bindings and occupied chords stay unchanged. The migrated value is written on the next normal settings save. A deliberately chosen binding identical to the old default cannot be distinguished from that default.
+
 The physical Hypr key is configurable in Settings → General. Options include Caps Lock, Tab, backtick, backslash, F13-F20, and left/right variants of Shift, Control, Option, and Command.
 
 ### Defaults
@@ -83,7 +85,7 @@ The physical Hypr key is configurable in Settings → General. Options include C
 | `⇪ + ←/→/↑/↓` | Focus window in direction |
 | `⇪ + ⇧ + ←/→/↑/↓` | Swap window in direction |
 | `⇪ + J` | Toggle split direction |
-| `⇪ + ⇧ + T` | Toggle floating/tiling |
+| `⇪ + T` | Toggle floating/tiling |
 | `⇪ + F` | Cycle focus through floating windows |
 | `⇪ + 1–9` | Switch to workspace N |
 | `⇪ + ⇧ + 1–9` | Move window to workspace N |

@@ -303,7 +303,7 @@ final class ScratchpadController {
 
     /// Hypr+Shift+S. Symmetric toggle: sends the focused window into the
     /// scratchpad, or — on a window that's already summoned — takes it back
-    /// out into tiling. Shift+S and Shift+N are the only exits; Shift+T
+    /// out into tiling. Shift+S and Shift+N are the only exits; Hypr+T
     /// never removes membership. The scratchpad is a place windows go and
     /// return from, not a hold pen.
     func sendFocusedWindow() {
@@ -479,7 +479,7 @@ final class ScratchpadController {
         return true
     }
 
-    /// Hypr+Shift+T on a summoned member: toggle it between floating and
+    /// Hypr+T on a summoned member: toggle it between floating and
     /// tiled-within-the-layer. Membership is untouched either way — the
     /// member stays on ws 0. Returns true when the focused window was a
     /// summoned member and the toggle was handled (including a rejected

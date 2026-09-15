@@ -230,6 +230,7 @@ struct SavedConfig: Codable {
     let focusBracketColorHex: String?
     let focusBracketRadius: CGFloat?
     let focusBracketThickness: CGFloat?
+    var focusBracketLength: CGFloat? = nil
     let dimInactiveWindows: Bool?
     let dimIntensity: Double?
     let mouseHoverPollHz: Int?
@@ -259,6 +260,7 @@ extension SavedConfig {
         case maxSplitsPerMonitor, disabledMonitors
         case showFocusBorder, focusBorderColorHex, floatingBorderColorHex
         case focusBracketStyle, focusBracketColorHex, focusBracketRadius, focusBracketThickness
+        case focusBracketLength
         case dimInactiveWindows, dimIntensity, mouseHoverPollHz
         case chromeFadeDurationSec, windowCornerRadius
         case scratchpadTileByDefault, scratchpadRegionInset
@@ -313,6 +315,7 @@ extension SavedConfig {
         self.focusBracketColorHex = try c.decodeIfPresent(String.self, forKey: .focusBracketColorHex)
         self.focusBracketRadius = try c.decodeIfPresent(CGFloat.self, forKey: .focusBracketRadius)
         self.focusBracketThickness = try c.decodeIfPresent(CGFloat.self, forKey: .focusBracketThickness)
+        self.focusBracketLength = try c.decodeIfPresent(CGFloat.self, forKey: .focusBracketLength)
         self.dimInactiveWindows = try c.decodeIfPresent(Bool.self, forKey: .dimInactiveWindows)
         self.dimIntensity = try c.decodeIfPresent(Double.self, forKey: .dimIntensity)
         self.mouseHoverPollHz = try c.decodeIfPresent(Int.self, forKey: .mouseHoverPollHz)

@@ -233,9 +233,10 @@ struct KeybindsSettingsView: View {
     private var hyprHeroPanel: some View {
         HStack(spacing: HyprSpacing.lg - 2) {
             // 52×52 keycap glyph with a brighter bottom bevel
-            Text("HYPR")
-                .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+            Text("⇪")
+                .font(.system(size: 30, weight: .medium, design: .monospaced))
                 .foregroundStyle(Color.hyprCyan)
+                .offset(y: -3)
                 .frame(width: 52, height: 52)
                 .background(
                     RoundedRectangle(cornerRadius: 9, style: .continuous)

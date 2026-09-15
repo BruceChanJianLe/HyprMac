@@ -70,7 +70,7 @@ class UserConfig: ObservableObject {
     @Published var focusBracketStyle: FocusBracketStyle {
         didSet { persistRuntimeChange() }
     }
-    // nil means neutral monochrome brackets
+    // nil means the default black brackets
     @Published var focusBracketColorHex: String? {
         didSet { persistRuntimeChange() }
     }
@@ -85,6 +85,12 @@ class UserConfig: ObservableObject {
     }
     var resolvedFocusBracketThickness: CGFloat {
         focusBracketThicknessOverride ?? UserConfigDefaults.focusBracketThickness
+    }
+    @Published var focusBracketLengthOverride: CGFloat? {
+        didSet { persistRuntimeChange() }
+    }
+    var resolvedFocusBracketLength: CGFloat {
+        focusBracketLengthOverride ?? UserConfigDefaults.focusBracketLength
     }
     @Published var dimInactiveWindows: Bool {
         didSet { persistRuntimeChange() }
@@ -175,6 +181,7 @@ class UserConfig: ObservableObject {
             self.focusBracketColorHex = ConfigMigration.resolveFocusBracketColor(saved: saved)
             self.focusBracketRadiusOverride = saved.focusBracketRadius
             self.focusBracketThicknessOverride = saved.focusBracketThickness
+            self.focusBracketLengthOverride = Self.resolveSavedFocusBracketLength(saved)
             self.dimInactiveWindows = saved.dimInactiveWindows ?? UserConfigDefaults.dimInactiveWindows
             self.dimIntensity = saved.dimIntensity ?? UserConfigDefaults.dimIntensity
             self.chromeFadeDurationSec = saved.chromeFadeDurationSec ?? UserConfigDefaults.chromeFadeDurationSec
@@ -198,6 +205,7 @@ class UserConfig: ObservableObject {
             self.focusBracketColorHex = nil
             self.focusBracketRadiusOverride = nil
             self.focusBracketThicknessOverride = nil
+            self.focusBracketLengthOverride = nil
             self.dimInactiveWindows = UserConfigDefaults.dimInactiveWindows
             self.dimIntensity = UserConfigDefaults.dimIntensity
             self.chromeFadeDurationSec = UserConfigDefaults.chromeFadeDurationSec
@@ -232,6 +240,7 @@ class UserConfig: ObservableObject {
     // would silently shadow (or be shadowed by) the user's, and neither is
     // discoverable. the user can bind the new action manually in Settings.
     static func mergeNewDefaults(saved: [Keybind]) -> [Keybind] {
+        let saved = ConfigMigration.migrateToggleFloating(saved: saved)
         let savedActions = Set(saved.map { "\($0.action)" })
         let takenChords = Set(saved.map { "\($0.modifiers.rawValue)-\($0.keyCode)" })
         var merged = saved
@@ -250,6 +259,14 @@ class UserConfig: ObservableObject {
         "com.apple.FaceTime",
         "com.apple.systempreferences",
     ]
+
+    private static func resolveSavedFocusBracketLength(_ saved: SavedConfig) -> CGFloat {
+        if let length = saved.focusBracketLength { return max(4, min(40, length)) }
+        let savedThickness = saved.focusBracketThickness ?? 3
+        let thickness = max(1, min(6, savedThickness))
+        let legacyLength: CGFloat = 14 * (thickness / 3)
+        return max(4, min(40, legacyLength))
+    }
 
     func save() {
         store.writeSavedConfig(makeSavedConfig())
@@ -285,6 +302,7 @@ class UserConfig: ObservableObject {
             focusBracketColorHex: focusBracketColorHex,
             focusBracketRadius: focusBracketRadiusOverride,
             focusBracketThickness: focusBracketThicknessOverride,
+            focusBracketLength: resolvedFocusBracketLength,
             dimInactiveWindows: dimInactiveWindows,
             dimIntensity: dimIntensity,
             mouseHoverPollHz: mouseHoverPollHz,
@@ -313,6 +331,7 @@ class UserConfig: ObservableObject {
         focusBracketColorHex = nil
         focusBracketRadiusOverride = nil
         focusBracketThicknessOverride = nil
+        focusBracketLengthOverride = nil
         dimInactiveWindows = UserConfigDefaults.dimInactiveWindows
         dimIntensity = UserConfigDefaults.dimIntensity
         chromeFadeDurationSec = UserConfigDefaults.chromeFadeDurationSec
@@ -331,6 +350,7 @@ class UserConfig: ObservableObject {
         focusBracketColorHex = nil
         focusBracketRadiusOverride = nil
         focusBracketThicknessOverride = nil
+        focusBracketLengthOverride = nil
         windowCornerRadiusOverride = nil
         showFocusBorder = UserConfigDefaults.showFocusBorder
         focusBorderColorHex = nil
@@ -364,7 +384,7 @@ class UserConfig: ObservableObject {
 
     var resolvedFocusBracketColor: NSColor {
         if let hex = focusBracketColorHex, let color = NSColor.fromHex(hex) { return color }
-        return .white
+        return UserConfigDefaults.focusBracketColor
     }
 
     func reloadFromDisk() {
@@ -387,6 +407,7 @@ class UserConfig: ObservableObject {
         focusBracketColorHex = ConfigMigration.resolveFocusBracketColor(saved: saved)
         focusBracketRadiusOverride = saved.focusBracketRadius
         focusBracketThicknessOverride = saved.focusBracketThickness
+        focusBracketLengthOverride = Self.resolveSavedFocusBracketLength(saved)
         dimInactiveWindows = saved.dimInactiveWindows ?? UserConfigDefaults.dimInactiveWindows
         dimIntensity = saved.dimIntensity ?? UserConfigDefaults.dimIntensity
         chromeFadeDurationSec = saved.chromeFadeDurationSec ?? UserConfigDefaults.chromeFadeDurationSec
@@ -430,6 +451,7 @@ extension SavedConfig {
             focusBracketColorHex: nil,
             focusBracketRadius: nil,
             focusBracketThickness: nil,
+            focusBracketLength: UserConfigDefaults.focusBracketLength,
             dimInactiveWindows: UserConfigDefaults.dimInactiveWindows,
             dimIntensity: UserConfigDefaults.dimIntensity,
             mouseHoverPollHz: UserConfigDefaults.mouseHoverPollHz,

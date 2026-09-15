@@ -19,18 +19,33 @@ import AppKit
 
 final class ConfigMigrationTests: XCTestCase {
 
-    func testFocusChromeDefaultsUseDimAndNeutralCorners() {
+    func testFocusChromeDefaultsUseDimAndBlackCorners() {
         XCTAssertFalse(UserConfigDefaults.showFocusBorder)
         XCTAssertTrue(UserConfigDefaults.dimInactiveWindows)
         XCTAssertEqual(UserConfigDefaults.dimIntensity, 0.135, accuracy: 0.0001)
         XCTAssertEqual(UserConfigDefaults.chromeFadeDurationSec, 0.13, accuracy: 0.0001)
         XCTAssertEqual(UserConfigDefaults.focusBracketStyle, .rounded)
-        XCTAssertEqual(UserConfigDefaults.focusBracketRadius, 14)
-        XCTAssertEqual(UserConfigDefaults.focusBracketThickness, 3)
+        XCTAssertEqual(UserConfigDefaults.focusBracketRadius, 20)
+        XCTAssertEqual(UserConfigDefaults.focusBracketThickness, 4.5)
         XCTAssertEqual(SavedConfig.empty.focusBracketStyle, .rounded)
+        XCTAssertEqual(SavedConfig.empty.focusBracketLength, 15)
+        XCTAssertEqual(UserConfigDefaults.focusBracketColor, NSColor.black)
         XCTAssertNil(SavedConfig.empty.focusBracketColorHex)
         XCTAssertNil(SavedConfig.empty.focusBracketRadius)
         XCTAssertNil(SavedConfig.empty.focusBracketThickness)
+    }
+
+    func testCornerLengthIsOptionalAndRoundTripsIndependently() throws {
+        let legacy = Data(#"{"keybinds":[],"gapSize":8,"outerPadding":8,"enabled":true,"focusBracketThickness":5}"#.utf8)
+        let decoded = try JSONDecoder().decode(SavedConfig.self, from: legacy)
+        XCTAssertNil(decoded.focusBracketLength)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: legacy) as? [String: Any])
+        object["focusBracketLength"] = 12
+        let explicit = try JSONDecoder().decode(SavedConfig.self, from: JSONSerialization.data(withJSONObject: object))
+        let roundTrip = try JSONDecoder().decode(SavedConfig.self, from: JSONEncoder().encode(explicit))
+        XCTAssertEqual(roundTrip.focusBracketLength, 12)
+        XCTAssertEqual(roundTrip.focusBracketThickness, 5)
+        XCTAssertEqual(UserConfigDefaults.focusBracketLength, 15)
     }
 
     func testBracketColorMigrationPreservesExplicitLegacyFocusColor() {
@@ -99,6 +114,62 @@ final class ConfigMigrationTests: XCTestCase {
         XCTAssertEqual(saved.focusBracketStyle, .rounded)
         XCTAssertNil(ConfigMigration.resolveFocusBracketColor(saved: saved))
         XCTAssertEqual(saved.dimIntensity, 0.17)
+    }
+
+    private let oldFloat = Keybind(keyCode: 17, modifiers: [.hypr, .shift], action: .toggleFloating)
+    private let newFloat = Keybind(keyCode: 17, modifiers: .hypr, action: .toggleFloating)
+
+    func testLegacyFloatDecodesUnchangedThenMigratesDuringDefaultMerge() throws {
+        let json = #"{"keybinds":[{"keyCode":17,"modifiers":3,"action":{"toggleFloating":{}}}],"gapSize":12,"outerPadding":9,"enabled":false}"#
+        let saved = try JSONDecoder().decode(SavedConfig.self, from: Data(json.utf8))
+        XCTAssertEqual(saved.keybinds, [oldFloat])
+        let merged = UserConfig.mergeNewDefaults(saved: saved.keybinds)
+        XCTAssertEqual(merged.filter { $0.action == .toggleFloating }, [newFloat])
+        XCTAssertEqual(merged.count, Set(merged.map(\.id)).count)
+        XCTAssertEqual(UserConfig.mergeNewDefaults(saved: merged), merged)
+        XCTAssertEqual(saved.gapSize, 12)
+        XCTAssertEqual(saved.outerPadding, 9)
+        XCTAssertFalse(saved.enabled)
+        let encoded = try JSONEncoder().encode(merged)
+        XCTAssertEqual(try JSONDecoder().decode([Keybind].self, from: encoded), merged)
+    }
+
+    func testFloatMigrationPreservesCustomizedKeysAndModifiers() {
+        let customs = [
+            Keybind(keyCode: 16, modifiers: [.hypr, .shift], action: .toggleFloating),
+            Keybind(keyCode: 17, modifiers: [.hypr, .option], action: .toggleFloating),
+            Keybind(keyCode: 17, modifiers: [.hypr, .shift, .command], action: .toggleFloating),
+            Keybind(keyCode: 17, modifiers: [], action: .toggleFloating), newFloat
+        ]
+        for custom in customs {
+            XCTAssertEqual(UserConfig.mergeNewDefaults(saved: [custom]).filter {
+                $0.action == .toggleFloating
+            }, [custom])
+        }
+    }
+
+    func testFloatMigrationLeavesOccupiedTargetChordAlone() {
+        let occupant = Keybind(keyCode: 17, modifiers: .hypr, action: .showKeybinds)
+        let saved = [oldFloat, occupant]
+        XCTAssertEqual(ConfigMigration.migrateToggleFloating(saved: saved), saved)
+        let merged = UserConfig.mergeNewDefaults(saved: saved)
+        XCTAssertEqual(merged.filter { $0.keyCode == 17 }, saved)
+        XCTAssertEqual(merged.count, Set(merged.map(\.id)).count)
+        XCTAssertFalse(UserConfig.mergeNewDefaults(saved: [occupant]).contains { $0.action == .toggleFloating })
+    }
+
+    func testFloatMigrationPreservesMultipleBindingsAndAmbiguousOldChord() {
+        let custom = Keybind(keyCode: 16, modifiers: .hypr, action: .toggleFloating)
+        let sameChord = Keybind(keyCode: 17, modifiers: [.hypr, .shift], action: .showKeybinds)
+        for saved in [[oldFloat, newFloat], [oldFloat, custom], [oldFloat, oldFloat], [oldFloat, sameChord]] {
+            XCTAssertEqual(ConfigMigration.migrateToggleFloating(saved: saved), saved)
+        }
+    }
+
+    func testFloatMigrationPreservesOrderAndUnrelatedBindings() {
+        let unrelated = Keybind(keyCode: 16, modifiers: .command, action: .toggleSplit)
+        XCTAssertEqual(ConfigMigration.migrateToggleFloating(saved: [unrelated, oldFloat]), [unrelated, newFloat])
+        XCTAssertEqual(ConfigMigration.migrateToggleFloating(saved: []), [])
     }
 
     func testScratchpadTilesNewMembersByDefault() {

@@ -158,7 +158,7 @@ struct TilingSettingsView: View {
                 .frame(width: 170)
             }
             if config.focusBracketStyle != .off {
-                HyprRow("Mark roundness", icon: "viewfinder.circle", divider: true) {
+                HyprRow("Mark roundness", icon: "viewfinder.circle", divider: false) {
                     VStack(alignment: .trailing, spacing: HyprSpacing.xs) {
                         HStack(spacing: HyprSpacing.sm) {
                             Slider(value: Binding(
@@ -169,14 +169,32 @@ struct TilingSettingsView: View {
                             HyprChip("\(Int(config.resolvedFocusBracketRadius)) pt")
                                 .frame(width: 56, alignment: .trailing)
                         }
-                        Button("Reset to 14 pt") {
+                        Button("Reset to \(Int(UserConfigDefaults.focusBracketRadius)) pt") {
                             config.focusBracketRadiusOverride = nil
                         }
                         .controlSize(.small)
                         .disabled(config.focusBracketRadiusOverride == nil)
                     }
                 }
-                HyprRow("Mark thickness", icon: "lineweight", divider: true) {
+                HyprRow("Mark length", icon: "ruler", divider: false) {
+                    VStack(alignment: .trailing, spacing: HyprSpacing.xs) {
+                        HStack(spacing: HyprSpacing.sm) {
+                            Slider(value: Binding(
+                                get: { config.resolvedFocusBracketLength },
+                                set: { config.focusBracketLengthOverride = $0 }
+                            ), in: 4...40, step: 1)
+                                .frame(width: 180)
+                            HyprChip("\(Int(config.resolvedFocusBracketLength)) pt")
+                                .frame(width: 56, alignment: .trailing)
+                        }
+                        Button("Reset to \(Int(UserConfigDefaults.focusBracketLength)) pt") {
+                            config.focusBracketLengthOverride = nil
+                        }
+                        .controlSize(.small)
+                        .disabled(config.focusBracketLengthOverride == nil)
+                    }
+                }
+                HyprRow("Mark thickness", icon: "lineweight", divider: false) {
                     HStack(spacing: HyprSpacing.sm) {
                         Slider(value: Binding(
                             get: { config.resolvedFocusBracketThickness },
@@ -196,7 +214,7 @@ struct TilingSettingsView: View {
                             get: { Color(config.resolvedFocusBracketColor) },
                             set: { config.focusBracketColorHex = NSColor($0).hexString }
                         ),
-                        defaultLabel: "neutral · default"
+                        defaultLabel: "black · default"
                     )
                 }
             }
@@ -223,7 +241,7 @@ struct TilingSettingsView: View {
             }
 
             if config.showFocusBorder {
-                HyprRow("Tiled window color", icon: "paintpalette", divider: true) {
+                HyprRow("Tiled window color", icon: "paintpalette", divider: false) {
                     ColorPickerRow(
                         label: "",
                         isCustom: config.focusBorderColorHex != nil,
@@ -235,7 +253,7 @@ struct TilingSettingsView: View {
                         defaultLabel: "cyan · default"
                     )
                 }
-                HyprRow("Floating window color", icon: "paintpalette.fill", divider: true, floatingMarker: true) {
+                HyprRow("Floating window color", icon: "paintpalette.fill", divider: false, floatingMarker: true) {
                     ColorPickerRow(
                         label: "",
                         isCustom: config.floatingBorderColorHex != nil,

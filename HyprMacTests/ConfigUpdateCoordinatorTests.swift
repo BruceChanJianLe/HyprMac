@@ -1,4 +1,5 @@
 import XCTest
+import AppKit
 import Combine
 @testable import HyprMac
 
@@ -36,6 +37,7 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
         bracketColor: String? = nil,
         bracketRadius: CGFloat = 14,
         bracketThickness: CGFloat = 3,
+        bracketLength: CGFloat = 14,
         dim: Bool = false,
         intensity: Double = 0.2,
         fade: Double = 0.22,
@@ -50,6 +52,7 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
             focusBracketStyle: bracketStyle, focusBracketColorHex: bracketColor,
             focusBracketRadius: bracketRadius,
             focusBracketThickness: bracketThickness,
+            focusBracketLength: bracketLength,
             dimInactiveWindows: dim, dimIntensity: intensity,
             chromeFadeDurationSec: fade, windowCornerRadius: radius,
             scratchpadTileByDefault: true, scratchpadRegionInset: 0.06)
@@ -286,6 +289,24 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
         XCTAssertEqual(statefulRoutes, 0)
     }
 
+    func testBracketLengthIsChromeOnlyAndIndependentOfThickness() {
+        let coordinator = ConfigUpdateCoordinator(initial: state())
+        var effects: ChromeConfigChanges = []
+        var observed: RuntimeConfigState?
+        var layoutChanges = 0
+        coordinator.onChrome = { snapshot, changes in observed = snapshot; effects = changes }
+        coordinator.onLayoutGeometry = { _, _ in layoutChanges += 1 }
+        coordinator.onMaximumSplits = { _ in layoutChanges += 1 }
+        coordinator.onDisabledMonitors = { _ in layoutChanges += 1 }
+
+        coordinator.receive(state(bracketLength: 28))
+
+        XCTAssertEqual(effects, [.bracketAppearance])
+        XCTAssertEqual(observed?.focusBracketLength, 28)
+        XCTAssertEqual(observed?.focusBracketThickness, 3)
+        XCTAssertEqual(layoutChanges, 0)
+    }
+
     func testBracketThicknessIsChromeOnly() {
         let coordinator = ConfigUpdateCoordinator(initial: state())
         var effects: ChromeConfigChanges = []
@@ -338,6 +359,7 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
         let config = UserConfig()
         config.gapSize = 23
         config.focusBracketThicknessOverride = 5
+        config.focusBracketLengthOverride = 25
         config.focusBracketRadiusOverride = 2
         config.showFocusBorder = true
         config.dimInactiveWindows = false
@@ -349,11 +371,119 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(notifications, 1)
         XCTAssertEqual(config.gapSize, 23)
-        XCTAssertEqual(config.resolvedFocusBracketThickness, 3)
-        XCTAssertEqual(config.resolvedFocusBracketRadius, 14)
+        XCTAssertEqual(config.resolvedFocusBracketThickness, 4.5)
+        XCTAssertEqual(config.resolvedFocusBracketLength, 15)
+        XCTAssertNil(config.focusBracketLengthOverride)
+        XCTAssertEqual(config.resolvedFocusBracketRadius, 20)
         XCTAssertEqual(config.focusBracketStyle, .rounded)
         XCTAssertFalse(config.showFocusBorder)
         XCTAssertTrue(config.dimInactiveWindows)
+    }
+
+    func testFreshInstallUsesBlackCornersWithCurrentMarkDefaults() throws {
+        try requireIsolatedHome()
+        let arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        var isolatedArguments = arguments
+        isolatedArguments["iCloudSyncEnabled"] = false
+        UserDefaults.standard.setVolatileDomain(isolatedArguments, forName: UserDefaults.argumentDomain)
+        defer { UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain) }
+        let configBefore = try? Data(contentsOf: ConfigStore.configPath)
+        let monitorBefore = try? Data(contentsOf: ConfigStore.monitorConfigPath)
+        defer {
+            restore(configBefore, to: ConfigStore.configPath)
+            restore(monitorBefore, to: ConfigStore.monitorConfigPath)
+        }
+        if FileManager.default.fileExists(atPath: ConfigStore.configPath.path) {
+            try FileManager.default.removeItem(at: ConfigStore.configPath)
+        }
+        let config = UserConfig()
+        XCTAssertEqual(config.focusBracketStyle, .rounded)
+        XCTAssertFalse(config.showFocusBorder)
+        XCTAssertEqual(config.resolvedFocusBracketRadius, 20)
+        XCTAssertEqual(config.resolvedFocusBracketThickness, 4.5)
+        XCTAssertEqual(config.resolvedFocusBracketLength, 15)
+        XCTAssertEqual(config.resolvedFocusBracketColor.usingColorSpace(.sRGB), NSColor.black.usingColorSpace(.sRGB))
+        config.save()
+        config.reloadFromDisk()
+        XCTAssertEqual(config.resolvedFocusBracketLength, 15)
+        XCTAssertEqual(config.resolvedFocusBracketThickness, 4.5)
+        config.focusBracketColorHex = "123456"
+        config.focusBracketRadiusOverride = 8
+        config.focusBracketThicknessOverride = 2
+        config.focusBracketLengthOverride = 25
+        config.reloadFromDisk()
+        XCTAssertEqual(config.focusBracketColorHex, "123456")
+        XCTAssertEqual(config.resolvedFocusBracketRadius, 8)
+        XCTAssertEqual(config.resolvedFocusBracketThickness, 2)
+        XCTAssertEqual(config.resolvedFocusBracketLength, 25)
+    }
+
+    func testLegacyCornerLengthMigratesOnceAndSavesIndependently() throws {
+        try requireIsolatedHome()
+        let arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        var isolatedArguments = arguments
+        isolatedArguments["iCloudSyncEnabled"] = false
+        UserDefaults.standard.setVolatileDomain(isolatedArguments, forName: UserDefaults.argumentDomain)
+        defer { UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain) }
+        let configBefore = try? Data(contentsOf: ConfigStore.configPath)
+        let monitorBefore = try? Data(contentsOf: ConfigStore.monitorConfigPath)
+        defer {
+            restore(configBefore, to: ConfigStore.configPath)
+            restore(monitorBefore, to: ConfigStore.monitorConfigPath)
+        }
+        let legacy = Data(#"{"keybinds":[],"gapSize":23,"outerPadding":11,"enabled":false,"focusBracketThickness":4.5}"#.utf8)
+        try legacy.write(to: ConfigStore.configPath)
+        let config = UserConfig()
+        XCTAssertEqual(config.resolvedFocusBracketThickness, 4.5)
+        XCTAssertEqual(config.resolvedFocusBracketLength, 21)
+        config.focusBracketThicknessOverride = 6
+        XCTAssertEqual(config.resolvedFocusBracketLength, 21)
+        config.reloadFromDisk()
+        XCTAssertEqual(config.resolvedFocusBracketLength, 21)
+        XCTAssertEqual(config.resolvedFocusBracketThickness, 6)
+        config.focusBracketLengthOverride = 10
+        XCTAssertEqual(config.resolvedFocusBracketThickness, 6)
+        let saved = try JSONDecoder().decode(SavedConfig.self, from: Data(contentsOf: ConfigStore.configPath))
+        XCTAssertEqual(saved.focusBracketLength, 10)
+        XCTAssertEqual(saved.focusBracketThickness, 6)
+        XCTAssertEqual(saved.gapSize, 23)
+        XCTAssertFalse(saved.enabled)
+        config.focusBracketLengthOverride = nil
+        config.focusBracketThicknessOverride = 4
+        config.reloadFromDisk()
+        XCTAssertEqual(config.resolvedFocusBracketLength, 15)
+        XCTAssertEqual(config.resolvedFocusBracketThickness, 4)
+    }
+
+    func testFloatMigrationOnStartupReloadAndSave() throws {
+        try requireIsolatedHome()
+        let arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        var isolatedArguments = arguments
+        isolatedArguments["iCloudSyncEnabled"] = false
+        UserDefaults.standard.setVolatileDomain(isolatedArguments, forName: UserDefaults.argumentDomain)
+        defer { UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain) }
+        let configBefore = try? Data(contentsOf: ConfigStore.configPath)
+        let monitorBefore = try? Data(contentsOf: ConfigStore.monitorConfigPath)
+        defer {
+            restore(configBefore, to: ConfigStore.configPath)
+            restore(monitorBefore, to: ConfigStore.monitorConfigPath)
+        }
+        let legacy = Data(#"{"keybinds":[{"keyCode":17,"modifiers":3,"action":{"toggleFloating":{}}}],"gapSize":23,"outerPadding":11,"enabled":false}"#.utf8)
+        try legacy.write(to: ConfigStore.configPath)
+        let config = UserConfig()
+        let expected = Keybind(keyCode: 17, modifiers: .hypr, action: .toggleFloating)
+        XCTAssertEqual(config.keybinds.filter { $0.action == .toggleFloating }, [expected])
+        XCTAssertEqual(try Data(contentsOf: ConfigStore.configPath), legacy)
+        config.reloadFromDisk()
+        XCTAssertEqual(config.keybinds.filter { $0.action == .toggleFloating }, [expected])
+        XCTAssertEqual(config.gapSize, 23)
+        XCTAssertEqual(config.outerPadding, 11)
+        XCTAssertFalse(config.enabled)
+        config.save()
+        let saved = try JSONDecoder().decode(SavedConfig.self, from: Data(contentsOf: ConfigStore.configPath))
+        XCTAssertEqual(saved.keybinds.filter { $0.action == .toggleFloating }, [expected])
+        config.reloadFromDisk()
+        XCTAssertEqual(config.keybinds, saved.keybinds)
     }
 
     func testDiskReloadInjectsMissingPauseBinding() throws {

@@ -15,8 +15,9 @@ struct TourView: View {
 
     @State private var page = 0
     @ObservedObject private var config = UserConfig.shared
+    @StateObject private var loginItem = LoginItemController()
 
-    private var pageCount: Int { mode == .firstRun ? 6 : 1 }
+    private var pageCount: Int { mode == .firstRun ? 7 : 1 }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -91,7 +92,8 @@ struct TourView: View {
                 case 2: TourFocusPage(config: config)
                 case 3: TourWorkspacesPage(config: config)
                 case 4: TourWorkspaceGlyphsPage()
-                default: TourFinishPage(config: config)
+                case 5: TourFinishPage(config: config)
+                default: LoginItemPromptPage(controller: loginItem)
                 }
             }
             .transition(.opacity)
@@ -107,37 +109,56 @@ struct TourView: View {
     private var footer: some View {
         switch mode {
         case .firstRun:
-            HStack {
-                Button("Skip") { onDismiss() }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Color.hyprTextPrimary.opacity(0.4))
+            if page == pageCount - 1 {
+                HStack {
+                    Button("Not now") { onDismiss() }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Color.hyprTextPrimary.opacity(0.4))
 
-                Spacer()
+                    Spacer()
 
-                HStack(spacing: 6) {
-                    ForEach(0..<pageCount, id: \.self) { i in
-                        Capsule()
-                            .fill(i == page ? Color.hyprCyan : Color.hyprTextPrimary.opacity(0.18))
-                            .frame(width: 6, height: 6)
-                            .onTapGesture {
-                                withAnimation(HyprMotion.glide) { page = i }
-                            }
-                    }
-                }
-
-                Spacer()
-
-                CyanButton(page < pageCount - 1 ? "Next" : "Get Started") {
-                    if page < pageCount - 1 {
-                        withAnimation(HyprMotion.glide) { page += 1 }
+                    if loginItem.state == .enabled {
+                        CyanButton("Continue") { onDismiss() }
+                    } else if loginItem.instructionText != nil {
+                        CyanButton("Open Login Items") { loginItem.openLoginItems() }
                     } else {
-                        onDismiss()
+                        CyanButton("Yes, Launch at Login") { loginItem.enable() }
                     }
                 }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 16)
+            } else {
+                HStack {
+                    Button("Skip") {
+                        withAnimation(HyprMotion.glide) { page = pageCount - 1 }
+                    }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Color.hyprTextPrimary.opacity(0.4))
+
+                    Spacer()
+
+                    HStack(spacing: 6) {
+                        ForEach(0..<pageCount, id: \.self) { i in
+                            Capsule()
+                                .fill(i == page ? Color.hyprCyan : Color.hyprTextPrimary.opacity(0.18))
+                                .frame(width: 6, height: 6)
+                                .onTapGesture {
+                                    withAnimation(HyprMotion.glide) { page = i }
+                                }
+                        }
+                    }
+
+                    Spacer()
+
+                    CyanButton("Next") {
+                        withAnimation(HyprMotion.glide) { page += 1 }
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 16)
             }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 16)
         case .whatsNew:
             HStack {
                 Spacer()
@@ -145,6 +166,64 @@ struct TourView: View {
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 16)
+        }
+    }
+}
+
+// MARK: - first-run final page: launch at login
+
+private struct LoginItemPromptPage: View {
+    @ObservedObject var controller: LoginItemController
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HeroGlyph(icon: controller.state == .enabled ? "checkmark.circle" : "power")
+                .padding(.bottom, 20)
+
+            Text(title)
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(Color.hyprTextPrimary)
+
+            Text(message)
+                .font(.system(size: 12.5))
+                .lineSpacing(4)
+                .foregroundStyle(Color.hyprTextPrimary.opacity(0.55))
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 370)
+                .padding(.top, 9)
+
+            if let instruction = controller.instructionText {
+                Text(instruction)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Color.hyprTextPrimary.opacity(0.72))
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 16)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 48)
+        .onAppear { controller.refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            controller.refresh()
+        }
+    }
+
+    private var title: String {
+        controller.state == .enabled
+            ? "\(controller.appName) launches at login"
+            : "Launch \(controller.appName) at login?"
+    }
+
+    private var message: String {
+        switch controller.state {
+        case .enabled:
+            return "You’re all set. \(controller.appName) will be ready when you sign in."
+        case .requiresApproval:
+            return "macOS needs your approval before \(controller.appName) can launch automatically."
+        case .failed:
+            return "Automatic setup didn’t finish. You can enable it in System Settings."
+        case .notEnabled:
+            return "\(controller.appName) can start automatically so your window shortcuts are ready after you sign in."
         }
     }
 }

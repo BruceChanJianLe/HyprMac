@@ -54,7 +54,7 @@ final class KeybindDecoderToleranceTests: XCTestCase {
     }
 
     func testToggleFloatingWireFormatDecodes() throws {
-        let json = #"{"action":{"toggleFloating":{}},"keyCode":17,"modifiers":3}"#
+        let json = #"{"action":{"toggleFloating":{}},"keyCode":17,"modifiers":1}"#
         let kb = try JSONDecoder().decode(Keybind.self, from: Data(json.utf8))
         XCTAssertEqual(kb.action, .toggleFloating)
     }
@@ -134,7 +134,7 @@ final class KeybindDecoderToleranceTests: XCTestCase {
         let json = """
         [
             {"action":{"focusDirection":{"_0":"down"}},"keyCode":125,"modifiers":1},
-            {"action":{"toggleFloating":{}},"keyCode":17,"modifiers":3},
+            {"action":{"toggleFloating":{}},"keyCode":17,"modifiers":1},
             {"action":{"cycleWorkspace":{"_0":-1}},"keyCode":48,"modifiers":3},
             {"action":{"launchApp":{"bundleID":"com.apple.Terminal"}},"keyCode":36,"modifiers":1}
         ]
@@ -175,7 +175,7 @@ final class KeybindDecoderToleranceTests: XCTestCase {
     }
 
     func testEncoderProducesEmptyObjectForUnitCases() throws {
-        let kb = Keybind(keyCode: 17, modifiers: [.hypr, .shift], action: .toggleFloating)
+        let kb = Keybind(keyCode: 17, modifiers: .hypr, action: .toggleFloating)
         let s = String(data: try JSONEncoder().encode(kb), encoding: .utf8)!
         XCTAssertTrue(s.contains(#""toggleFloating":{}"#),
                       "expected toggleFloating:{} in encoded JSON: \(s)")
@@ -386,7 +386,7 @@ final class KeybindDecoderToleranceTests: XCTestCase {
         let saved = SavedConfig(
             version: nil,
             keybinds: [Keybind(keyCode: 18, modifiers: .hypr, action: .switchWorkspace(1)),
-                       Keybind(keyCode: 17, modifiers: [.hypr, .shift], action: .toggleFloating)],
+                       Keybind(keyCode: 17, modifiers: .hypr, action: .toggleFloating)],
             gapSize: 8, outerPadding: 8, enabled: true,
             focusFollowsMouse: true, hyprKey: .capsLock,
             excludedBundleIDs: ["com.apple.FaceTime"],

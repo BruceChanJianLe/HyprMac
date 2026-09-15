@@ -3,7 +3,7 @@
 // `?? value` fallbacks that absorb a missing optional field on
 // decode.
 
-import Foundation
+import Cocoa
 
 enum FocusBracketStyle: String, Codable {
     case rounded
@@ -26,8 +26,10 @@ enum UserConfigDefaults {
     static let showMenuBarIndicator: Bool = true
     static let showFocusBorder: Bool = false
     static let focusBracketStyle: FocusBracketStyle = .rounded
-    static let focusBracketRadius: CGFloat = 14
-    static let focusBracketThickness: CGFloat = 3
+    static let focusBracketColor: NSColor = .black
+    static let focusBracketRadius: CGFloat = 20
+    static let focusBracketThickness: CGFloat = 4.5
+    static let focusBracketLength: CGFloat = 15
     static let dimInactiveWindows: Bool = true
     static let dimIntensity: Double = 0.135
     // shared fade duration for both the focus border (show/hide) and the

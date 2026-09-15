@@ -66,3 +66,144 @@ final class WelcomeContentTests: XCTestCase {
         XCTAssertFalse(KeybindOverlayGrouping.isCompleteWorkspaceRange([1, 1]))
     }
 }
+
+@MainActor
+final class LoginItemControllerTests: XCTestCase {
+    private enum TestError: Error { case denied }
+
+    func testConstructingAndRefreshingNeverChangesLoginItems() {
+        var reads = 0
+        var registrations = 0
+        var opens = 0
+        let controller = LoginItemController(appName: "HyprMac", status: {
+            reads += 1
+            return .notRegistered
+        }, register: { registrations += 1 }, openSettings: { opens += 1 })
+        XCTAssertEqual(reads, 0)
+        controller.refresh()
+        XCTAssertEqual(controller.state, .notEnabled)
+        XCTAssertEqual(reads, 1)
+        XCTAssertEqual(registrations, 0)
+        XCTAssertEqual(opens, 0)
+    }
+
+    func testYesRegistersOnceAndShowsEnabledAfterSuccess() {
+        var status = LoginItemController.ServiceStatus.notRegistered
+        var registrations = 0
+        var opens = 0
+        let controller = LoginItemController(appName: "HyprMac", status: { status }, register: {
+            registrations += 1
+            status = .enabled
+        }, openSettings: { opens += 1 })
+        controller.enable()
+        controller.enable()
+        XCTAssertEqual(controller.state, .enabled)
+        XCTAssertEqual(registrations, 1)
+        XCTAssertEqual(opens, 0)
+        XCTAssertNil(controller.instructionText)
+    }
+
+    func testAlreadyEnabledDoesNotRegisterOrOpenSettings() {
+        let controller = LoginItemController(appName: "HyprMac", status: { .enabled }, register: {
+            XCTFail("already enabled service must not register again")
+        }, openSettings: { XCTFail("already enabled service must not open Settings") })
+        controller.refresh()
+        controller.enable()
+        XCTAssertEqual(controller.state, .enabled)
+    }
+
+    func testExistingApprovalRequirementOpensSettingsOnlyAfterYes() {
+        var opens = 0
+        let controller = LoginItemController(appName: "HyprMac Debug", status: { .requiresApproval }, register: {
+            XCTFail("pending approval must not register again")
+        }, openSettings: { opens += 1 })
+        controller.refresh()
+        XCTAssertEqual(controller.state, .requiresApproval)
+        XCTAssertEqual(opens, 0)
+        controller.enable()
+        XCTAssertEqual(opens, 1)
+        XCTAssertTrue(controller.instructionText?.contains("HyprMac Debug") == true)
+        XCTAssertTrue(controller.instructionText?.contains("Login Items") == true)
+    }
+
+    func testRegistrationRequiringApprovalIsNotReportedAsEnabled() {
+        var status = LoginItemController.ServiceStatus.notRegistered
+        var opens = 0
+        let controller = LoginItemController(appName: "HyprMac", status: { status }, register: {
+            status = .requiresApproval
+        }, openSettings: { opens += 1 })
+        controller.enable()
+        XCTAssertEqual(controller.state, .requiresApproval)
+        XCTAssertEqual(opens, 1)
+    }
+
+    func testRegistrationFailureOpensSettingsWithManualInstructions() {
+        var opens = 0
+        let controller = LoginItemController(appName: "HyprMac Debug", status: { .notRegistered }, register: {
+            throw TestError.denied
+        }, openSettings: { opens += 1 })
+        controller.enable()
+        guard case .failed = controller.state else { return XCTFail("failure must not report enabled") }
+        XCTAssertEqual(opens, 1)
+        XCTAssertTrue(controller.instructionText?.contains("HyprMac Debug") == true)
+        XCTAssertTrue(controller.instructionText?.contains("Open at Login") == true)
+        XCTAssertTrue(controller.instructionText?.contains("+") == true)
+    }
+
+    func testRegistrationWithoutEnabledStatusUsesManualFallback() {
+        for status in [LoginItemController.ServiceStatus.notRegistered, .unavailable] {
+            var registrations = 0
+            var opens = 0
+            let controller = LoginItemController(appName: "HyprMac", status: { status }, register: {
+                registrations += 1
+            }, openSettings: { opens += 1 })
+            controller.enable()
+            guard case .failed = controller.state else { return XCTFail("unconfirmed registration must not report enabled") }
+            XCTAssertEqual(registrations, 1)
+            XCTAssertEqual(opens, 1)
+        }
+    }
+
+    func testRefreshRetainsFallbackAndReflectsExternalApprovalAndDisable() {
+        var status = LoginItemController.ServiceStatus.notRegistered
+        var opens = 0
+        var registrations = 0
+        let controller = LoginItemController(appName: "HyprMac", status: { status }, register: {
+            registrations += 1
+            throw TestError.denied
+        }, openSettings: { opens += 1 })
+        controller.enable()
+        controller.refresh()
+        guard case .failed = controller.state else { return XCTFail("fallback instructions must remain visible") }
+        status = .enabled
+        controller.refresh()
+        XCTAssertEqual(controller.state, .enabled)
+        status = .notRegistered
+        controller.refresh()
+        XCTAssertEqual(controller.state, .notEnabled)
+        XCTAssertEqual(registrations, 1)
+        XCTAssertEqual(opens, 1)
+    }
+
+    func testRefreshReflectsAnExternallyRemovedPendingLoginItem() {
+        var status = LoginItemController.ServiceStatus.requiresApproval
+        let controller = LoginItemController(appName: "HyprMac", status: { status }, register: {
+            XCTFail("refresh must not register")
+        }, openSettings: { XCTFail("refresh must not open Settings") })
+        controller.refresh()
+        XCTAssertEqual(controller.state, .requiresApproval)
+        status = .notRegistered
+        controller.refresh()
+        XCTAssertEqual(controller.state, .notEnabled)
+        XCTAssertNil(controller.instructionText)
+    }
+
+    func testExplicitManageActionOnlyOpensSettings() {
+        var opens = 0
+        let controller = LoginItemController(appName: "HyprMac", status: { .enabled }, register: {
+            XCTFail("manage action must not register")
+        }, openSettings: { opens += 1 })
+        controller.openLoginItems()
+        XCTAssertEqual(opens, 1)
+    }
+}
