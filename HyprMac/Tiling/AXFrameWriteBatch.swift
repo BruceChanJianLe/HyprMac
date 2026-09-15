@@ -90,6 +90,11 @@ struct AXFrameWriteBatch {
             return .failed(toggleTimeoutError)
         }
         let disableError = raw.setEnhancedUI(application, false)
+        if disableError == .notImplemented {
+            if let failure = checkpoint() { return .interrupted(failure) }
+            return .ready(Token(ownerPID: ownerPID, application: application,
+                                restoreEnhancedUI: false))
+        }
         let token = Token(ownerPID: ownerPID, application: application, restoreEnhancedUI: true)
         guard disableError == .success else {
             hyprLog(.debug, .tiling, "enhanced ui: pid=\(ownerPID) begin disable err=\(disableError.rawValue)")

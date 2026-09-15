@@ -128,6 +128,22 @@ final class AXFrameWriteBatchTests: XCTestCase {
         XCTAssertEqual(fake.operations, ["app-timeout", "enhanced-read"])
     }
 
+    func testUnimplementedDisableNeedsNoCleanupWrite() {
+        let fake = FakeRaw()
+        fake.disableError = .notImplemented
+        let batch = AXFrameWriteBatch(raw: fake.operationsAdapter())
+        let token: AXFrameWriteBatch.Token
+        switch batch.begin(ownerPID: 53, timeout: 0.1, checkpoint: { nil }) {
+        case let .ready(value): token = value
+        default: return XCTFail("expected ready token")
+        }
+
+        XCTAssertEqual(batch.end(token, timeout: 0.1, checkpoint: { nil }), .restored)
+        XCTAssertEqual(fake.operations, [
+            "app-timeout", "enhanced-read", "app-timeout", "enhanced-off"
+        ])
+    }
+
     func testApplicationTimeoutFailureStopsBeforeEnhancedUIRead() {
         let fake = FakeRaw()
         fake.timeoutError = .cannotComplete

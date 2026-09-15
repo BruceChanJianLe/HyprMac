@@ -937,6 +937,70 @@ final class FrameSizingTransactionTests: XCTestCase {
         }
     }
 
+    func testUnimplementedEnhancedUIDisableStillUsesAuthoritativeFrameResults() {
+        func io(_ fake: Fake) -> FrameSizingIO {
+            let base = fake.io()
+            let batch = AXFrameWriteBatch(raw: .init(
+                makeApplication: { _ in AXFrameWriteBatch.Application() },
+                setApplicationTimeout: { _, _ in .success },
+                copyEnhancedUI: { _ in (.success, kCFBooleanTrue) },
+                setEnhancedUI: { _, enabled in enabled ? .success : .notImplemented }
+            ))
+            return FrameSizingIO(
+                setMessagingTimeout: base.setMessagingTimeout,
+                writeSize: base.writeSize,
+                writePosition: base.writePosition,
+                readPosition: base.readPosition,
+                readSize: base.readSize,
+                now: base.now,
+                sleep: base.sleep,
+                currentGeneration: base.currentGeneration,
+                beginFrameWrite: { id, timeout, checkpoint in
+                    batch.begin(ownerPID: pid_t(id), timeout: timeout, checkpoint: checkpoint)
+                },
+                endFrameWrite: { token, timeout, checkpoint in
+                    batch.end(token, timeout: timeout, checkpoint: checkpoint)
+                }
+            )
+        }
+
+        let target = CGRect(x: 8, y: 8, width: 492, height: 784)
+        let accepted = Fake()
+        accepted.frames[71] = CGRect(x: 20, y: 20, width: 800, height: 700)
+        let acceptedResult = FrameSizingAttempt(io: io(accepted)).apply(
+            targets: [.init(windowID: 71, frame: target)],
+            usableFrame: CGRect(x: 0, y: 0, width: 1000, height: 800),
+            gap: 8, generation: 1)
+        XCTAssertEqual(acceptedResult.verdict, .accepted)
+        XCTAssertEqual(acceptedResult.actualFrames[71], target)
+        XCTAssertEqual(acceptedResult.progress.writesCompleted, [71])
+        XCTAssertTrue(acceptedResult.progress.readbackComplete)
+        XCTAssertTrue(acceptedResult.progress.readbackStable)
+        XCTAssertEqual(accepted.operations.filter {
+            $0 == "size:71" || $0 == "position:71"
+                || $0 == "position-read:71" || $0 == "size-read:71"
+        }, ["size:71", "position:71", "size:71",
+            "position-read:71", "size-read:71", "position-read:71", "size-read:71"])
+
+        let mismatched = Fake()
+        let refused = CGRect(x: 8, y: 8, width: 400, height: 784)
+        mismatched.frames[72] = refused
+        mismatched.reads[72] = Array(repeating: (.success, refused), count: 12)
+        mismatched.sizeReads[72] = Array(repeating: (.success, refused.size), count: 12)
+        XCTAssertEqual(FrameSizingAttempt(io: io(mismatched)).apply(
+            targets: [.init(windowID: 72, frame: target)],
+            usableFrame: CGRect(x: 0, y: 0, width: 1000, height: 800),
+            gap: 8, generation: 1).verdict, .rejected(.geometryMismatch(72)))
+
+        let failed = Fake()
+        failed.frames[73] = target
+        failed.writeErrors = [.cannotComplete]
+        XCTAssertEqual(FrameSizingAttempt(io: io(failed)).apply(
+            targets: [.init(windowID: 73, frame: target)],
+            usableFrame: CGRect(x: 0, y: 0, width: 1000, height: 800),
+            gap: 8, generation: 1).verdict, .rejected(.writeFailed(73, .cannotComplete)))
+    }
+
     func testInterruptionDuringBeginCleansUpWithoutGeometryWrites() {
         let fake = Fake()
         let id: CGWindowID = 43
