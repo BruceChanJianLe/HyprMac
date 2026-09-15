@@ -102,7 +102,7 @@ Deterministic routing tests establish the routing boundary; they do not establis
 
 ## Tutorial and appearance follow-up
 
-The first-run screen is now a five-page **HyprMac tutorial** covering the Hypr key, tiled and floating windows, focus and swaps, workspaces, and recovery/help. It uses the configured Hypr key and bindings. The menu bar has a Tutorial action, and the searchable keymap opened by the default **Caps + K** includes a Tutorial button. The misleading Command-Q label has been removed from Quit in the menu bar.
+The first-run screen is now a six-page **HyprMac tutorial** covering the Hypr key, tiled and floating windows, focus and swaps, workspaces, the menu-bar workspace glyphs, and recovery/help. It uses the configured Hypr key and bindings. The menu bar has a Tutorial action, and the searchable keymap opened by the default **Caps + K** includes a Tutorial button. The misleading Command-Q label has been removed from Quit in the menu bar.
 
 **Caps + P** is the default pause/resume shortcut. The keyboard event tap stays alive while tiling is paused, including when the app starts paused. Layout and mouse tracking stop; pause/resume and keyboard help remain available. Repeated key-down events do not toggle tiling repeatedly. Existing custom bindings remain authoritative: if Caps + P is already occupied, the new action is not injected over it and can be assigned in Settings. The existing default-merge rules also apply to configuration reloads.
 
@@ -139,3 +139,12 @@ The view consumes published monitor snapshots rather than querying the workspace
 Validation passed 3 focused presentation tests and the full isolated suite: **843 tests, 94 display-dependent skips, zero failures** (749 non-skipped passes). The Release build passed. An offscreen render of the actual menu view at 280 points confirmed that the monitor/workspace rows fit without wrapping. The tutorial's offscreen renderer omitted several text layers, so that image was not used as visual approval. Logs and preview: `build/polish/menu-focused-tests.log`, `build/polish/menu-full-tests.log`, `build/polish/menu-release-build.log`, and `build/polish/menu-preview/menu.png`.
 
 The signed universal Debug build from `49ac733` passed verification and was installed at the canonical MacBook Debug path. Startup confirmed Accessibility trust and a running manager. The tutorial was reopened using the Debug-only onboarding flag. Configuration and release-app hashes remained unchanged. Build and deployment logs: `build/polish/menu-signed-debug-build.log` and `build/polish/menu-deployment.log`.
+
+
+## Restored menu-bar glyphs
+
+Zach preferred the original always-visible workspace strip. The menu-bar label again uses filled circles/diamonds for workspaces currently shown on a monitor, hollow circles/diamonds for other occupied workspaces, and a small dot for an empty position. Diamonds indicate floating windows. Positions correspond to workspace numbers, with trailing empty workspaces omitted. Multiple monitors can produce multiple filled symbols. The strip remains visible while paused, matching its original behavior.
+
+The clicked menu retains the simpler monitor-name/current-workspace rows from the previous change. A dedicated tutorial page explains the strip with numbered examples and a symbol legend. The first slide retains Zach's exact supplied text.
+
+Both keyboard help and Settings → Keys now list **HYPR + drag** as a mouse gesture. Settings explains that holding HYPR while dragging a tiled window by its title bar onto another tile swaps them within the same workspace. This is a help entry, not a new editable keyboard binding.

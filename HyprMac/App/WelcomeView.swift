@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Which Tour flow to render.
 enum WelcomeMode {
-    /// First-launch tutorial (5 pages).
+    /// First-launch tutorial (6 pages).
     case firstRun
     /// Post-update / legacy "What's New" page.
     case whatsNew

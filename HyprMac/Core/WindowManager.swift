@@ -2158,8 +2158,13 @@ class WindowManager {
             floaterOccluders: floaterOccluders)
     }
 
-    /// Publish current workspaces in left-to-right monitor order for the menu.
+    /// Publish workspace glyphs and monitor snapshots for the menu.
     private func updateMenuBarState() {
+        let active = Set(activeWorkspaces())
+        let occupied = occupiedWorkspaces()
+        let floating = workspacesWithFloatingWindows()
+        let labelText = MenuBarPresentation.workspaceGlyphs(
+            active: active, occupied: occupied, floating: floating)
         let monitors = workspaceManager.enabledScreensLeftToRight().enumerated().map {
             index, screen in
                 MenuBarMonitorSnapshot(
@@ -2173,11 +2178,24 @@ class WindowManager {
 
         DispatchQueue.main.async {
             let state = MenuBarState.shared
+            state.labelText = labelText
             state.monitors = monitors
             state.scratchpadCount = scratchpadCount
             state.scratchpadVisible = scratchpadVisible
             state.hasData = true
         }
+    }
+
+    /// Workspaces that hold at least one live floating window.
+    private func workspacesWithFloatingWindows() -> Set<Int> {
+        var result = Set<Int>()
+        let liveFloating = stateCache.floatingWindowIDs.subtracting(stateCache.hiddenWindowIDs)
+        for workspace in 1...9 {
+            if !workspaceManager.windowIDs(onWorkspace: workspace).isDisjoint(with: liveFloating) {
+                result.insert(workspace)
+            }
+        }
+        return result
     }
 
     // MARK: - poll

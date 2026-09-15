@@ -2,15 +2,22 @@ import XCTest
 @testable import HyprMac
 
 final class MenuBarPresentationTests: XCTestCase {
-    func testCompactLabelShowsCurrentWorkspaceInMonitorOrder() {
-        XCTAssertEqual(MenuBarPresentation.compactWorkspaceText([
-            monitor(0, "Studio Display", workspace: 7),
-            monitor(1, "Built-in Display", workspace: 2, portrait: true)
-        ]), "7 · 2")
-        XCTAssertEqual(MenuBarPresentation.compactWorkspaceText([
-            monitor(0, "Studio Display", workspace: 4)
-        ]), "4")
-        XCTAssertEqual(MenuBarPresentation.compactWorkspaceText([]), "")
+    func testWorkspaceGlyphsPreserveActiveOccupiedAndFloatingSemantics() {
+        XCTAssertEqual(MenuBarPresentation.workspaceGlyphs(
+            active: [1, 4], occupied: [1, 2, 3, 4], floating: [2, 4]),
+                       "● ◇ ○ ◆")
+    }
+
+    func testWorkspaceGlyphsKeepEmptySlotsThroughLastRelevantWorkspace() {
+        XCTAssertEqual(MenuBarPresentation.workspaceGlyphs(
+            active: [2], occupied: [4], floating: []), "· ● · ○")
+        XCTAssertEqual(MenuBarPresentation.workspaceGlyphs(
+            active: [], occupied: [], floating: []), "·")
+    }
+
+    func testWorkspaceGlyphsRepresentBothActiveMonitors() {
+        XCTAssertEqual(MenuBarPresentation.workspaceGlyphs(
+            active: [2, 5], occupied: [], floating: [5]), "· ● · · ◆")
     }
 
     func testTooltipNamesEachMonitorAndCurrentWorkspace() {
@@ -41,6 +48,18 @@ final class MenuBarPresentationTests: XCTestCase {
         XCTAssertTrue(MenuBarPresentation.showsWorkspaceState(
             enabled: true, indicatorEnabled: true, hasData: true,
             monitors: [], scratchpadCount: 2))
+    }
+
+    func testCompactIndicatorUsesGlyphDataWithoutManagerEnabledState() {
+        XCTAssertTrue(MenuBarPresentation.showsIndicator(
+            indicatorEnabled: true, hasData: true,
+            labelText: "● · ◇", scratchpadCount: 0))
+        XCTAssertFalse(MenuBarPresentation.showsIndicator(
+            indicatorEnabled: false, hasData: true,
+            labelText: "●", scratchpadCount: 0))
+        XCTAssertFalse(MenuBarPresentation.showsIndicator(
+            indicatorEnabled: true, hasData: false,
+            labelText: "●", scratchpadCount: 0))
     }
 
     private func monitor(_ id: Int, _ name: String, workspace: Int,

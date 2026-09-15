@@ -51,6 +51,20 @@ struct KeybindsSettingsView: View {
                 }
             }
 
+            if search.trimmingCharacters(in: .whitespaces).isEmpty
+                || "Swap tiles by dragging HYPR mouse".localizedCaseInsensitiveContains(search.trimmingCharacters(in: .whitespaces)) {
+                HyprPanel("Mouse", footer: "Hold HYPR and drag a tiled window by its title bar onto another tile in the same workspace.") {
+                    HStack {
+                        Text("Swap tiles by dragging")
+                        Spacer()
+                        Text("HYPR + drag")
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundStyle(Color.hyprTextSecondary)
+                    }
+                    .padding(.vertical, HyprSpacing.sm)
+                }
+            }
+
             Button("Reset to defaults") {
                 config.keybinds = Keybind.defaults
             }

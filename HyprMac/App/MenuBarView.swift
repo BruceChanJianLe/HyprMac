@@ -215,6 +215,7 @@ private struct MenuBarRow<Trailing: View>: View {
 // WorkspaceIndicatorLabel observes it.
 class MenuBarState: ObservableObject {
     static let shared = MenuBarState()
+    @Published var labelText = ""
     @Published var monitors: [MenuBarMonitorSnapshot] = []
     @Published var hasData = false
     /// Number of windows in the scratchpad (0 = hide the tray glyph).
@@ -231,8 +232,18 @@ struct MenuBarMonitorSnapshot: Equatable, Identifiable {
 }
 
 enum MenuBarPresentation {
-    static func compactWorkspaceText(_ monitors: [MenuBarMonitorSnapshot]) -> String {
-        monitors.map { String($0.currentWorkspace) }.joined(separator: " · ")
+    static func workspaceGlyphs(active: Set<Int>, occupied: Set<Int>,
+                                floating: Set<Int>) -> String {
+        let lastWorkspace = max(active.max() ?? 1, occupied.max() ?? 1)
+        return (1...lastWorkspace).map { workspace in
+            if active.contains(workspace) {
+                return floating.contains(workspace) ? "◆" : "●"
+            }
+            if occupied.contains(workspace) {
+                return floating.contains(workspace) ? "◇" : "○"
+            }
+            return "·"
+        }.joined(separator: " ")
     }
 
     static func monitorSummary(_ monitors: [MenuBarMonitorSnapshot]) -> String {
@@ -246,25 +257,27 @@ enum MenuBarPresentation {
         enabled && indicatorEnabled && hasData
             && (!monitors.isEmpty || scratchpadCount > 0)
     }
+
+    static func showsIndicator(indicatorEnabled: Bool, hasData: Bool,
+                               labelText: String, scratchpadCount: Int) -> Bool {
+        indicatorEnabled && hasData && (!labelText.isEmpty || scratchpadCount > 0)
+    }
 }
 
-// Shows current workspaces in left-to-right monitor order, plus stash state.
+// Compact workspace glyphs remain visible while tiling is paused.
 struct WorkspaceIndicatorLabel: View {
     @ObservedObject private var config = UserConfig.shared
     @ObservedObject private var state = MenuBarState.shared
 
     var body: some View {
-        let workspaceText = MenuBarPresentation.compactWorkspaceText(state.monitors)
-        if MenuBarPresentation.showsWorkspaceState(
-            enabled: config.enabled,
+        if MenuBarPresentation.showsIndicator(
             indicatorEnabled: config.showMenuBarIndicator,
             hasData: state.hasData,
-            monitors: state.monitors,
+            labelText: state.labelText,
             scratchpadCount: state.scratchpadCount) {
             HStack(spacing: 5) {
-                if !workspaceText.isEmpty {
-                    Image(systemName: "display")
-                    Text(workspaceText)
+                if !state.labelText.isEmpty {
+                    Text(state.labelText)
                         .font(.system(size: 12, weight: .regular))
                 }
                 if state.scratchpadCount > 0 {

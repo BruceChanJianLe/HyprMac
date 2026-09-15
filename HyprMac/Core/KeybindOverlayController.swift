@@ -326,7 +326,11 @@ private struct KeybindOverlayView: View {
 
     private func rows(for category: KeybindCategory) -> [OverlayRow] {
         let binds = keybinds.filter { KeybindCategory.from($0.action) == category }
-        return coalesce(binds).filter { matchesFilter($0.description) }
+        var result = coalesce(binds)
+        if category == .windowManagement {
+            result.append(OverlayRow(description: "Swap tiles by dragging", chord: "HYPR + drag", isFloating: false))
+        }
+        return result.filter { matchesFilter($0.description) }
     }
 
     private func matchesFilter(_ description: String) -> Bool {

@@ -16,7 +16,7 @@ struct TourView: View {
     @State private var page = 0
     @ObservedObject private var config = UserConfig.shared
 
-    private var pageCount: Int { mode == .firstRun ? 5 : 1 }
+    private var pageCount: Int { mode == .firstRun ? 6 : 1 }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -90,6 +90,7 @@ struct TourView: View {
                 case 1: TourWindowPage(config: config)
                 case 2: TourFocusPage(config: config)
                 case 3: TourWorkspacesPage(config: config)
+                case 4: TourWorkspaceGlyphsPage()
                 default: TourFinishPage(config: config)
                 }
             }
@@ -449,7 +450,79 @@ private struct TourWorkspacesPage: View {
     }
 }
 
-// MARK: - first-run page 5: Finish → keymap
+// MARK: - first-run page 5: workspace strip
+
+private struct TourWorkspaceGlyphsPage: View {
+    private let examples: [(number: Int, glyph: String, color: Color)] = [
+        (1, "●", .hyprCyan), (2, "◆", .hyprMagenta), (3, "○", .hyprCyan),
+        (4, "◇", .hyprMagenta), (5, "·", .hyprTextPrimary.opacity(0.3)),
+    ]
+    private let legend: [(glyph: String, label: String, color: Color)] = [
+        ("●", "Shown now", .hyprCyan),
+        ("◆", "Shown now · has floating windows", .hyprMagenta),
+        ("○", "Windows waiting", .hyprCyan),
+        ("◇", "Windows waiting · has floating windows", .hyprMagenta),
+        ("·", "Empty workspace", .hyprTextPrimary.opacity(0.3)),
+    ]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Text("Read the workspace strip")
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(Color.hyprTextPrimary)
+            Text("Each position matches its workspace number.")
+                .font(.system(size: 12.5))
+                .foregroundStyle(Color.hyprTextPrimary.opacity(0.55))
+                .padding(.top, 8)
+
+            HStack(spacing: 18) {
+                ForEach(examples, id: \.number) { item in
+                    VStack(spacing: 3) {
+                        Text("\(item.number)")
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(Color.hyprTextPrimary.opacity(0.4))
+                        Text(item.glyph)
+                            .font(.system(size: 19, weight: .medium, design: .monospaced))
+                            .foregroundStyle(item.color)
+                    }
+                    .frame(width: 28)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .background(RoundedRectangle(cornerRadius: HyprRadius.md, style: .continuous).fill(Color.hyprSurface))
+            .overlay(RoundedRectangle(cornerRadius: HyprRadius.md, style: .continuous).strokeBorder(Color.hyprTextPrimary.opacity(0.1), lineWidth: 1))
+            .padding(.top, 16)
+
+            VStack(alignment: .leading, spacing: 7) {
+                ForEach(Array(legend.enumerated()), id: \.offset) { _, item in
+                    HStack(spacing: 10) {
+                        Text(item.glyph)
+                            .font(.system(size: 14, weight: .medium, design: .monospaced))
+                            .foregroundStyle(item.color)
+                            .frame(width: 18)
+                        Text(item.label)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Color.hyprTextPrimary.opacity(0.75))
+                    }
+                }
+            }
+            .frame(width: 300, alignment: .leading)
+            .padding(.top, 15)
+
+            Text("Filled symbols are currently shown. More than one can be filled when you use multiple monitors.")
+                .font(.system(size: 10.5))
+                .foregroundStyle(Color.hyprTextPrimary.opacity(0.5))
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 360)
+                .padding(.top, 12)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 44)
+    }
+}
+
+// MARK: - first-run page 6: Finish → keymap
 
 private struct TourFinishPage: View {
     @ObservedObject var config: UserConfig
