@@ -13,6 +13,7 @@ import Sparkle
 /// indicator. The label rendered in the menu bar itself is
 /// `WorkspaceIndicatorLabel` (below).
 struct MenuBarView: View {
+    let appDelegate: AppDelegate
     @ObservedObject var config = UserConfig.shared
     @Environment(\.openWindow) private var openWindow
     @State private var refreshID = UUID()
@@ -60,8 +61,7 @@ struct MenuBarView: View {
 
     @ViewBuilder
     private var workspacePanel: some View {
-        let delegate = NSApp.delegate as? AppDelegate
-        let wm = delegate?.windowManager
+        let wm = appDelegate.windowManager
         let ws = wm?.workspaceManager
         let occupied = MenuBarState.shared.occupiedWorkspaces
         let floatingWs = MenuBarState.shared.floatingWorkspaces
@@ -191,10 +191,10 @@ struct MenuBarView: View {
     private var actions: some View {
         VStack(spacing: 1) {
             MenuBarRow("Keybinds", icon: "keyboard") {
-                (NSApp.delegate as? AppDelegate)?.windowManager?.handleAction(.showKeybinds)
+                appDelegate.windowManager?.handleAction(.showKeybinds)
             } trailing: {
                 HStack(spacing: 3) {
-                    KeyChip(config.hyprKey.badgeLabel)
+                    KeyChip("HYPR")
                     KeyChip("K")
                 }
             }
@@ -203,7 +203,7 @@ struct MenuBarView: View {
                 NSApp.activate(ignoringOtherApps: true)
             }
             MenuBarRow("Tutorial", icon: "sparkles") {
-                (NSApp.delegate as? AppDelegate)?.showTour()
+                appDelegate.showTour()
             }
             MenuBarRow("Retile all spaces", icon: "rectangle.3.group") {
                 NotificationCenter.default.post(name: .hyprMacRetileAll, object: nil)

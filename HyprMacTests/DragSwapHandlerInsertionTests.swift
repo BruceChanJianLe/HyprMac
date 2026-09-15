@@ -33,13 +33,40 @@ final class DragSwapHandlerInsertionTests: XCTestCase {
     func testMouseDragLifecycleStopResetClearsEverySuppressionState() {
         var state = MouseDragLifecycleState(buttonDown: true,
                                             sawDragEvent: true,
-                                            preDragFocusedID: 991)
+                                            preDragFocusedID: 991,
+                                            swapRequested: true)
 
         state.resetForStop()
 
         XCTAssertFalse(state.buttonDown)
         XCTAssertFalse(state.sawDragEvent)
         XCTAssertEqual(state.preDragFocusedID, 0)
+        XCTAssertFalse(state.swapRequested)
+    }
+
+    func testMouseDragLifecycleLatchesHyprAcrossTheWholeGesture() {
+        var heldAtPress = MouseDragLifecycleState()
+        heldAtPress.beginPress(hyprHeld: true)
+        XCTAssertTrue(heldAtPress.releaseRequestsSwap(hyprHeld: false, optionDown: false))
+
+        var pressedDuringDrag = MouseDragLifecycleState()
+        pressedDuringDrag.beginPress(hyprHeld: false)
+        pressedDuringDrag.observeDrag(hyprHeld: true)
+        XCTAssertTrue(pressedDuringDrag.releaseRequestsSwap(hyprHeld: false, optionDown: false))
+
+        var pressedNearRelease = MouseDragLifecycleState()
+        pressedNearRelease.beginPress(hyprHeld: false)
+        pressedNearRelease.noteHyprKeyDown()
+        XCTAssertTrue(pressedNearRelease.releaseRequestsSwap(hyprHeld: false, optionDown: false))
+    }
+
+    func testMouseDragLifecycleUsesReleaseStateAndKeepsOptionCompatibility() {
+        var state = MouseDragLifecycleState()
+        state.beginPress(hyprHeld: false)
+
+        XCTAssertFalse(state.releaseRequestsSwap(hyprHeld: false, optionDown: false))
+        XCTAssertTrue(state.releaseRequestsSwap(hyprHeld: true, optionDown: false))
+        XCTAssertTrue(state.releaseRequestsSwap(hyprHeld: false, optionDown: true))
     }
 
     func testPressResolverRequiresOneActualTileAndNoOccluder() {
@@ -113,6 +140,26 @@ final class DragSwapHandlerInsertionTests: XCTestCase {
         coordinator.mouseDown(at: .zero)
         coordinator.mouseUp(TiledDragRelease(pointer: CGPoint(x: 10, y: 20),
                                               optionDown: true, sawDragEvent: true))
+        scheduler.run(0)
+
+        XCTAssertSwap(mode, targetID: 8)
+    }
+
+    func testSemanticHyprIntentSelectsExplicitSwapWithoutOption() {
+        let captured = snapshot(draggedID: 7)
+        let scheduler = DeferredScheduler()
+        var mode: TiledDragMode?
+        let coordinator = TiledDragSessionCoordinator(
+            capture: { _ in .captured(captured) },
+            apply: { _, value in mode = value; return .superseded },
+            resolveTarget: { _, _ in TiledDragTarget(windowID: 8, edge: .bottom) },
+            schedule: scheduler.schedule,
+            report: { _ in }
+        )
+
+        coordinator.mouseDown(at: .zero)
+        coordinator.mouseUp(TiledDragRelease(pointer: CGPoint(x: 10, y: 20),
+                                              swapRequested: true, sawDragEvent: true))
         scheduler.run(0)
 
         XCTAssertSwap(mode, targetID: 8)

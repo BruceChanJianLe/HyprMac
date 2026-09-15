@@ -6,6 +6,7 @@ import SwiftUI
 /// Top-level settings shell with a custom sidebar of tabs and a
 /// detail pane.
 struct SettingsView: View {
+    let showTutorial: () -> Void
     @State private var selectedTab: SettingsTab = .general
 
     enum SettingsTab: String, CaseIterable, Hashable {
@@ -107,7 +108,7 @@ struct SettingsView: View {
             ScrollView {
                 VStack(spacing: HyprSpacing.lg) {
                     switch selectedTab {
-                    case .general: GeneralSettingsView()
+                    case .general: GeneralSettingsView(showTutorial: showTutorial)
                     case .keys:    KeybindsSettingsView()
                     case .layout:  TilingSettingsView()
                     }

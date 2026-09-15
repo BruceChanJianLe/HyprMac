@@ -24,7 +24,7 @@ macOS doesn't ship with a tiling window manager. Third-party options either requ
 | 🗂 **9 Virtual Workspaces** | Managed in userspace — no macOS Spaces dependency, no SIP needed |
 | 🎯 **Directional Focus & Swap** | Move focus or swap windows left/right/up/down across monitors |
 | 🖱 **Focus-Follows-Mouse** | Toggleable, with automatic suppression when menus are open |
-| 🔄 **Drag-to-Swap** | Drag any window onto another to exchange positions |
+| 🔄 **Drag Placement** | Drag to insert, or hold Hypr while dragging to swap positions |
 | 🔲 **Floating Toggle** | Pop windows in and out of the tiling layout on demand |
 | 🖥 **Multi-Monitor** | Per-monitor workspace assignment with directional cross-monitor navigation |
 | ⌨️ **Fully Configurable** | Edit the Hypr key, keybinds, app launchers, gaps, and padding in-app or via JSON |
@@ -101,8 +101,8 @@ The physical Hypr key is configurable in Settings → General. Options include C
 |--------|--------|
 | Hover over tiled window | Focus follows mouse (when enabled) |
 | Drag a tiled window onto a target edge | Insert on that side, within the same workspace and monitor |
-| Hold Option when releasing a tiled drag | Swap with the target, subject to verified sizing and Max Splits |
-| Drag window onto another | Swap positions |
+| Hold Hypr while dragging a tiled window | Swap with the target, subject to verified sizing and Max Splits |
+| Hold Option when releasing a tiled drag | Swap with the target (compatibility shortcut) |
 
 ---
 

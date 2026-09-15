@@ -298,7 +298,12 @@ class WindowManager {
         hotkeyManager.onHyprKeyDown = { [weak self] in
             guard let self, self.config.enabled else { return }
             self.hyprHeld = true
-            self.ensureFocus()
+            let mousePressActive = self.mouseDragLifecycle.buttonDown
+            self.mouseDragLifecycle.noteHyprKeyDown()
+            // Do not repair focus while a mouse gesture is in flight. A stale
+            // tracker can otherwise focus a fallback window and redirect the
+            // native title-bar drag when Hypr is pressed mid-gesture.
+            if !mousePressActive { self.ensureFocus() }
             // visual cue: corner brackets snap inward around the focused
             // window so the user sees which window the next Hypr action
             // will target. shown regardless of focus-border setting.
@@ -814,8 +819,7 @@ class WindowManager {
         }
         mouseDownMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
             guard let self else { return }
-            self.mouseButtonDown = true
-            self.mouseDraggedSinceDown = false
+            self.mouseDragLifecycle.beginPress(hyprHeld: self.hyprHeld)
             self.mouseDownFloatingWindowID = 0
             self.mouseDownFloatingFrame = nil
             // the event carries the exact click location. sampling
@@ -856,7 +860,7 @@ class WindowManager {
         // the border for the duration of the drag and restore it on mouseUp.
         mouseDragMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDragged) { [weak self] _ in
             guard let self = self else { return }
-            self.mouseDraggedSinceDown = true
+            self.mouseDragLifecycle.observeDrag(hyprHeld: self.hyprHeld)
             if self.mouseDownFloatingWindowID != 0 {
                 self.focusBorder.hideFloatingBorder(for: self.mouseDownFloatingWindowID)
             }
@@ -888,11 +892,13 @@ class WindowManager {
                 let release = TiledDragEvent.release(
                     event: event,
                     primaryHeight: primaryHeight,
-                    sawDragEvent: isDrag)
+                    sawDragEvent: isDrag,
+                    swapRequested: self.mouseDragLifecycle.releaseRequestsSwap(
+                        hyprHeld: self.hyprHeld,
+                        optionDown: event.modifierFlags.contains(.option)))
                 self.tiledDragHandler.handleMouseUp(release)
             }
-            self?.mouseButtonDown = false
-            self?.mouseDraggedSinceDown = false
+            self?.mouseDragLifecycle.finishPress()
             self?.mouseDownPointCG = nil
             self?.mouseDownFloatingWindowID = 0
             self?.mouseDownFloatingFrame = nil

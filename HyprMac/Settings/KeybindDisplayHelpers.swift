@@ -9,7 +9,7 @@ extension Keybind {
 
     var displayString: String {
         var parts: [String] = []
-        if modifiers.contains(.hypr)    { parts.append(UserConfig.shared.hyprKey.badgeLabel) }
+        if modifiers.contains(.hypr)    { parts.append("HYPR") }
         if modifiers.contains(.command) { parts.append("⌘") }
         if modifiers.contains(.shift)   { parts.append("⇧") }
         if modifiers.contains(.option)  { parts.append("⌥") }

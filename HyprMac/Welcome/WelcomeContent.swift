@@ -58,7 +58,7 @@ enum WelcomeContent {
     ) -> String? {
         guard let bind = keybinds.first(where: { predicate($0.action) }) else { return nil }
         var parts: [String] = []
-        if bind.modifiers.contains(.hypr) { parts.append(hyprKey.badgeLabel) }
+        if bind.modifiers.contains(.hypr) { parts.append("HYPR") }
         if bind.modifiers.contains(.control) { parts.append("⌃") }
         if bind.modifiers.contains(.option) { parts.append("⌥") }
         if bind.modifiers.contains(.shift) { parts.append("⇧") }

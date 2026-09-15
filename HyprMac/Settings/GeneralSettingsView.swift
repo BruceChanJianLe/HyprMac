@@ -7,6 +7,7 @@ import SwiftUI
 /// indicator, iCloud sync, launch-at-login), and a footer with
 /// replay-the-tour + reset.
 struct GeneralSettingsView: View {
+    let showTutorial: () -> Void
     @ObservedObject var config = UserConfig.shared
     @State private var accessibilityGranted = AccessibilityManager.isAccessibilityEnabled()
 
@@ -169,7 +170,7 @@ struct GeneralSettingsView: View {
     private var footerPanel: some View {
         HyprPanel {
             Button {
-                (NSApp.delegate as? AppDelegate)?.showTour()
+                showTutorial()
             } label: {
                 HyprRow("HyprMac Tutorial", icon: "sparkles") {
                     Image(systemName: "chevron.right")

@@ -193,7 +193,9 @@ private struct TourHeroPage: View {
 
             // body copy with "Hypr key" in cyan bold
             (Text(config.hyprKey.displayName).foregroundColor(.hyprCyan).bold()
-                + Text(" is your Hypr key. Hold it while pressing another key to manage windows."))
+                + Text(" is the physical key. The shortcuts in this tutorial call it ")
+                + Text("HYPR").foregroundColor(.hyprCyan).bold()
+                + Text(". Hold it while pressing another key to manage windows."))
                 .font(.system(size: 12.5))
                 .lineSpacing(4)
                 .foregroundStyle(Color.hyprTextPrimary.opacity(0.55))
@@ -317,7 +319,7 @@ private struct TourWindowPage: View {
             title: "Tiled and floating windows",
             copy: Text("New windows join the tiling layout automatically. A floating window stays above the tiles and moves freely."),
             bullets: [
-                ("hand.draw", "Drag a tiled window by its title bar to place or swap it."),
+                ("hand.draw", "Drag a tile by its title bar to insert it. Hold HYPR during the drag to swap with another tile in the same workspace."),
                 ("diamond", floatingInstruction),
                 ("arrow.up.left.and.arrow.down.right", "Drag or resize a floating window with the app's normal title bar and edges."),
             ],
@@ -379,9 +381,9 @@ private struct TourFocusPage: View {
         }
         var result = [("arrow.left.arrow.right", directionText)]
         if config.focusFollowsMouse {
-            result.append(("cursorarrow.motionlines", "Focus follows the mouse is on — hover a window to focus it."))
+            result.append(("cursorarrow.motionlines", "Move the pointer over a window to focus it."))
         } else {
-            result.append(("cursorarrow.motionlines", "You can turn on focus follows the mouse in General settings."))
+            result.append(("cursorarrow.motionlines", "Turn on focus follows the mouse in General settings, then move the pointer over a window to focus it."))
         }
         if config.focusBracketStyle != .off {
             result.append(("rectangle.dashed", "Hold \(config.hyprKey.displayName) to show corner marks on the focused window."))

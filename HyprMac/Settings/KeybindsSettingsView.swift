@@ -12,6 +12,7 @@ struct KeybindsSettingsView: View {
     @State private var showingAddLauncher = false
     @State private var editingBind: Keybind?
     @State private var search = ""
+    @State private var expandedWorkspaceFamilies: Set<String> = []
 
     private static let visibleCategories: [KeybindCategory] = [
         .focusNav, .windowManagement, .workspaces, .apps, .system
@@ -41,19 +42,11 @@ struct KeybindsSettingsView: View {
             hyprHeroPanel
 
             ForEach(grouped, id: \.category) { group in
-                HyprPanel(group.category.rawValue) {
-                    ForEach(Array(group.binds.enumerated()), id: \.element.id) { idx, bind in
-                        KeybindRow(
-                            bind: bind,
-                            isSelected: selectedBindID == bind.id,
-                            divider: idx < group.binds.count - 1,
-                            onTap: { selectedBindID = bind.id },
-                            onDoubleTap: { editingBind = bind },
-                            onDelete: {
-                                config.keybinds.removeAll { $0.id == bind.id }
-                                if selectedBindID == bind.id { selectedBindID = nil }
-                            }
-                        )
+                if group.category == .workspaces {
+                    workspacePanel(group.binds)
+                } else {
+                    HyprPanel(group.category.rawValue) {
+                        bindRows(group.binds)
                     }
                 }
             }
@@ -79,6 +72,95 @@ struct KeybindsSettingsView: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func bindRows(_ binds: [Keybind]) -> some View {
+        ForEach(Array(binds.enumerated()), id: \.element.id) { idx, bind in
+            KeybindRow(
+                bind: bind,
+                isSelected: selectedBindID == bind.id,
+                divider: idx < binds.count - 1,
+                onTap: { selectedBindID = bind.id },
+                onDoubleTap: { editingBind = bind },
+                onDelete: {
+                    config.keybinds.removeAll { $0.id == bind.id }
+                    if selectedBindID == bind.id { selectedBindID = nil }
+                }
+            )
+        }
+    }
+
+    private func workspacePanel(_ binds: [Keybind]) -> some View {
+        let switchFamily = canonicalWorkspaceFamily(in: binds, switching: true)
+        let moveFamily = canonicalWorkspaceFamily(in: binds, switching: false)
+        let collapsedIDs = Set((switchFamily ?? []).map(\.id) + (moveFamily ?? []).map(\.id))
+        let exceptions = binds.filter { !collapsedIDs.contains($0.id) }
+
+        return HyprPanel("Workspaces", footer: "N = workspace number (1–9). Expand a group to edit individual bindings.") {
+            if let switchFamily {
+                workspaceDisclosure(
+                    id: "switch", title: "Switch to workspace N", binds: switchFamily)
+            }
+            if let moveFamily {
+                workspaceDisclosure(
+                    id: "move", title: "Move window to workspace N", binds: moveFamily)
+            }
+            bindRows(exceptions)
+        }
+    }
+
+    private func workspaceDisclosure(id: String, title: String, binds: [Keybind]) -> some View {
+        DisclosureGroup(isExpanded: Binding(
+            get: { expandedWorkspaceFamilies.contains(id) },
+            set: { expanded in
+                if expanded { expandedWorkspaceFamilies.insert(id) }
+                else { expandedWorkspaceFamilies.remove(id) }
+            }
+        )) {
+            bindRows(binds)
+                .padding(.leading, HyprSpacing.md)
+        } label: {
+            HStack {
+                Text(title)
+                    .font(.hyprBody)
+                Spacer()
+                Text(workspaceSummaryChord(for: binds[0]))
+                    .font(.hyprMonoSm)
+                    .foregroundStyle(Color.hyprTextSecondary)
+            }
+            .padding(.vertical, HyprSpacing.xs)
+        }
+    }
+
+    private func canonicalWorkspaceFamily(in binds: [Keybind], switching: Bool) -> [Keybind]? {
+        let family = binds.compactMap { bind -> (Int, Keybind)? in
+            let number: Int
+            switch bind.action {
+            case .switchWorkspace(let n) where switching: number = n
+            case .moveToWorkspace(let n) where !switching: number = n
+            default: return nil
+            }
+            guard KeybindOverlayGrouping.usesCanonicalWorkspaceKey(bind, number: number) else {
+                return nil
+            }
+            return (number, bind)
+        }.sorted { $0.0 < $1.0 }
+
+        guard KeybindOverlayGrouping.isCompleteWorkspaceRange(family.map { $0.0 }),
+              Set(family.map { $0.1.modifiers }).count == 1 else { return nil }
+        return family.map { $0.1 }
+    }
+
+    private func workspaceSummaryChord(for bind: Keybind) -> String {
+        var parts: [String] = []
+        if bind.modifiers.contains(.hypr) { parts.append("HYPR") }
+        if bind.modifiers.contains(.command) { parts.append("⌘") }
+        if bind.modifiers.contains(.shift) { parts.append("⇧") }
+        if bind.modifiers.contains(.option) { parts.append("⌥") }
+        if bind.modifiers.contains(.control) { parts.append("⌃") }
+        parts.append("N")
+        return parts.joined(separator: "+")
     }
 
     // MARK: header — search + add
@@ -137,8 +219,8 @@ struct KeybindsSettingsView: View {
     private var hyprHeroPanel: some View {
         HStack(spacing: HyprSpacing.lg - 2) {
             // 52×52 keycap glyph with a brighter bottom bevel
-            Text("⇪")
-                .font(.system(size: 22, weight: .medium, design: .monospaced))
+            Text("HYPR")
+                .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
                 .foregroundStyle(Color.hyprCyan)
                 .frame(width: 52, height: 52)
                 .background(
@@ -161,10 +243,13 @@ struct KeybindsSettingsView: View {
                 Text("Hypr key")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Color.hyprTextPrimary)
-                Text("Hold it, press a key, do a window thing. One key unlocks everything.")
+                Text("Hold HYPR while pressing a shortcut key.")
                     .font(.hyprCaption)
                     .foregroundStyle(Color.hyprTextSecondary)
                     .fixedSize(horizontal: false, vertical: true)
+                Text("Shortcuts call it HYPR. N means a workspace number from 1 to 9.")
+                    .font(.hyprCaption)
+                    .foregroundStyle(Color.hyprTextTertiary)
             }
 
             Spacer(minLength: HyprSpacing.sm)
