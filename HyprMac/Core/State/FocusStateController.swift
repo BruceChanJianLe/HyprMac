@@ -23,6 +23,7 @@ final class FocusStateController {
     /// focus or FFM). `0` means "no specific intent" — used as a sentinel
     /// before initial state is established or after focus is cleared.
     private(set) var lastFocusedID: CGWindowID = 0
+    private(set) var generation: UInt64 = 0
 
     /// Pass-through to `FocusBorder.trackedWindowID`. Lets callers read
     /// the bordered window without depending on `FocusBorder` directly.
@@ -45,6 +46,7 @@ final class FocusStateController {
         guard lastFocusedID != id else { return }
         let prev = lastFocusedID
         lastFocusedID = id
+        generation &+= 1
         hyprLog(.debug, .focus, "focus \(prev) → \(id) (\(reason))")
     }
 }

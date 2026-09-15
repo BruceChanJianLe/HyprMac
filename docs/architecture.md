@@ -309,7 +309,9 @@ this list is the index.
 - **Floating windows can sit behind tiled windows** — without SIP
   disabled, HyprMac cannot reliably set another process's window
   level. `Hypr+F` cycles and raises floaters; `raiseBehind` runs
-  automatically on app activation.
+  automatically on app activation and discovery reconciliation. It leaves
+  floating siblings of the focused tiled app alone, because restoring focus
+  within that app can put the tile back above its sibling and cause a loop.
 - **Squishy-sibling swap rejection** — when a swap squishes a
   sibling app that has no AX-reported or readback-confirmed minimum
   size (the canonical case in the user's setup is Sidenote), the

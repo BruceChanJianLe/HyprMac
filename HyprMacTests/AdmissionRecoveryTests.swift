@@ -694,6 +694,167 @@ final class FloatingFlagConsistencyTests: XCTestCase {
     }
 }
 
+final class FloatingRaiseRegressionTests: XCTestCase {
+    private func makeController(tiledPID: pid_t, floatingPID: pid_t)
+        -> (FloatingWindowController, WindowStateCache, WorkspaceManager, FocusStateController) {
+        let screen = PrimaryRecoveryScreen()
+        let display = DisplayManager(screenSource: { [screen] })
+        let cache = WindowStateCache()
+        let workspaces = WorkspaceManager(displayManager: display)
+        workspaces.initializeMonitors()
+        let tiled = makeWindow(id: 11, pid: tiledPID)
+        let floating = makeWindow(id: 12, pid: floatingPID)
+        tiled.cachedFrame = CGRect(x: 0, y: 0, width: 500, height: 500)
+        floating.cachedFrame = CGRect(x: 50, y: 50, width: 300, height: 300)
+        cache.cachedWindows = [11: tiled, 12: floating]
+        cache.knownWindowIDs = [11, 12]
+        cache.floatingWindowIDs = [12]
+        cache.tiledPositions = [11: tiled.cachedFrame!]
+        let workspace = workspaces.workspaceForScreen(screen)
+        workspaces.assignWindow(11, toWorkspace: workspace)
+        workspaces.assignWindow(12, toWorkspace: workspace)
+        let border = FocusBorder()
+        let focus = FocusStateController(focusBorder: border)
+        focus.recordFocus(11, reason: "test")
+        let controller = FloatingWindowController(
+            stateCache: cache, suppressions: SuppressionRegistry(), workspaceManager: workspaces,
+            tilingEngine: TilingEngine(displayManager: display), displayManager: display,
+            accessibility: AccessibilityManager(), cursorManager: CursorManager(),
+            focusController: focus, focusBorder: border, dimmingOverlay: DimmingOverlay()
+        )
+        controller.windowListForZOrder = {
+            [
+                [kCGWindowNumber as String: CGWindowID(11)],
+                [kCGWindowNumber as String: CGWindowID(12)],
+            ]
+        }
+        controller.windowFrameForZOrder = { $0.cachedFrame }
+        return (controller, cache, workspaces, focus)
+    }
+
+    func testRepeatedPollsDoNotRaiseOrRestoreSameAppFloatingSibling() {
+        let (controller, cache, _, _) = makeController(tiledPID: 100, floatingPID: 100)
+        var raises: [CGWindowID] = []
+        var restores: [CGWindowID] = []
+        var queued = 0
+        controller.performRaise = { raises.append($0.windowID); return .success }
+        controller.restoreFocusWithoutRaise = { restores.append($0.windowID) }
+        controller.scheduleAfter = { _, _ in queued += 1 }
+        XCTAssertEqual(controller.floatingWindowsBehindTiled(
+            floatingWindowIDs: cache.floatingWindowIDs,
+            tiledPositions: cache.tiledPositions
+        ), [12], "the floater must physically start behind the tile")
+
+        for _ in 0..<4 { controller.raiseBehind() }
+
+        XCTAssertEqual(raises, [])
+        XCTAssertEqual(restores, [])
+        XCTAssertEqual(queued, 0)
+    }
+
+    func testCrossAppFloaterRaisesOnceAndRestoresCapturedFocus() {
+        let (controller, cache, _, _) = makeController(tiledPID: 100, floatingPID: 200)
+        var raises: [CGWindowID] = []
+        var restores: [CGWindowID] = []
+        var queued: (() -> Void)?
+        controller.performRaise = { raises.append($0.windowID); return .success }
+        controller.restoreFocusWithoutRaise = { restores.append($0.windowID) }
+        controller.scheduleAfter = { _, body in queued = body }
+        XCTAssertEqual(controller.floatingWindowsBehindTiled(
+            floatingWindowIDs: cache.floatingWindowIDs,
+            tiledPositions: cache.tiledPositions
+        ), [12])
+
+        controller.raiseBehind()
+        queued?()
+
+        XCTAssertEqual(raises, [12])
+        XCTAssertEqual(restores, [11])
+    }
+
+    func testHyprFocusChangeInvalidatesQueuedRestoreIncludingABA() {
+        let (controller, _, _, focus) = makeController(tiledPID: 100, floatingPID: 200)
+        var restores: [CGWindowID] = []
+        var queued: (() -> Void)?
+        controller.performRaise = { _ in .success }
+        controller.restoreFocusWithoutRaise = { restores.append($0.windowID) }
+        controller.scheduleAfter = { _, body in queued = body }
+
+        controller.raiseBehind()
+        focus.recordFocus(12, reason: "cycleFocus")
+        focus.recordFocus(11, reason: "ABA")
+        queued?()
+
+        XCTAssertEqual(restores, [])
+    }
+
+    func testRemovedHiddenMenuAndScratchpadTargetsCancelQueuedRestore() {
+        func restoreCount(after mutate: (
+            WindowStateCache, WorkspaceManager, FloatingWindowController
+        ) -> Void) -> Int {
+            let (controller, cache, workspaces, _) = makeController(tiledPID: 100, floatingPID: 200)
+            var restores = 0
+            var queued: (() -> Void)?
+            controller.performRaise = { _ in .success }
+            controller.restoreFocusWithoutRaise = { _ in restores += 1 }
+            controller.scheduleAfter = { _, body in queued = body }
+            controller.raiseBehind()
+            XCTAssertNotNil(queued, "the cross-app raise must queue a restore before invalidation")
+            mutate(cache, workspaces, controller)
+            queued?()
+            return restores
+        }
+
+        XCTAssertEqual(restoreCount { cache, _, _ in cache.knownWindowIDs.remove(11) }, 0)
+        XCTAssertEqual(restoreCount { cache, _, _ in cache.hiddenWindowIDs.insert(11) }, 0)
+        XCTAssertEqual(restoreCount { _, workspaces, _ in workspaces.removeWindow(11) }, 0)
+        XCTAssertEqual(restoreCount { _, _, controller in controller.isMenuTracking = { true } }, 0)
+        XCTAssertEqual(restoreCount { _, _, controller in controller.isScratchpadVisible = { true } }, 0)
+    }
+}
+
+final class MouseTrackingFocusRegressionTests: XCTestCase {
+    func testPhysicalTopmostDispatchesFloaterAndExposedTilesWithoutFocusThrough() {
+        let tracker = MouseTrackingManager()
+        let tiled = makeWindow(id: 11, pid: 100)
+        let floating = makeWindow(id: 12, pid: 100)
+        let crossAppTile = makeWindow(id: 13, pid: 200)
+        var topmost: CGWindowID = 12
+        var focused: [CGWindowID] = []
+        var recorded: [CGWindowID] = []
+        var last: CGWindowID = 11
+        tracker.isFocusFollowsMouseEnabled = { true }
+        tracker.primaryScreenHeight = { 1000 }
+        tracker.mouseLocationNS = { CGPoint(x: 100, y: 900) }
+        tracker.hoverThrottleInterval = { 0 }
+        tracker.resolveTopmostWindowID = { _ in topmost }
+        tracker.floatingWindowIDs = { [12] }
+        tracker.isWindowVisible = { $0 == 12 }
+        tracker.cachedWindow = { [11: tiled, 12: floating, 13: crossAppTile][$0] }
+        tracker.tiledPositions = {
+            [
+                11: CGRect(x: 0, y: 0, width: 500, height: 500),
+                13: CGRect(x: 0, y: 0, width: 500, height: 500),
+            ]
+        }
+        tracker.lastFocusedID = { last }
+        tracker.recordFocus = { id, _ in recorded.append(id); last = id }
+        tracker.onFocusForFFM = { focused.append($0.windowID) }
+
+        tracker.handleMouseMove()
+        tracker.handleMouseMove()
+        topmost = 99
+        tracker.handleMouseMove()
+        topmost = 11
+        tracker.handleMouseMove()
+        topmost = 13
+        tracker.handleMouseMove()
+
+        XCTAssertEqual(recorded, [12, 11, 13])
+        XCTAssertEqual(focused, [12, 11, 13])
+    }
+}
+
 private final class PrimaryRecoveryScreen: NSScreen {
     override func isEqual(_ object: Any?) -> Bool {
         guard let screen = object as? NSScreen else { return false }

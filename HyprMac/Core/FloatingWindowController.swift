@@ -42,6 +42,19 @@ final class FloatingWindowController {
     var updatePositionCache: (() -> Void)?
     var isMenuTracking: () -> Bool = { false }
     var isScratchpadVisible: () -> Bool = { false }
+    var windowListForZOrder: () -> [[String: Any]]? = {
+        CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+        ) as? [[String: Any]]
+    }
+    var performRaise: (HyprWindow) -> AXError = {
+        AXUIElementPerformAction($0.element, kAXRaiseAction as CFString)
+    }
+    var scheduleAfter: (TimeInterval, @escaping () -> Void) -> Void = { delay, body in
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: body)
+    }
+    var restoreFocusWithoutRaise: (HyprWindow) -> Void = { $0.focusWithoutRaise() }
+    var windowFrameForZOrder: (HyprWindow) -> CGRect? = { $0.frame }
     // red flash on a float→tile the tree or the screen refused.
     var rejectFloatToTile: ((HyprWindow) -> Void)?
 
@@ -250,29 +263,51 @@ final class FloatingWindowController {
         isRaising = true
         defer { isRaising = false }
 
-        let toRaise = floatingWindowsBehindTiled(
+        let behind = floatingWindowsBehindTiled(
             floatingWindowIDs: stateCache.floatingWindowIDs,
             tiledPositions: stateCache.tiledPositions
         )
-        guard !toRaise.isEmpty else { return }
-
         let previousFocusID = focusController.lastFocusedID
+        let previousFocusGeneration = focusController.generation
         let previousWindow = stateCache.cachedWindows[previousFocusID]
+        let focusedTiledPID = previousWindow.flatMap {
+            stateCache.floatingWindowIDs.contains($0.windowID) ? nil : $0.ownerPID
+        }
+        // safari can reorder a floating sibling when focus returns to its tile
+        let toRaise = behind.filter { wid in
+            guard let focusedTiledPID else { return true }
+            return stateCache.cachedWindows[wid]?.ownerPID != focusedTiledPID
+        }
+        guard !toRaise.isEmpty else { return }
 
         suppressions.suppress("activation-switch", for: 0.5)
         suppressions.suppress("mouse-focus", for: 0.15)
 
+        hyprLog(.notice, .floating, "raise behind: wids=\(toRaise.sorted()) focus=\(previousFocusID)")
         for wid in toRaise {
             guard let w = stateCache.cachedWindows[wid] else { continue }
-            AXUIElementPerformAction(w.element, kAXRaiseAction as CFString)
+            let rc = performRaise(w)
+            if rc != .success {
+                hyprLog(.notice, .floating, "raise behind failed: wid=\(wid) rc=\(rc.rawValue)")
+            }
         }
 
         // immediately restore focus to the tiled window the user was interacting with.
         // prevents the raise from stealing focus and triggering an FFM cascade.
         if let prev = previousWindow, !stateCache.floatingWindowIDs.contains(prev.windowID) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [weak self] in
-                prev.focusWithoutRaise()
-                self?.updateFocusBorder?(prev)
+            scheduleAfter(0.02) { [weak self] in
+                guard let self,
+                      self.focusController.lastFocusedID == previousFocusID,
+                      self.focusController.generation == previousFocusGeneration,
+                      self.stateCache.knownWindowIDs.contains(previousFocusID),
+                      !self.stateCache.hiddenWindowIDs.contains(previousFocusID),
+                      self.workspaceManager.workspaceFor(previousFocusID) != nil,
+                      self.workspaceManager.isWindowVisible(previousFocusID),
+                      !self.stateCache.floatingWindowIDs.contains(previousFocusID),
+                      !self.isMenuTracking(), !self.isScratchpadVisible() else { return }
+                hyprLog(.notice, .floating, "raise behind restore: wid=\(previousFocusID)")
+                self.restoreFocusWithoutRaise(prev)
+                self.updateFocusBorder?(prev)
             }
         }
     }
@@ -306,9 +341,7 @@ final class FloatingWindowController {
         let visibleFloaters = floatingWindowIDs.filter { workspaceManager.isWindowVisible($0) }
         guard !visibleFloaters.isEmpty else { return [] }
 
-        guard let infoList = CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
-        ) as? [[String: Any]] else {
+        guard let infoList = windowListForZOrder() else {
             return Array(visibleFloaters)
         }
 
@@ -335,7 +368,7 @@ final class FloatingWindowController {
         var needsRaise: [CGWindowID] = []
         for wid in visibleFloaters {
             guard let fz = zIndex[wid],
-                  let w = stateCache.cachedWindows[wid], let frame = w.frame else { continue }
+                  let w = stateCache.cachedWindows[wid], let frame = windowFrameForZOrder(w) else { continue }
             let screen = displayManager.screen(at: CGPoint(x: frame.midX, y: frame.midY))
             let sid = screen.map { workspaceManager.screenID(for: $0) } ?? -1
             if let tz = frontTiledZ[sid], fz > tz {

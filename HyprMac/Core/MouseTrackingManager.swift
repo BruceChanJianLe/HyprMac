@@ -63,6 +63,8 @@ class MouseTrackingManager {
     var isFocusFollowsMouseEnabled: () -> Bool = { false }
     var isMouseButtonDown: () -> Bool = { false }
     var primaryScreenHeight: () -> CGFloat = { 0 }
+    var mouseLocationNS: () -> CGPoint = { NSEvent.mouseLocation }
+    var resolveTopmostWindowID: ((CGPoint) -> CGWindowID?)?
     var screenAt: (CGPoint) -> NSScreen? = { _ in nil }
     var floatingWindowIDs: () -> Set<CGWindowID> = { [] }
     var isWindowVisible: (CGWindowID) -> Bool = { _ in false }
@@ -103,7 +105,7 @@ class MouseTrackingManager {
         if now - lastHandleTime < hoverThrottleInterval() { return }
         lastHandleTime = now
 
-        let mouseNS = NSEvent.mouseLocation
+        let mouseNS = mouseLocationNS()
         let cgY = primaryScreenHeight() - mouseNS.y
         let cgPoint = CGPoint(x: mouseNS.x, y: cgY)
 
@@ -167,19 +169,20 @@ class MouseTrackingManager {
     /// Resolve which window should receive focus for `cgPoint`, or `nil`
     /// when no change is appropriate.
     ///
-    /// Returns `nil` for the common no-change cases: cursor over a
-    /// floater (leave focus alone), cursor over the already-focused
-    /// tile, cursor over an unmanaged normal-layer overlay (popover,
+    /// Returns `nil` for the common no-change cases: cursor over the already-focused
+    /// window, cursor over an unmanaged normal-layer overlay (popover,
     /// autocomplete panel), or no managed window at all.
     private func determineFocusTarget(at cgPoint: CGPoint) -> FocusTarget? {
         // snapshot closures once per move event
         let floating = floatingWindowIDs()
         let managed = tiledPositions()
 
-        if let topmostID = topmostWindowID(at: cgPoint) {
-            // cursor is over a visible floater — leave focus alone
+        let topmost = resolveTopmostWindowID.map { $0(cgPoint) } ?? topmostWindowID(at: cgPoint)
+        if let topmostID = topmost {
+            // focus the physical floater, including a sibling of the current tile
             if floating.contains(topmostID), isWindowVisible(topmostID) {
-                return nil
+                guard topmostID != lastFocusedID(), let target = cachedWindow(topmostID) else { return nil }
+                return FocusTarget(windowID: topmostID, window: target, reason: "ffm-topmost-floating")
             }
 
             if managed[topmostID] != nil {
@@ -236,7 +239,7 @@ class MouseTrackingManager {
     /// the next pass.
     func refocusUnderCursor() {
         mainThreadOnly()
-        let mouseNS = NSEvent.mouseLocation
+        let mouseNS = mouseLocationNS()
         let cgY = primaryScreenHeight() - mouseNS.y
         let cgPoint = CGPoint(x: mouseNS.x, y: cgY)
 

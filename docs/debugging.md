@@ -553,6 +553,40 @@ admission recovery: it is drawn over the tiles like a floater but it is
 not floating, so it gets its own tag rather than borrowing
 `syncTracker-floating`.
 
+### Same-app tiled/floating focus flicker
+
+A Safari capture on September 14, 2026 exposed a focus/z-order feedback
+loop. On build `1d4818448504+f0bab264c279`, hovering tiled window `42533`
+while Safari floater `44870` was visible caused repeated reconciliation
+passes about 200 ms apart. Each pass raised the floater, then restored
+`tiled` focus through `focusWithoutRaise`, which generated another Safari
+focused-window notification and poll. The logged suppression pair identifies
+`raiseBehind` as the writer; the old build did not log its individual raise
+IDs or AX raise return codes. Hypr+F recorded `42533 → 44870` at
+21:20:33.700 CDT, followed by a stale restore to `42533` at 21:20:33.763.
+A later tiled hover restarted the loop. These are stable window IDs, not
+page titles.
+
+Automatic raising now leaves floating siblings of the focused tiled app
+alone. Safari can reorder sibling windows when main/key focus is restored,
+so repeatedly enforcing floater-on-top conflicts with the selected tile.
+Cross-app raising and explicit Hypr+F remain available. Hover can select a
+visible topmost floater by its physical window ID. A delayed restore must
+still refer to the current, visible, known tiled focus target and must not
+run during menu tracking or scratchpad display.
+
+Actual reconciliation writes log `raise behind: wids=[…] focus=<id>`,
+`raise behind failed: wid=<id> rc=<AXError>`, and
+`raise behind restore: wid=<id>` at notice level. Same-app passes that write
+nothing stay silent. Correlate these with `ffm-topmost-floating`, ordinary
+`ffm-topmost`, `cycleFocus`, and `ax event: focusedWindowChanged pid=<pid>`.
+
+Live acceptance requires two overlapping Safari windows, one tiled and one
+floating after admission refusal. Hover each exposed window in turn, move
+to another app, then press Hypr+F. Check exact AX window identity and stable
+z-order as well as the visible result; unit tests cannot establish macOS AX
+behavior. Keep existing logs before restarting the app.
+
 ### "Why didn't a swap take effect?"
 
 ```
