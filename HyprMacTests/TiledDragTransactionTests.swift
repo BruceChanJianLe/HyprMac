@@ -642,6 +642,54 @@ final class TiledDragTransactionTests: XCTestCase {
         XCTAssertEqual(tree.structuralFingerprint(), context.fingerprint)
     }
 
+    func testOffMonitorSizeChangeWithoutTargetRestoresInsteadOfResizingSourceTree() {
+        let (tree, _, context) = fixture()
+        let originals = layoutFrames(tree, context)
+        let fake = FakeAX(frames: originals)
+        let transaction = TiledDragTransaction(ioFactory: fake.factory)
+        guard case let .captured(snapshot) = transaction.capture(
+            draggedID: 1, tree: tree, context: context, generation: 1,
+            currentContext: { context }) else { return XCTFail("capture failed") }
+        fake.frames[1] = CGRect(x: 1400, y: 100, width: 800, height: 500)
+
+        guard case .rejectedRestored(reason: .preflight(.noTarget), _) =
+                transaction.dropRelease(snapshot, mode: nil, currentContext: { context }) else {
+            return XCTFail("off-monitor release must restore the source layout")
+        }
+        XCTAssertEqual(fake.frames, originals)
+        XCTAssertEqual(tree.structuralFingerprint(), context.fingerprint)
+    }
+
+    func testInsertionUsesKnownMinimumBeforeWritingCandidate() {
+        let tree = BSPTree()
+        let windows = [makeWindow(id: 1), makeWindow(id: 2)]
+        windows.forEach { _ = tree.insert($0, maxDepth: 3) }
+        let context = TiledDragContext(
+            workspace: 1, physicalDisplayID: 77,
+            usableFrame: CGRect(x: 0, y: 0, width: 1200, height: 800),
+            gap: 8, padding: 8, maxDepth: 3,
+            memberIDs: Set(windows.map(\.windowID)), floatingIDs: [],
+            fingerprint: tree.structuralFingerprint()
+        )
+        let originals = layoutFrames(tree, context)
+        let fake = FakeAX(frames: originals)
+        let transaction = TiledDragTransaction(
+            ioFactory: fake.factory,
+            minimumSize: { $0?.windowID == 1 ? CGSize(width: 619, height: 0) : .zero }
+        )
+        guard case let .captured(snapshot) = transaction.capture(
+            draggedID: 2, tree: tree, context: context, generation: 1,
+            currentContext: { context }) else { return XCTFail("capture failed") }
+        fake.frames[2]!.origin.x += 2
+
+        guard case let .committed(_, actualFrames, _) = transaction.dropRelease(
+            snapshot, mode: .insert(targetID: 1, edge: .right),
+            currentContext: { context }) else {
+            return XCTFail("known fitting minimum must not reject the insertion")
+        }
+        XCTAssertGreaterThanOrEqual(actualFrames[1]?.width ?? 0, 619)
+    }
+
     func testDropReleaseAtThresholdUsesOrdinaryNoTargetRestoration() {
         let (tree, _, context) = fixture()
         let originals = layoutFrames(tree, context)

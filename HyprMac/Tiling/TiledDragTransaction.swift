@@ -67,6 +67,13 @@ struct TiledDragTransaction {
     typealias IOFactory = ([CGWindowID: HyprWindow], @escaping () -> UInt64) -> FrameSizingIO
 
     let ioFactory: IOFactory
+    let minimumSize: (HyprWindow?) -> CGSize
+
+    init(ioFactory: @escaping IOFactory,
+         minimumSize: @escaping (HyprWindow?) -> CGSize = { _ in .zero }) {
+        self.ioFactory = ioFactory
+        self.minimumSize = minimumSize
+    }
 
     func capture(pointer: CGPoint, tree: BSPTree, context: TiledDragContext,
                  occludingWindows: [HyprWindow], generation: UInt64,
@@ -254,9 +261,26 @@ struct TiledDragTransaction {
         }) else {
             return restore(snapshot, reason: .preflight(.maxDepthExceeded), attempt: attempt)
         }
-        let layouts = candidate.layout(in: snapshot.context.usableFrame,
+        var layouts = candidate.layout(in: snapshot.context.usableFrame,
                                        gap: snapshot.context.gap,
                                        padding: snapshot.context.padding)
+        let knownConflicts = layouts.compactMap { window, frame -> (HyprWindow, CGSize)? in
+            let minimum = minimumSize(window)
+            guard minimum.width > frame.width + TilingConfig.minSizeConflictSlackPx
+                    || minimum.height > frame.height + TilingConfig.minSizeConflictSlackPx else {
+                return nil
+            }
+            return (window, minimum)
+        }
+        if !knownConflicts.isEmpty {
+            candidate.adjustForMinSizes(knownConflicts,
+                                        in: snapshot.context.usableFrame,
+                                        gap: snapshot.context.gap,
+                                        padding: snapshot.context.padding)
+            layouts = candidate.layout(in: snapshot.context.usableFrame,
+                                       gap: snapshot.context.gap,
+                                       padding: snapshot.context.padding)
+        }
         guard valid(layouts, context: snapshot.context, attempt: attempt) else {
             return restore(snapshot, reason: .preflight(.invalidTarget), attempt: attempt)
         }
@@ -314,6 +338,10 @@ struct TiledDragTransaction {
             abs(frame.size.width - $0.size.width) > 20
                 || abs(frame.size.height - $0.size.height) > 20
         } ?? false
+        if resized, case nil = mode,
+           !snapshot.context.usableFrame.contains(CGPoint(x: frame.midX, y: frame.midY)) {
+            return restore(snapshot, reason: .preflight(.noTarget), attempt: attempt)
+        }
         if !resized, let original {
             let tolerance = FrameSizingConfiguration()
             let unchanged = abs(frame.minX - original.minX) <= tolerance.positionTolerance

@@ -373,7 +373,8 @@ class TilingEngine {
                                              sourceTree: sourceTree) else {
             return .unknown(.superseded)
         }
-        let transaction = TiledDragTransaction(ioFactory: frameSizingIOFactory)
+        let transaction = TiledDragTransaction(ioFactory: frameSizingIOFactory,
+                                               minimumSize: minimumSize(for:))
         return transaction.capture(
             draggedID: draggedID, tree: sourceTree, context: context,
             generation: generation,
@@ -405,7 +406,8 @@ class TilingEngine {
             workspace: initialLocation.workspace, screen: initialLocation.screen,
             floatingIDs: initialLocation.floatingIDs, sourceTree: sourceTree
         ) else { return .unknown(.superseded) }
-        let transaction = TiledDragTransaction(ioFactory: frameSizingIOFactory)
+        let transaction = TiledDragTransaction(ioFactory: frameSizingIOFactory,
+                                               minimumSize: minimumSize(for:))
         return transaction.capture(
             pointer: pointer, tree: sourceTree, context: context,
             occludingWindows: occludingWindows, generation: generation,
@@ -498,7 +500,8 @@ class TilingEngine {
         }
 
         guard currentContext() == snapshot.context else { return .superseded }
-        let transaction = TiledDragTransaction(ioFactory: frameSizingIOFactory)
+        let transaction = TiledDragTransaction(ioFactory: frameSizingIOFactory,
+                                               minimumSize: minimumSize(for:))
         let outcome = transaction.dropRelease(snapshot, mode: mode,
                                               currentContext: currentContext)
         guard currentContext() == snapshot.context else { return .superseded }

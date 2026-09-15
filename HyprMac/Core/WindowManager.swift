@@ -322,7 +322,7 @@ class WindowManager {
         mouseTracker.lastFocusedID = { [weak self] in self?.focusController.lastFocusedID ?? 0 }
         mouseTracker.recordFocus = { [weak self] id, reason in self?.focusController.recordFocus(id, reason: reason) }
         mouseTracker.onHideFocusBorder = { [weak self] in
-            self?.focusBorder.hide()
+            self?.focusBorder.hidePersistentBorder()
             self?.dimmingOverlay.hideAll()
         }
 
@@ -348,6 +348,11 @@ class WindowManager {
         wireAdmissionRecovery()
 
         self.tiledDragHandler = makeTiledDragHandler()
+        focusBorder.onErrorFeedbackFinished = { [weak self] in
+            guard let self, self.isRunning, self.config.showFocusBorder,
+                  let focused = self.currentFocusedWindow() else { return }
+            self.updateFocusBorder(for: focused)
+        }
         driftMonitor.isSuspended = { [weak self] in
             guard let self else { return true }
             return self.mouseButtonDown
@@ -1047,7 +1052,7 @@ class WindowManager {
             // its outline on the next poll (<1s).
             refreshFloatingBorders()
         } else {
-            focusBorder.hide()
+            focusBorder.hidePersistentBorder()
             focusBorder.hideFloatingBorders()
         }
         refreshDimming(focusedID: window.windowID)

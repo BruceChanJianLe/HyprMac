@@ -66,6 +66,39 @@ final class FocusStateControllerTests: XCTestCase {
     }
 }
 
+final class FocusBorderFeedbackLifecycleTests: XCTestCase {
+    func testPersistentRefreshStaysBlockedUntilFeedbackFinishes() {
+        var lifecycle = FocusBorderFeedbackLifecycle()
+
+        lifecycle.begin()
+        XCTAssertFalse(lifecycle.permitsPersistentShow)
+        XCTAssertTrue(lifecycle.finish())
+        XCTAssertTrue(lifecycle.permitsPersistentShow)
+        XCTAssertFalse(lifecycle.finish(), "completion must be delivered once")
+    }
+
+    func testExplicitCancellationImmediatelyReleasesPersistentRefresh() {
+        var lifecycle = FocusBorderFeedbackLifecycle()
+        lifecycle.begin()
+
+        lifecycle.cancel()
+
+        XCTAssertTrue(lifecycle.permitsPersistentShow)
+        XCTAssertFalse(lifecycle.finish(), "cancelled feedback must not report natural completion")
+    }
+
+    func testPersistentHideDoesNotCancelActiveFeedback() {
+        let border = FocusBorder()
+        border.beginErrorFeedback(windowID: 71)
+
+        border.hidePersistentBorder()
+
+        XCTAssertTrue(border.isErrorFeedbackActive)
+        border.hide()
+        XCTAssertFalse(border.isErrorFeedbackActive)
+    }
+}
+
 final class FocusBorderCornerRadiusTests: XCTestCase {
     override func setUpWithError() throws {
         if ProcessInfo.processInfo.environment["HYPRMAC_HEADLESS_TESTS"] == "1" {
@@ -146,6 +179,30 @@ final class FocusBorderCornerRadiusTests: XCTestCase {
         // callback-routing assertion above.
         border.isEnabled = false
         XCTAssertEqual(border.visibleOwnedPanelCount, 0)
+    }
+
+    @MainActor
+    func testFocusChangeCannotCutErrorFeedbackShort() async {
+        let border = FocusBorder()
+        border.primaryScreenHeight = 1080
+        let rejected = CGRect(x: 100, y: 100, width: 400, height: 300)
+        let newlyFocused = CGRect(x: 600, y: 100, width: 400, height: 300)
+        var finished = false
+        border.onErrorFeedbackFinished = { finished = true }
+
+        border.flashError(around: rejected, windowID: 48)
+        border.show(around: newlyFocused, windowID: 49)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertFalse(finished, "an ordinary focus refresh must not cancel rejection feedback")
+        XCTAssertEqual(border.trackedWindowID, 48)
+
+        let deadline = Date().addingTimeInterval(2)
+        while !finished, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertTrue(finished)
+        border.isEnabled = false
     }
 
     @MainActor

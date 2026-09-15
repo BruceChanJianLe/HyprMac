@@ -108,6 +108,29 @@ final class TilingEngineTiledDragTests: XCTestCase {
                                                   screen: fixture.screen) === candidate)
     }
 
+    func testOffMonitorReleaseRestoresWithoutReplacingSourceTree() throws {
+        let fixture = try makeFixture()
+        let snapshot = try capture(fixture)
+        let sourceTree = try XCTUnwrap(fixture.engine.existingTree(forWorkspace: 1,
+                                                                  screen: fixture.screen))
+        fixture.trace.frames[1] = CGRect(
+            x: snapshot.context.usableFrame.maxX + 100,
+            y: snapshot.context.usableFrame.minY,
+            width: 800,
+            height: 500
+        )
+
+        let outcome = fixture.engine.dropTiledDrag(
+            snapshot, mode: nil, currentLocation: { (1, fixture.screen, []) })
+
+        guard case .rejectedRestored(reason: .preflight(.noTarget), _) = outcome else {
+            return XCTFail("off-monitor release must restore")
+        }
+        XCTAssertEqual(fixture.trace.frames, snapshot.originalFrames)
+        XCTAssertTrue(fixture.engine.existingTree(forWorkspace: 1,
+                                                  screen: fixture.screen) === sourceTree)
+    }
+
     func testResizeClassificationReadFailureRestoresOriginalFrameMap() throws {
         let fixture = try makeFixture()
         let snapshot = try capture(fixture)
@@ -339,9 +362,7 @@ final class TilingEngineTiledDragTests: XCTestCase {
     private func makeFixture(
         selectedDisplayID: (() -> CGDirectDisplayID)? = nil
     ) throws -> Fixture {
-        guard let screen = NSScreen.main ?? NSScreen.screens.first else {
-            throw XCTSkip("tiled drag engine tests require a screen fixture")
-        }
+        let screen = NSScreen.main ?? NSScreen.screens.first ?? DragTestScreen()
         let trace = DragSizingTrace()
         let fixtureDisplayID = (screen.deviceDescription[
             NSDeviceDescriptionKey("NSScreenNumber")
@@ -353,7 +374,7 @@ final class TilingEngineTiledDragTests: XCTestCase {
             if actualID == fixtureDisplayID, let selectedDisplayID { return selectedDisplayID() }
             return actualID
         }
-        let engine = TilingEngine(displayManager: DisplayManager(),
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
                                   frameSizingIOFactory: trace.factory,
                                   tiledDragDisplayID: displayID)
         let windows = [makeWindow(id: 1), makeWindow(id: 2), makeWindow(id: 3)]
@@ -363,11 +384,9 @@ final class TilingEngineTiledDragTests: XCTestCase {
     }
 
     private func makeEmptyFixture() throws -> Fixture {
-        guard let screen = NSScreen.main ?? NSScreen.screens.first else {
-            throw XCTSkip("tiled drag engine tests require a screen fixture")
-        }
+        let screen = NSScreen.main ?? NSScreen.screens.first ?? DragTestScreen()
         let trace = DragSizingTrace()
-        let engine = TilingEngine(displayManager: DisplayManager(),
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
                                   frameSizingIOFactory: trace.factory)
         return Fixture(engine: engine, screen: screen, trace: trace)
     }
@@ -386,6 +405,15 @@ final class TilingEngineTiledDragTests: XCTestCase {
     private func center(of frame: CGRect?) -> CGPoint {
         guard let frame else { return .zero }
         return CGPoint(x: frame.midX, y: frame.midY)
+    }
+}
+
+private final class DragTestScreen: NSScreen {
+    override var frame: NSRect { NSRect(x: 0, y: 0, width: 1200, height: 800) }
+    override var visibleFrame: NSRect { frame }
+    override var localizedName: String { "Tiled drag test display" }
+    override var deviceDescription: [NSDeviceDescriptionKey: Any] {
+        [NSDeviceDescriptionKey("NSScreenNumber"): NSNumber(value: 77)]
     }
 }
 

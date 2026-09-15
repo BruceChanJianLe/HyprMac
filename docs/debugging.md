@@ -587,6 +587,37 @@ to another app, then press Hypr+F. Check exact AX window identity and stable
 z-order as well as the visible result; unit tests cannot establish macOS AX
 behavior. Keep existing logs before restarting the app.
 
+### Rejected drag feedback and source restoration
+
+A September 14 capture exposed two drag regressions. At 21:47:17.362 CDT,
+a rejected Terminal move restored its frames; the delayed cursor refocus
+started at .371. With `showFocusBorder=false`, that ordinary focus refresh
+called `hide()` and canceled the rejection panel after only a few frames.
+Persistent border refreshes now defer to the bounded error feedback interval.
+Explicit teardown (fullscreen, workspace changes, shutdown, or disabling
+chrome) still cancels it. Natural completion resolves current focus afresh;
+it does not replay a captured window or frame. Notice lines
+`error feedback begin/end/cancel: wid=<id>` distinguish completion from
+cancellation without recording titles.
+
+At 21:49:23.963, a cross-monitor Terminal drag was classified as a manual
+resize because its released size differed from the captured size. There was
+no target on the source monitor, but that did not prevent the resize from
+changing the source tree ratios to 0.85 and 0.59. The accepted pass placed
+Terminal `45845` in a 162-point-high band; the app read back 169 points.
+A later rejected drag correctly restored that already-corrupted layout.
+A resized no-target release whose frame center is outside the source usable
+frame now restores the captured source frames without replacing its tree.
+Ordinary on-source resize behavior remains available.
+
+Trying to return Terminal beside Messages also exposed a mismatch between
+ordinary tiling and drag insertion. Ordinary tiling had verified an adjusted
+619-point Messages window beside a 437-point Terminal slot. Drag insertion
+started with equal halves and rejected Messages at 528 points. Drag candidates
+now adjust their private ratios for known minimum sizes before AX writes,
+then pass through the existing readback and restoration checks. This does
+not publish unverified frames or change admission recovery.
+
 ### "Why didn't a swap take effect?"
 
 ```

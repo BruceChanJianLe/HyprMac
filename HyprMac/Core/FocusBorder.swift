@@ -4,6 +4,22 @@
 
 import Cocoa
 
+struct FocusBorderFeedbackLifecycle {
+    private(set) var isActive = false
+
+    var permitsPersistentShow: Bool { !isActive }
+
+    mutating func begin() { isActive = true }
+
+    mutating func finish() -> Bool {
+        guard isActive else { return false }
+        isActive = false
+        return true
+    }
+
+    mutating func cancel() { isActive = false }
+}
+
 /// Visual focus indicator: a tinted outline around the focused window
 /// and a thinner outline around each visible floating window.
 ///
@@ -18,8 +34,8 @@ import Cocoa
 /// Floating-window panels are keyed by `CGWindowID` and managed
 /// independently via `updateFloatingBorders` / `hideFloatingBorders`.
 ///
-/// Lifecycle invariants: every public mutation cancels in-flight work
-/// (`settleWork`, `shakeTimer`) before reassigning; `hide` nils the
+/// Lifecycle invariants: explicit teardown cancels in-flight work;
+/// persistent `show` calls defer to bounded error feedback; `hide` nils the
 /// focused panel and its glow view synchronously so the next `show`
 /// builds a fresh panel rather than reusing one that is mid-fade;
 /// `deinit` guarantees cleanup of every owned panel and timer.
@@ -51,6 +67,10 @@ class FocusBorder {
     private var renderGeneration = 0
     private var restoreShakenWindow: (() -> Void)?
     var onShakeRestore: () -> Void = {}
+    var onErrorFeedbackFinished: () -> Void = {}
+    private var errorFeedback = FocusBorderFeedbackLifecycle()
+    private var errorFeedbackWindowID: CGWindowID?
+    var isErrorFeedbackActive: Bool { errorFeedback.isActive }
 
     var visibleOwnedPanelCount: Int { observedPanels.allObjects.filter(\.isVisible).count }
     static func errorFeedbackCanRender(isEnabled _: Bool) -> Bool { true }
@@ -122,12 +142,15 @@ class FocusBorder {
 
     /// Show the focused-window border around `rect` and start the
     /// transition to the settled (outline-only) state after
-    /// `settleDelaySec`. Cancels any in-flight settle or shake before
-    /// re-asserting — without this, a pending shake or settle would
-    /// stomp the new frame moments after `show` returns.
+    /// `settleDelaySec`. Cancels any in-flight settle before re-asserting.
+    /// An active error flash keeps ownership until its bounded interval ends.
     func show(around rect: CGRect, windowID: CGWindowID) {
         mainThreadOnly()
         guard isEnabled else { return }
+        // Focus can change while a rejected drag is still reporting its
+        // result. Keep the one-shot red panel intact; the owner re-resolves
+        // current focus when the bounded feedback interval finishes.
+        guard errorFeedback.permitsPersistentShow else { return }
         // idempotent re-show: already painted on this window at this frame
         // and the state machine has progressed past .hidden — nothing to do.
         // without this, every redundant updateFocusBorder call (post-click
@@ -141,9 +164,8 @@ class FocusBorder {
             return
         }
         renderGeneration += 1
-        // cancel any in-flight transition (settle, shake) before re-asserting.
-        // without this, a pending shake or settle can mutate the panel after
-        // show() returns and undo the new frame/state.
+        // cancel any in-flight transition before re-asserting. Active error
+        // feedback returned above and keeps ownership of the panel.
         settleWork?.cancel()
         cancelActiveShake()
         // drop a leftover error pill if show() reuses a panel mid-flash
@@ -334,8 +356,13 @@ class FocusBorder {
     /// that is mid-fade. Cancels any pending settle or shake work.
     func hide() {
         mainThreadOnly()
+        if errorFeedback.isActive {
+            hyprLog(.notice, .border, "error feedback cancel: wid=\(errorFeedbackWindowID ?? 0)")
+        }
         settleWork?.cancel()
         cancelActiveShake()
+        errorFeedback.cancel()
+        errorFeedbackWindowID = nil
         trackedWindowID = nil
         trackedWindowFrame = nil
         focusedCornerRadiusExpansion = Tuning.activeBorderWidth / 2
@@ -351,6 +378,21 @@ class FocusBorder {
         glowView = nil
 
         fadeOutAndOrderOut(p, layer: glowLayer, duration: fadeDurationSec)
+    }
+
+    /// Hide persistent focus chrome without interrupting one-shot rejection
+    /// feedback. Used by ordinary focus refreshes when persistent borders are
+    /// disabled or no managed window is under the cursor.
+    func hidePersistentBorder() {
+        mainThreadOnly()
+        guard errorFeedback.permitsPersistentShow else { return }
+        hide()
+    }
+
+    func beginErrorFeedback(windowID: CGWindowID) {
+        errorFeedback.begin()
+        errorFeedbackWindowID = windowID
+        hyprLog(.notice, .border, "error feedback begin: wid=\(windowID)")
     }
 
     /// Flash a red border around `rect` and shake the overlay
@@ -370,6 +412,7 @@ class FocusBorder {
         let generation = renderGeneration
         settleWork?.cancel()
         cancelActiveShake()
+        beginErrorFeedback(windowID: windowID)
 
         let expansion = Tuning.errorBorderWidth / 2
         focusedCornerRadiusExpansion = expansion
@@ -440,7 +483,12 @@ class FocusBorder {
                 // fade out after shake
                 DispatchQueue.main.asyncAfter(deadline: .now() + Tuning.shakeFadeDelaySec) { [weak self] in
                     guard let self, self.renderGeneration == generation else { return }
+                    guard self.errorFeedback.finish() else { return }
+                    let finishedID = self.errorFeedbackWindowID ?? 0
+                    self.errorFeedbackWindowID = nil
+                    hyprLog(.notice, .border, "error feedback end: wid=\(finishedID)")
                     self.hide()
+                    self.onErrorFeedbackFinished()
                 }
             }
         }
@@ -668,6 +716,8 @@ class FocusBorder {
         settleWork?.cancel()
         settleWork = nil
         cancelActiveShake()
+        errorFeedback.cancel()
+        errorFeedbackWindowID = nil
         for owned in observedPanels.allObjects {
             owned.contentView?.subviews.forEach { $0.layer?.removeAllAnimations() }
             owned.orderOut(nil)
