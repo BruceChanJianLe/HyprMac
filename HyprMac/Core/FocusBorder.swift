@@ -137,6 +137,28 @@ class FocusBorder {
     /// `config.chromeFadeDurationSec`.
     var fadeDurationSec: TimeInterval = Tuning.showAnimationDurationSec
 
+    /// Repaint existing persistent chrome without changing geometry or
+    /// restarting its animations. Active rejection feedback keeps its red.
+    func refreshAppearance(focusColor: CGColor, floatingColor: CGColor) {
+        mainThreadOnly()
+        guard !errorFeedback.isActive else { return }
+        let focusedColor = renderedWindowID.map { floaterFrames[$0] != nil } == true
+            ? floatingColor : focusColor
+        accentCGColor = focusedColor
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if let layer = glowView?.layer {
+            layer.borderColor = focusedColor
+            layer.backgroundColor = state == .active
+                ? focusedColor.copy(alpha: Tuning.activeFillAlpha)
+                : CGColor.clear
+        }
+        for (_, border) in floatingPanels {
+            border.glowView.layer?.borderColor = floatingColor
+        }
+        CATransaction.commit()
+    }
+
     deinit {
         // tests and future ownership swaps may drop a FocusBorder mid-life;
         // ensure we don't leak NSPanels or live timers in those cases.

@@ -17,9 +17,9 @@ struct HyprMacApp: App {
     var body: some Scene {
         MenuBarExtra {
             #if HYPRMAC_DEBUG_VARIANT
-            MenuBarView()
+            MenuBarView(appDelegate: appDelegate)
             #else
-            MenuBarView(updater: updaterController.updater)
+            MenuBarView(appDelegate: appDelegate, updater: updaterController.updater)
             #endif
         } label: {
             WorkspaceIndicatorLabel()
@@ -27,7 +27,7 @@ struct HyprMacApp: App {
         .menuBarExtraStyle(.window)
 
         Window("HyprMac Settings", id: "settings") {
-            SettingsView()
+            SettingsView(showTutorial: { appDelegate.showTour() })
         }
         .defaultSize(width: 760, height: 600)
     }

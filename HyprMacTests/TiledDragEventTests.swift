@@ -21,14 +21,22 @@ final class TiledDragEventTests: XCTestCase {
                        CGPoint(x: 310, y: 420))
     }
 
-    func testOptionComesFromReleaseEvent() throws {
+    func testOptionRequestsSwapAtRelease() throws {
         let withoutOption = try makeEvent(type: .leftMouseUp, point: .zero)
         let withOption = try makeEvent(type: .leftMouseUp, point: .zero, optionDown: true)
 
         XCTAssertFalse(TiledDragEvent.release(event: withoutOption, primaryHeight: 900,
-                                              sawDragEvent: true).optionDown)
+                                              sawDragEvent: true).swapRequested)
         XCTAssertTrue(TiledDragEvent.release(event: withOption, primaryHeight: 900,
-                                             sawDragEvent: true).optionDown)
+                                             sawDragEvent: true).swapRequested)
+    }
+
+    func testSemanticSwapIntentDoesNotRequireAPlatformModifier() throws {
+        let event = try makeEvent(type: .leftMouseUp, point: .zero)
+
+        XCTAssertTrue(TiledDragEvent.release(event: event, primaryHeight: 900,
+                                             sawDragEvent: true,
+                                             swapRequested: true).swapRequested)
     }
 
     func testReleasePreservesWhetherDragEventWasObserved() throws {

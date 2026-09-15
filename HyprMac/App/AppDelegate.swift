@@ -112,6 +112,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func startWindowManager() {
         let config = UserConfig.shared
         windowManager = WindowManager(config: config)
+        windowManager?.keybindOverlay.onShowTutorial = { [weak self] in
+            self?.showTour()
+        }
         if config.enabled {
             windowManager?.start()
         }
@@ -139,21 +142,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Public entry for replaying the first-run tour from Settings.
     func showTour() {
-        showWelcome(mode: .firstRun)
+        hyprLog(.debug, .lifecycle, "tutorial requested")
+        presentWelcome(mode: .firstRun)
     }
 
     private func showWelcome(mode: WelcomeMode) {
         // small delay so tiling engine settles first
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            let controller = WelcomeWindowController()
-            controller.show(mode: mode)
-            self?.welcomeController = controller
+            self?.presentWelcome(mode: mode)
         }
+    }
+
+    private func presentWelcome(mode: WelcomeMode) {
+        welcomeController?.dismiss()
+        let controller = WelcomeWindowController()
+        welcomeController = controller
+        controller.show(mode: mode)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         guard !diagnosticOnly else { return }
-        windowManager?.stop()
+        windowManager?.stop(keepPauseShortcut: false)
         // restore caps lock to normal when quitting
         KeyRemapper.restoreCapsLock()
     }

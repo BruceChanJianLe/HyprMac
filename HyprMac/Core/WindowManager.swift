@@ -4,7 +4,6 @@
 // directly — this class is the seam that holds them in one place.
 
 import Cocoa
-import Combine
 
 /// Long-lived orchestrator that owns every subsystem and routes work between them.
 ///
@@ -166,7 +165,8 @@ class WindowManager {
     let suppressions = SuppressionRegistry()
 
     // live config reload
-    private var configObservers: Set<AnyCancellable> = []
+    private lazy var configUpdateCoordinator = ConfigUpdateCoordinator(
+        initial: RuntimeConfigState(config))
     private var isRunning = false
 
     // fingerprint of the last display layout we acted on. macOS posts
@@ -198,8 +198,8 @@ class WindowManager {
     /// 3. Subscribe to `UserConfig` `@Published` properties so runtime
     ///    config changes flow through to the right subsystem.
     ///
-    /// Nothing observable starts running here — `start()` does the
-    /// activation. `init` is safe to run before AX permission is granted.
+    /// The recovery hotkey tap starts here so pause/resume works even when
+    /// tiling launches disabled. Window discovery and tiling start in `start()`.
     init(config: UserConfig) {
         self.config = config
         self.focusController = FocusStateController(focusBorder: focusBorder)
@@ -285,17 +285,29 @@ class WindowManager {
         }
 
         hotkeyManager.onAction = { [weak self] action in
-            self?.suppressions.suppress("mouse-focus", for: 0.15)
-            self?.handleAction(action)
+            guard let self else { return }
+            if action == .toggleTiling {
+                self.config.enabled.toggle()
+                return
+            }
+            guard self.config.enabled || action == .showKeybinds else { return }
+            self.suppressions.suppress("mouse-focus", for: 0.15)
+            self.handleAction(action)
         }
 
         hotkeyManager.onHyprKeyDown = { [weak self] in
-            self?.hyprHeld = true
-            self?.ensureFocus()
+            guard let self, self.config.enabled else { return }
+            self.hyprHeld = true
+            let mousePressActive = self.mouseDragLifecycle.buttonDown
+            self.mouseDragLifecycle.noteHyprKeyDown()
+            // Do not repair focus while a mouse gesture is in flight. A stale
+            // tracker can otherwise focus a fallback window and redirect the
+            // native title-bar drag when Hypr is pressed mid-gesture.
+            if !mousePressActive { self.ensureFocus() }
             // visual cue: corner brackets snap inward around the focused
             // window so the user sees which window the next Hypr action
             // will target. shown regardless of focus-border setting.
-            self?.showFocusBracketsForCurrentFocus()
+            self.showFocusBracketsForCurrentFocus()
         }
         hotkeyManager.onHyprKeyUp = { [weak self] in
             self?.hyprHeld = false
@@ -306,7 +318,8 @@ class WindowManager {
         // wire up mouse tracker dependencies
         mouseTracker.isFocusFollowsMouseEnabled = { [weak self] in self?.config.focusFollowsMouse ?? false }
         mouseTracker.hoverThrottleInterval = { [weak self] in
-            1.0 / Double(max(30, self?.config.mouseHoverPollHz ?? 120))
+            1.0 / Double(HoverResponseRate.effectiveHz(
+                for: self?.config.mouseHoverPollHz ?? UserConfigDefaults.mouseHoverPollHz))
         }
         mouseTracker.isMouseButtonDown = { [weak self] in self?.mouseButtonDown ?? false }
         mouseTracker.primaryScreenHeight = { [weak self] in self?.displayManager.primaryScreenHeight ?? 0 }
@@ -387,28 +400,119 @@ class WindowManager {
         actionDispatcher.isMenuTracking = { [weak self] in self?.mouseTracker.menuTracking ?? false }
         actionDispatcher.toggleScratchpad = { [weak self] in self?.scratchpad.toggle() }
         actionDispatcher.moveToScratchpad = { [weak self] in self?.scratchpad.sendFocusedWindow() }
-        // react to enabled toggling (including mid-flight config rewrites from iCloud sync)
-        config.$enabled
-            .dropFirst() // skip initial value — start() handles that
-            .removeDuplicates()
-            .sink { [weak self] enabled in
-                guard let self = self else { return }
-                if enabled && !self.isRunning {
-                    hyprLog(.debug, .lifecycle, "config re-enabled, starting")
-                    self.start()
-                } else if !enabled && self.isRunning {
-                    hyprLog(.debug, .lifecycle, "config disabled, stopping")
-                    self.stop()
-                }
-            }.store(in: &configObservers)
+        configureLiveConfigUpdates()
+        hotkeyManager.updateHyprKey(config.hyprKey)
+        hotkeyManager.updateKeybinds(config.keybinds)
+        hotkeyManager.start()
+        hotkeyManager.updateTilingEnabled(config.enabled)
+        hotkeyManager.start()
+    }
 
-        config.$hyprKey
-            .dropFirst()
-            .removeDuplicates()
-            .sink { [weak self] key in
-                KeyRemapper.applyHyprKey(key)
-                self?.hotkeyManager.updateHyprKey(key)
-            }.store(in: &configObservers)
+    /// Observe the model's post-mutation signal once and route a complete
+    /// snapshot. A disk reload emits only after all fields have been applied.
+    private func configureLiveConfigUpdates() {
+        let coordinator = configUpdateCoordinator
+
+        coordinator.onEnabled = { [weak self] enabled in
+            guard let self else { return }
+            self.hotkeyManager.updateTilingEnabled(enabled)
+            if enabled && !self.isRunning {
+                hyprLog(.debug, .lifecycle, "config re-enabled, starting")
+                self.start()
+            } else if !enabled && self.isRunning {
+                hyprLog(.debug, .lifecycle, "config disabled, stopping")
+                self.stop()
+            }
+        }
+        coordinator.onKeybinds = { [weak self] binds in
+            self?.hotkeyManager.updateKeybinds(binds)
+            hyprLog(.debug, .lifecycle, "keybinds reloaded (\(binds.count) binds)")
+        }
+        coordinator.onHyprKey = { [weak self] key in
+            KeyRemapper.applyHyprKey(key)
+            self?.hotkeyManager.updateHyprKey(key)
+        }
+        coordinator.onLayoutGeometry = { [weak self] gap, padding in
+            guard let self else { return }
+            self.tilingEngine.gapSize = gap
+            self.tilingEngine.outerPadding = padding
+            if self.isRunning { self.animatedRetile() }
+        }
+        coordinator.onMaximumSplits = { [weak self] splits in
+            guard let self else { return }
+            self.tilingEngine.maxSplitsPerMonitor = splits
+            if self.isRunning { self.snapshotAndTile() }
+            hyprLog(.debug, .lifecycle, "max splits updated: \(splits)")
+        }
+        coordinator.onDisabledMonitors = { [weak self] disabled in
+            guard let self else { return }
+            self.workspaceManager.disabledMonitors = disabled
+            if self.isRunning { self.handleDisabledMonitorChange() }
+            hyprLog(.debug, .lifecycle, "disabled monitors updated: \(disabled)")
+        }
+        coordinator.onChrome = { [weak self] state, changes in
+            self?.applyChromeConfig(state, changes: changes)
+        }
+        coordinator.onScratchpadRegion = { [weak self] inset in
+            guard let self else { return }
+            self.scratchpad.tiledRegionInset = inset
+            if self.isRunning { self.scratchpad.relayoutVisibleLayer() }
+        }
+        coordinator.onScratchpadEntryMode = { [weak self] on in
+            self?.scratchpad.tileNewMembers = on
+        }
+
+        coordinator.observe(config)
+    }
+
+    private func applyChromeConfig(_ state: RuntimeConfigState, changes: ChromeConfigChanges) {
+        let focusColor = state.focusBorderColorHex.flatMap(NSColor.fromHex) ?? .hyprCyan
+        let floatingColor = state.floatingBorderColorHex.flatMap(NSColor.fromHex) ?? .hyprMagenta
+        let bracketColor = state.focusBracketColorHex.flatMap(NSColor.fromHex) ?? .white
+
+        if changes.contains(.colors) {
+            let trackedID = focusBorder.trackedWindowID ?? 0
+            let trackedColor = stateCache.floatingWindowIDs.contains(trackedID)
+                ? floatingColor : focusColor
+            focusBorder.refreshAppearance(
+                focusColor: trackedColor.cgColor,
+                floatingColor: floatingColor.cgColor)
+        }
+        if changes.contains(.bracketAppearance) {
+            focusBrackets.applyAppearance(
+                style: state.focusBracketStyle,
+                color: bracketColor.cgColor,
+                radius: state.focusBracketRadius,
+                thickness: state.focusBracketThickness)
+            if FocusBracketAppearanceUpdate.shouldShow(
+                isRunning: isRunning,
+                hyprHeld: hyprHeld,
+                style: state.focusBracketStyle,
+                isVisible: focusBrackets.isVisible) {
+                showFocusBracketsForCurrentFocus()
+            }
+        }
+        if changes.contains(.fadeDuration) {
+            focusBorder.fadeDurationSec = state.chromeFadeDurationSec
+            dimmingOverlay.fadeDurationSec = state.chromeFadeDurationSec
+        }
+        if changes.contains(.windowCornerRadius) {
+            focusBorder.refreshCornerRadius()
+        }
+        if changes.contains(.visibility) {
+            focusBorder.isEnabled = state.showFocusBorder
+            if state.showFocusBorder, isRunning {
+                let focusedID = focusBorder.trackedWindowID ?? focusController.lastFocusedID
+                if let focused = stateCache.cachedWindows[focusedID] {
+                    updateFocusBorder(for: focused)
+                } else {
+                    refreshFloatingBorders(windows: Array(stateCache.cachedWindows.values))
+                }
+            }
+        }
+        if changes.contains(.dimming) || changes.contains(.windowCornerRadius) {
+            if isRunning { refreshDimming() }
+        }
     }
 
     /// Bring the window manager up: install the hotkey tap, mouse monitors,
@@ -422,8 +526,7 @@ class WindowManager {
     ///
     /// Side effects: subscribes to `NSWorkspace` activation/launch/terminate
     /// notifications, the `HIToolbox` menu-tracking notifications, screen
-    /// parameter changes, and every relevant `@Published` property on the
-    /// shared `UserConfig`.
+    /// parameter changes. Configuration observation is installed once in init.
     func start() {
         guard !isRunning else { return }
         isRunning = true
@@ -458,12 +561,18 @@ class WindowManager {
         focusBorder.primaryScreenHeight = displayManager.primaryScreenHeight
         focusBorder.fadeDurationSec = config.chromeFadeDurationSec
         focusBrackets.primaryScreenHeight = displayManager.primaryScreenHeight
-        focusBrackets.accentCGColor = config.resolvedFocusBorderColor.cgColor
+        focusBrackets.applyAppearance(
+            style: config.focusBracketStyle,
+            color: config.resolvedFocusBracketColor.cgColor,
+            radius: config.resolvedFocusBracketRadius,
+            thickness: config.resolvedFocusBracketThickness)
+        focusBorder.refreshAppearance(
+            focusColor: config.resolvedFocusBorderColor.cgColor,
+            floatingColor: config.resolvedFloatingBorderColor.cgColor)
         dimmingOverlay.fadeDurationSec = config.chromeFadeDurationSec
         workspaceManager.disabledMonitors = config.disabledMonitors
         hotkeyManager.updateHyprKey(config.hyprKey)
         hotkeyManager.updateKeybinds(config.keybinds)
-        hotkeyManager.start()
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             guard let self, self.isRunning else { return }
@@ -560,134 +669,6 @@ class WindowManager {
             name: NSApplication.didChangeScreenParametersNotification, object: nil
         )
 
-        // reload keybinds when config changes (no retile, just update hotkey table)
-        config.$keybinds.sink { [weak self] newBinds in
-            guard let self = self else { return }
-            self.hotkeyManager.updateKeybinds(newBinds)
-            hyprLog(.debug, .lifecycle, "keybinds reloaded (\(newBinds.count) binds)")
-        }.store(in: &configObservers)
-
-        config.$gapSize
-            .dropFirst()
-            .removeDuplicates()
-            .sink { [weak self] newGap in
-                guard let self = self else { return }
-                self.tilingEngine.gapSize = newGap
-                self.animatedRetile()
-            }.store(in: &configObservers)
-
-        config.$outerPadding
-            .dropFirst()
-            .removeDuplicates()
-            .sink { [weak self] newPadding in
-                guard let self = self else { return }
-                self.tilingEngine.outerPadding = newPadding
-                self.animatedRetile()
-            }.store(in: &configObservers)
-
-        config.$maxSplitsPerMonitor
-            .dropFirst()
-            .removeDuplicates()
-            .sink { [weak self] newSplits in
-                guard let self = self else { return }
-                self.tilingEngine.maxSplitsPerMonitor = newSplits
-                self.snapshotAndTile()
-                hyprLog(.debug, .lifecycle, "max splits updated: \(newSplits)")
-            }.store(in: &configObservers)
-
-        config.$disabledMonitors
-            .dropFirst()
-            .removeDuplicates()
-            .sink { [weak self] newDisabled in
-                guard let self = self else { return }
-                self.workspaceManager.disabledMonitors = newDisabled
-                // unfloat windows on newly-disabled monitors from their tiling trees
-                self.handleDisabledMonitorChange()
-                hyprLog(.debug, .lifecycle, "disabled monitors updated: \(newDisabled)")
-            }.store(in: &configObservers)
-
-        config.$dimInactiveWindows
-            .dropFirst()
-            .removeDuplicates()
-            .sink { [weak self] enabled in
-                guard let self = self else { return }
-                if !enabled {
-                    self.dimmingOverlay.enabled = false
-                    self.dimmingOverlay.hideAll()
-                } else {
-                    self.refreshDimming()
-                }
-            }.store(in: &configObservers)
-
-        config.$dimIntensity
-            .dropFirst()
-            .removeDuplicates()
-            .sink { [weak self] _ in
-                self?.refreshDimming()
-            }.store(in: &configObservers)
-
-        config.$chromeFadeDurationSec
-            .dropFirst()
-            .removeDuplicates()
-            .sink { [weak self] duration in
-                guard let self else { return }
-                // pushed live — next show/hide on either subsystem reads
-                // the new value. in-flight animations finish at the old
-                // duration; the change only applies to subsequent fades.
-                self.focusBorder.fadeDurationSec = duration
-                self.dimmingOverlay.fadeDurationSec = duration
-            }.store(in: &configObservers)
-
-        config.$windowCornerRadiusOverride
-            .dropFirst()
-            .removeDuplicates()
-            .sink { [weak self] _ in
-                guard let self else { return }
-                self.focusBorder.refreshCornerRadius()
-                self.focusBrackets.refreshCornerRadius()
-                self.refreshDimming()
-            }.store(in: &configObservers)
-
-        config.$showFocusBorder
-            .dropFirst()
-            .removeDuplicates()
-            .sink { [weak self] enabled in
-                guard let self else { return }
-                self.focusBorder.isEnabled = enabled
-                if enabled {
-                    self.updatePositionCache()
-                } else {
-                    self.focusBorder.hide()
-                    self.focusBorder.hideFloatingBorders()
-                    // dimming has its own toggle (config.dimInactiveWindows)
-                    // and its own observer above — don't kill it here.
-                }
-            }.store(in: &configObservers)
-
-        config.$floatingBorderColorHex
-            .dropFirst()
-            .removeDuplicates()
-            .sink { [weak self] _ in
-                self?.updatePositionCache()
-            }.store(in: &configObservers)
-
-        config.$scratchpadRegionInset
-            .dropFirst()
-            .removeDuplicates()
-            .sink { [weak self] inset in
-                guard let self else { return }
-                self.scratchpad.tiledRegionInset = inset
-                // live re-layout so the slider previews on an open layer
-                self.scratchpad.relayoutVisibleLayer()
-            }.store(in: &configObservers)
-
-        config.$scratchpadTileByDefault
-            .dropFirst()
-            .removeDuplicates()
-            .sink { [weak self] on in
-                self?.scratchpad.tileNewMembers = on
-            }.store(in: &configObservers)
-
         if LogConfig.persistentFileLog {
             hyprLog(.notice, .lifecycle, "file log: \(DebugLogFile.shared.fileURL.path)")
         }
@@ -699,10 +680,13 @@ class WindowManager {
     /// Restores hidden workspace windows to visible positions before
     /// detaching observers — without this, windows would remain stranded in
     /// the hide-corner sliver after the app quits or is toggled off. Stops
-    /// the polling scheduler, removes mouse monitors, halts the hotkey tap,
-    /// and hides every focus indicator. Safe to call when not running.
-    func stop() {
+    /// the polling scheduler, removes mouse monitors, and hides every focus
+    /// indicator. The hotkey tap stays available for the pause/resume binding
+    /// unless this is final application teardown. Safe to call when not running.
+    func stop(keepPauseShortcut: Bool = true) {
         isRunning = false
+        hyprHeld = false
+        focusBrackets.hide()
         admissionRecovery.cancelAll(reason: "stop")
         minimaRevalidation.cancelAll(reason: "stop")
         driftMonitor.reset()
@@ -714,7 +698,7 @@ class WindowManager {
         axNotifications.detachAll()
         pollingScheduler.stop()
         stopMouseTracking()
-        hotkeyManager.stop()
+        if !keepPauseShortcut { hotkeyManager.stop() }
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         NotificationCenter.default.removeObserver(self)
         DistributedNotificationCenter.default().removeObserver(self)
@@ -835,8 +819,7 @@ class WindowManager {
         }
         mouseDownMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
             guard let self else { return }
-            self.mouseButtonDown = true
-            self.mouseDraggedSinceDown = false
+            self.mouseDragLifecycle.beginPress(hyprHeld: self.hyprHeld)
             self.mouseDownFloatingWindowID = 0
             self.mouseDownFloatingFrame = nil
             // the event carries the exact click location. sampling
@@ -877,7 +860,7 @@ class WindowManager {
         // the border for the duration of the drag and restore it on mouseUp.
         mouseDragMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDragged) { [weak self] _ in
             guard let self = self else { return }
-            self.mouseDraggedSinceDown = true
+            self.mouseDragLifecycle.observeDrag(hyprHeld: self.hyprHeld)
             if self.mouseDownFloatingWindowID != 0 {
                 self.focusBorder.hideFloatingBorder(for: self.mouseDownFloatingWindowID)
             }
@@ -909,11 +892,13 @@ class WindowManager {
                 let release = TiledDragEvent.release(
                     event: event,
                     primaryHeight: primaryHeight,
-                    sawDragEvent: isDrag)
+                    sawDragEvent: isDrag,
+                    swapRequested: self.mouseDragLifecycle.releaseRequestsSwap(
+                        hyprHeld: self.hyprHeld,
+                        optionDown: event.modifierFlags.contains(.option)))
                 self.tiledDragHandler.handleMouseUp(release)
             }
-            self?.mouseButtonDown = false
-            self?.mouseDraggedSinceDown = false
+            self?.mouseDragLifecycle.finishPress()
             self?.mouseDownPointCG = nil
             self?.mouseDownFloatingWindowID = 0
             self?.mouseDownFloatingFrame = nil
@@ -1036,7 +1021,11 @@ class WindowManager {
         // brackets follow focus changes while Hypr is held (e.g. Hypr+arrow
         // shifts focus mid-press, workspace switch hides the border).
         if hyprHeld, let frame = window.frame {
-            focusBrackets.accentCGColor = config.resolvedFocusBorderColor.cgColor
+            focusBrackets.applyAppearance(
+                style: config.focusBracketStyle,
+                color: config.resolvedFocusBracketColor.cgColor,
+                radius: config.resolvedFocusBracketRadius,
+                thickness: config.resolvedFocusBracketThickness)
             focusBrackets.show(around: frame, windowID: window.windowID)
         }
         if config.showFocusBorder, let frame = window.frame {
@@ -1068,7 +1057,11 @@ class WindowManager {
         guard fid != 0, let window = stateCache.cachedWindows[fid] else { return }
         if isFullscreenSuppressed(focused: window) { return }
         guard let frame = window.frame else { return }
-        focusBrackets.accentCGColor = config.resolvedFocusBorderColor.cgColor
+        focusBrackets.applyAppearance(
+            style: config.focusBracketStyle,
+            color: config.resolvedFocusBracketColor.cgColor,
+            radius: config.resolvedFocusBracketRadius,
+            thickness: config.resolvedFocusBracketThickness)
         focusBrackets.show(around: frame, windowID: fid)
     }
 
@@ -1079,7 +1072,10 @@ class WindowManager {
     /// window. Runs at 0.05s and 0.25s to catch both fast and slow OS
     /// re-raise paths.
     private func reassertFocusBorderAfterHyprRelease() {
-        guard config.showFocusBorder else { return }
+        guard Self.permitsHyprReleaseReassert(
+            isRunning: isRunning,
+            enabled: config.enabled,
+            showFocusBorder: config.showFocusBorder) else { return }
         // cache-based: this fires on every Hypr release and previously ran
         // up to three full-desktop enumerations (one here + two delayed
         // reasserts). the border geometry comes from live frame reads of
@@ -1090,6 +1086,10 @@ class WindowManager {
               stateCache.floatingWindowIDs.contains(tid) else { return }
 
         func reassert() {
+            guard Self.permitsHyprReleaseReassert(
+                isRunning: isRunning,
+                enabled: config.enabled,
+                showFocusBorder: config.showFocusBorder) else { return }
             if let window = stateCache.cachedWindows[tid] {
                 window.isFloating = true
                 updateFocusBorder(for: window)
@@ -1103,6 +1103,14 @@ class WindowManager {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             reassert()
         }
+    }
+
+    static func permitsHyprReleaseReassert(
+        isRunning: Bool,
+        enabled: Bool,
+        showFocusBorder: Bool
+    ) -> Bool {
+        isRunning && enabled && showFocusBorder
     }
 
     // scratchpad scrim fill: 4% magenta composited over `intensity` black,
@@ -2150,58 +2158,41 @@ class WindowManager {
             floaterOccluders: floaterOccluders)
     }
 
-    /// Render the dot-grid string for the menu bar indicator and publish it
-    /// to `MenuBarState.shared` for SwiftUI consumption.
-    ///
-    /// Encoding: `●` active, `◆` active+floating, `○` occupied, `◇`
-    /// occupied+floating, `·` empty. The string is truncated at the
-    /// highest-numbered active or occupied workspace so empty trailing
-    /// dots do not pad the menu bar.
+    /// Publish workspace glyphs and monitor snapshots for the menu.
     private func updateMenuBarState() {
         let active = Set(activeWorkspaces())
         let occupied = occupiedWorkspaces()
-        let floatingWs = workspacesWithFloatingWindows()
-        let maxWs = max(active.max() ?? 1, occupied.max() ?? 1)
-
-        // dots: ● active, ◆ active+floating, ○ occupied, ◇ occupied+floating, · empty
-        var parts: [String] = []
-        for i in 1...maxWs {
-            let hasFloat = floatingWs.contains(i)
-            if active.contains(i) {
-                parts.append(hasFloat ? "◆" : "●")
-            } else if occupied.contains(i) {
-                parts.append(hasFloat ? "◇" : "○")
-            } else {
-                parts.append("·")
+        let floating = workspacesWithFloatingWindows()
+        let labelText = MenuBarPresentation.workspaceGlyphs(
+            active: active, occupied: occupied, floating: floating)
+        let monitors = workspaceManager.enabledScreensLeftToRight().enumerated().map {
+            index, screen in
+                MenuBarMonitorSnapshot(
+                    id: index,
+                    name: screen.localizedName,
+                    currentWorkspace: workspaceManager.workspaceForScreen(screen),
+                    isPortrait: screen.frame.height > screen.frame.width)
             }
-        }
-        let text = parts.joined(separator: " ")
-        // scratchpad shows as a full-size tray glyph in the label, not a
-        // string glyph — a superscript marker was too small to read.
         let scratchpadCount = scratchpad.members.count
         let scratchpadVisible = scratchpad.isVisible
 
         DispatchQueue.main.async {
             let state = MenuBarState.shared
-            state.labelText = text
-            state.occupiedWorkspaces = occupied
-            state.floatingWorkspaces = floatingWs
+            state.labelText = labelText
+            state.monitors = monitors
             state.scratchpadCount = scratchpadCount
             state.scratchpadVisible = scratchpadVisible
             state.hasData = true
         }
     }
 
-    /// Workspaces that hold at least one live (non-hidden) floating window.
-    /// Drives the diamond glyphs (`◆` / `◇`) in the menu bar grid.
+    /// Workspaces that hold at least one live floating window.
     private func workspacesWithFloatingWindows() -> Set<Int> {
         var result = Set<Int>()
-        // only count live (non-hidden) floating windows
         let liveFloating = stateCache.floatingWindowIDs.subtracting(stateCache.hiddenWindowIDs)
-        for ws in 1...9 {
-            let wsWindows = workspaceManager.windowIDs(onWorkspace: ws)
-            if !wsWindows.isDisjoint(with: liveFloating) {
-                result.insert(ws)
+        for workspace in 1...9 {
+            if !workspaceManager.windowIDs(onWorkspace: workspace).isDisjoint(with: liveFloating) {
+                result.insert(workspace)
             }
         }
         return result

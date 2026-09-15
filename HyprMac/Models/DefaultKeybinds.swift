@@ -73,6 +73,10 @@ extension Keybind {
         binds.append(Keybind(keyCode: UInt16(kVK_ANSI_K), modifiers: .hypr,
                              action: .showKeybinds))
 
+        // hypr + p: pause or resume tiling
+        binds.append(Keybind(keyCode: UInt16(kVK_ANSI_P), modifiers: .hypr,
+                             action: .toggleTiling))
+
         // hypr + f: focus/raise floating windows
         binds.append(Keybind(keyCode: UInt16(kVK_ANSI_F), modifiers: .hypr,
                              action: .focusFloating))

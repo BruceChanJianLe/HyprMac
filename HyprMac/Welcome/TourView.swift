@@ -6,7 +6,7 @@ import SwiftUI
 
 // MARK: - shell
 
-/// 520×440 shell shared by first-run and what's-new. Header (icon +
+/// 520×440 shell shared by the tutorial and what's-new. Header (icon +
 /// wordmark + right slot) · content page · footer. Mode picks the page
 /// set and footer.
 struct TourView: View {
@@ -14,8 +14,9 @@ struct TourView: View {
     let onDismiss: () -> Void
 
     @State private var page = 0
+    @ObservedObject private var config = UserConfig.shared
 
-    private var pageCount: Int { mode == .firstRun ? 4 : 1 }
+    private var pageCount: Int { mode == .firstRun ? 6 : 1 }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -39,7 +40,7 @@ struct TourView: View {
                         .frame(width: 30, height: 30)
                         .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 }
-                Text("HYPRMAC")
+                Text(mode == .firstRun ? "HYPRMAC TUTORIAL" : "HYPRMAC")
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .tracking(1.5)
                     .foregroundStyle(Color.hyprTextPrimary.opacity(0.7))
@@ -55,7 +56,7 @@ struct TourView: View {
     private var headerSlot: some View {
         switch mode {
         case .firstRun:
-            // n / 4 mono page counter
+            // tutorial page counter
             Text("\(page + 1) / \(pageCount)")
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .foregroundStyle(Color.hyprTextPrimary.opacity(0.35))
@@ -85,10 +86,12 @@ struct TourView: View {
         case .firstRun:
             Group {
                 switch page {
-                case 0: TourHeroPage()
-                case 1: TourFocusPage()
-                case 2: TourWorkspacesPage()
-                default: TourFinishPage()
+                case 0: TourHeroPage(config: config)
+                case 1: TourWindowPage(config: config)
+                case 2: TourFocusPage(config: config)
+                case 3: TourWorkspacesPage(config: config)
+                case 4: TourWorkspaceGlyphsPage()
+                default: TourFinishPage(config: config)
                 }
             }
             .transition(.opacity)
@@ -176,6 +179,7 @@ private struct CyanButton: View {
 // MARK: - first-run page 1: Hypr key hero + live try-it
 
 private struct TourHeroPage: View {
+    @ObservedObject var config: UserConfig
     // flips once the app reports a focusDirection while this page is up
     @State private var tried = false
 
@@ -184,14 +188,14 @@ private struct TourHeroPage: View {
             keycap
                 .padding(.bottom, 22)
 
-            Text("Caps Lock is your superpower")
+            Text(config.hyprKey == .capsLock
+                 ? "Caps Lock is your HYPR Key by Default."
+                 : "\(config.hyprKey.displayName) is your HYPR Key.")
                 .font(.system(size: 19, weight: .semibold))
                 .foregroundStyle(Color.hyprTextPrimary)
+                .multilineTextAlignment(.center)
 
-            // body copy with "Hypr key" in cyan bold
-            (Text("It's the ")
-                + Text("Hypr key").foregroundColor(.hyprCyan).bold()
-                + Text(" now. Hold it and press a key to command your windows. Nothing else about Caps Lock changes — apps still see it as off."))
+            Text("This is your portal into HyprMac! All shortcuts start with this key.")
                 .font(.system(size: 12.5))
                 .lineSpacing(4)
                 .foregroundStyle(Color.hyprTextPrimary.opacity(0.55))
@@ -215,10 +219,10 @@ private struct TourHeroPage: View {
     // 150×58 rounded key with cyan border + 3pt bottom edge + soft glow
     private var keycap: some View {
         HStack(spacing: 8) {
-            Text("⇪")
+            Text(config.hyprKey.badgeLabel)
                 .font(.system(size: 16, weight: .medium, design: .monospaced))
                 .foregroundStyle(Color.hyprCyan)
-            Text("CAPS LOCK")
+            Text(config.hyprKey.displayName.uppercased())
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .tracking(1)
                 .foregroundStyle(Color.hyprTextPrimary.opacity(0.7))
@@ -252,7 +256,7 @@ private struct TourHeroPage: View {
                     Text("✓")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color.hyprCyan)
-                    Text("Nice — you focused a window")
+                    Text("Nice! You switched windows.")
                         .font(.system(size: 11))
                         .foregroundStyle(Color.hyprCyan)
                 }
@@ -268,14 +272,16 @@ private struct TourHeroPage: View {
                 )
             } else {
                 HStack(spacing: 8) {
-                    Text("Try it now — hold")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.hyprTextPrimary.opacity(0.6))
-                    MiniKey("⇪")
-                    Text("and press")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.hyprTextPrimary.opacity(0.6))
-                    MiniKey("→")
+                    if let focusChord {
+                        Text("Try it now")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.hyprTextPrimary.opacity(0.6))
+                        MiniKey(focusChord)
+                    } else {
+                        Text("Add Focus Right in Settings → Keys to try it here.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.hyprTextPrimary.opacity(0.6))
+                    }
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
@@ -292,6 +298,41 @@ private struct TourHeroPage: View {
                 )
             }
         }
+    }
+
+    private var focusChord: String? {
+        WelcomeContent.chord(in: config.keybinds, hyprKey: config.hyprKey) {
+            if case .focusDirection(.right) = $0 { return true }
+            return false
+        }
+    }
+}
+
+// MARK: - first-run page 2: tiled and floating windows
+
+private struct TourWindowPage: View {
+    @ObservedObject var config: UserConfig
+
+    var body: some View {
+        TourInfoPage(
+            icon: "rectangle.split.2x1",
+            title: "Tiled and floating windows",
+            copy: Text("New windows join the tiling layout automatically. A floating window stays above the tiles and moves freely."),
+            bullets: [
+                ("hand.draw", "Drag a tile by its title bar to insert it. Hold HYPR during the drag to swap with another tile in the same workspace."),
+                ("diamond", floatingInstruction),
+                ("arrow.up.left.and.arrow.down.right", "Drag or resize a floating window with the app's normal title bar and edges."),
+            ],
+            magentaBulletIndex: 1
+        )
+    }
+
+    private var floatingInstruction: String {
+        guard let chord = WelcomeContent.chord(in: config.keybinds, hyprKey: config.hyprKey, matching: {
+            if case .toggleFloating = $0 { return true }
+            return false
+        }) else { return "Add Toggle Floating in Settings → Keys if you want a shortcut." }
+        return "Press \(chord) to toggle the focused window between tiled and floating."
     }
 }
 
@@ -317,87 +358,230 @@ private struct MiniKey: View {
     }
 }
 
-// MARK: - first-run page 2: Focus
+// MARK: - first-run page 3: Focus
 
 private struct TourFocusPage: View {
+    @ObservedObject var config: UserConfig
+
     var body: some View {
         TourInfoPage(
             icon: "arrow.up.and.down.and.arrow.left.and.right",
             title: "Move between windows",
             copy: attributed,
-            bullets: [
-                ("arrow.left.arrow.right", "⇪ + an arrow jumps focus to the window in that direction."),
-                ("cursorarrow.motionlines", "Focus follows the mouse — hover a window to focus it."),
-                ("rectangle.dashed", "A cyan border and corner brackets mark what's focused."),
-            ]
+            bullets: focusBullets
         )
     }
 
+    private var focusBullets: [(icon: String, text: String)] {
+        let directionText: String
+        if let focusChord, let swapChord {
+            directionText = "\(focusChord) takes you to the window on your left. \(swapChord) swaps places with it. Try the other arrows too."
+        } else {
+            directionText = "Add Focus Direction and Swap Direction shortcuts in Settings → Keys."
+        }
+        var result = [("arrow.left.arrow.right", directionText)]
+        if config.focusFollowsMouse {
+            result.append(("cursorarrow.motionlines", "Move the pointer over a window to focus it."))
+        } else {
+            result.append(("cursorarrow.motionlines", "Turn on focus follows the mouse in General settings, then move the pointer over a window to focus it."))
+        }
+        if config.focusBracketStyle != .off {
+            result.append(("rectangle.dashed", "Hold \(config.hyprKey.displayName) to show corner marks on the focused window."))
+        } else {
+            result.append(("rectangle.dashed", "You can turn on corner marks in Layout settings."))
+        }
+        return result
+    }
+
+    private var focusChord: String? {
+        WelcomeContent.chord(in: config.keybinds, hyprKey: config.hyprKey) {
+            if case .focusDirection(.left) = $0 { return true }
+            return false
+        }
+    }
+
+    private var swapChord: String? {
+        WelcomeContent.chord(in: config.keybinds, hyprKey: config.hyprKey) {
+            if case .swapDirection(.left) = $0 { return true }
+            return false
+        }
+    }
+
     private var attributed: Text {
-        Text("Focus is how you say ")
-            + Text("this window").foregroundColor(.hyprCyan).bold()
-            + Text(". Everything you type goes to whatever is focused.")
+        Text("The focused window is the one you’re using right now. Here’s how to get around without clicking.")
     }
 }
 
-// MARK: - first-run page 3: Workspaces
+// MARK: - first-run page 4: Workspaces
 
 private struct TourWorkspacesPage: View {
+    @ObservedObject var config: UserConfig
+
     var body: some View {
         TourInfoPage(
             icon: "square.stack.3d.up",
             title: "Workspaces",
             copy: attributed,
             bullets: [
-                ("number", "⇪ 1–9 switches workspaces. ⇪ ⇧ 1–9 sends a window there."),
-                ("menubar.rectangle", "The menu bar shows each one: ● active  ○ occupied  · empty."),
-                ("diamond", "◇ marks a workspace holding floating windows — magenta."),
-            ],
-            magentaBulletIndex: 2
+                ("number", workspaceInstruction),
+                ("menubar.rectangle", "Check the menu bar to see which workspace each monitor is showing."),
+                ("square.stack", "Your windows stay on their workspace when you switch."),
+            ]
         )
     }
 
+    private var workspaceInstruction: String {
+        let switchChord = WelcomeContent.chord(in: config.keybinds, hyprKey: config.hyprKey) {
+            if case .switchWorkspace(1) = $0 { return true }
+            return false
+        }
+        let sendChord = WelcomeContent.chord(in: config.keybinds, hyprKey: config.hyprKey) {
+            if case .moveToWorkspace(1) = $0 { return true }
+            return false
+        }
+        guard let switchChord, let sendChord else {
+            return "You can add workspace shortcuts in Settings → Keys."
+        }
+        return "\(switchChord) opens workspace 1. \(sendChord) sends the focused window there. Try another number for a different workspace."
+    }
+
     private var attributed: Text {
-        Text("Nine ")
-            + Text("workspaces").foregroundColor(.hyprCyan).bold()
-            + Text(" per setup. Each monitor shows one at a time.")
+        Text("Workspaces let you keep separate groups of windows. Each monitor shows one group at a time.")
     }
 }
 
-// MARK: - first-run page 4: Finish → Hypr+K
+// MARK: - first-run page 5: workspace strip
+
+private struct TourWorkspaceGlyphsPage: View {
+    private let examples: [(number: Int, glyph: String, color: Color)] = [
+        (1, "●", .hyprCyan), (2, "◆", .hyprMagenta), (3, "○", .hyprCyan),
+        (4, "◇", .hyprMagenta), (5, "·", .hyprTextPrimary.opacity(0.3)),
+    ]
+    private let legend: [(glyph: String, label: String, color: Color)] = [
+        ("●", "Shown now", .hyprCyan),
+        ("◆", "Shown now · has floating windows", .hyprMagenta),
+        ("○", "Windows waiting", .hyprCyan),
+        ("◇", "Windows waiting · has floating windows", .hyprMagenta),
+        ("·", "Empty workspace", .hyprTextPrimary.opacity(0.3)),
+    ]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Text("Read the workspace strip")
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(Color.hyprTextPrimary)
+            Text("Each position matches its workspace number.")
+                .font(.system(size: 12.5))
+                .foregroundStyle(Color.hyprTextPrimary.opacity(0.55))
+                .padding(.top, 8)
+
+            HStack(spacing: 18) {
+                ForEach(examples, id: \.number) { item in
+                    VStack(spacing: 3) {
+                        Text("\(item.number)")
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(Color.hyprTextPrimary.opacity(0.4))
+                        Text(item.glyph)
+                            .font(.system(size: 19, weight: .medium, design: .monospaced))
+                            .foregroundStyle(item.color)
+                    }
+                    .frame(width: 28)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .background(RoundedRectangle(cornerRadius: HyprRadius.md, style: .continuous).fill(Color.hyprSurface))
+            .overlay(RoundedRectangle(cornerRadius: HyprRadius.md, style: .continuous).strokeBorder(Color.hyprTextPrimary.opacity(0.1), lineWidth: 1))
+            .padding(.top, 16)
+
+            VStack(alignment: .leading, spacing: 7) {
+                ForEach(Array(legend.enumerated()), id: \.offset) { _, item in
+                    HStack(spacing: 10) {
+                        Text(item.glyph)
+                            .font(.system(size: 14, weight: .medium, design: .monospaced))
+                            .foregroundStyle(item.color)
+                            .frame(width: 18)
+                        Text(item.label)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Color.hyprTextPrimary.opacity(0.75))
+                    }
+                }
+            }
+            .frame(width: 300, alignment: .leading)
+            .padding(.top, 15)
+
+            Text("Filled symbols are currently shown. More than one can be filled when you use multiple monitors.")
+                .font(.system(size: 10.5))
+                .foregroundStyle(Color.hyprTextPrimary.opacity(0.5))
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 360)
+                .padding(.top, 12)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 44)
+    }
+}
+
+// MARK: - first-run page 6: Finish → keymap
 
 private struct TourFinishPage: View {
+    @ObservedObject var config: UserConfig
+
     var body: some View {
         VStack(spacing: 0) {
             HeroGlyph(icon: "keyboard")
                 .padding(.bottom, 20)
 
-            Text("That's the core of it")
+            Text("You’re ready to go!")
                 .font(.system(size: 19, weight: .semibold))
                 .foregroundStyle(Color.hyprTextPrimary)
 
-            HStack(spacing: 6) {
-                Text("Press")
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(Color.hyprTextPrimary.opacity(0.55))
-                KeyChip("⇪")
-                KeyChip("K")
-                Text("anytime")
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(Color.hyprTextPrimary.opacity(0.55))
+            Group {
+                if let keymapChord {
+                    HStack(spacing: 6) {
+                        Text("Press")
+                        KeyChip(keymapChord)
+                        Text("anytime")
+                    }
+                } else {
+                    Text("Open Keybinds from the menu bar, or add Show Keybinds in Settings → Keys.")
+                }
             }
+            .font(.system(size: 12.5))
+            .foregroundStyle(Color.hyprTextPrimary.opacity(0.55))
+            .multilineTextAlignment(.center)
             .padding(.top, 10)
 
-            Text("The whole keymap lives there — searchable, always one keystroke away.")
+            Text("You don’t have to memorize everything. Your shortcuts and this tutorial are always here, or in the menu bar.")
                 .font(.system(size: 12.5))
                 .lineSpacing(4)
                 .foregroundStyle(Color.hyprTextPrimary.opacity(0.55))
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 360)
                 .padding(.top, 8)
+
+            Text(pauseInstruction)
+                .font(.system(size: 11.5))
+                .foregroundStyle(Color.hyprTextPrimary.opacity(0.7))
+                .padding(.top, 14)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, 48)
+    }
+
+    private var keymapChord: String? {
+        WelcomeContent.chord(in: config.keybinds, hyprKey: config.hyprKey, matching: {
+            if case .showKeybinds = $0 { return true }
+            return false
+        })
+    }
+
+    private var pauseInstruction: String {
+        guard let chord = WelcomeContent.chord(in: config.keybinds, hyprKey: config.hyprKey, matching: {
+            if case .toggleTiling = $0 { return true }
+            return false
+        }) else { return "Add Pause / Resume Tiling in Settings → Keys when you want a break." }
+        return "If things get in your way, press \(chord) to pause tiling. Press it again when you’re ready."
     }
 }
 

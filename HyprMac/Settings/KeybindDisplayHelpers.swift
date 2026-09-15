@@ -9,7 +9,7 @@ extension Keybind {
 
     var displayString: String {
         var parts: [String] = []
-        if modifiers.contains(.hypr)    { parts.append(UserConfig.shared.hyprKey.badgeLabel) }
+        if modifiers.contains(.hypr)    { parts.append("HYPR") }
         if modifiers.contains(.command) { parts.append("⌘") }
         if modifiers.contains(.shift)   { parts.append("⇧") }
         if modifiers.contains(.option)  { parts.append("⌥") }
@@ -57,6 +57,8 @@ extension Keybind {
             return "tray.and.arrow.down"
         case .resizeDirection:
             return "arrow.up.left.and.arrow.down.right"
+        case .toggleTiling:
+            return "pause.circle"
         }
     }
 
@@ -88,6 +90,7 @@ extension Keybind {
         case .toggleScratchpad:             return "Toggle Scratchpad"
         case .moveToScratchpad:             return "Send to Scratchpad"
         case .resizeDirection(let d):       return "Resize \(d.rawValue.capitalized)"
+        case .toggleTiling:                 return "Pause / Resume Tiling"
         }
     }
 }

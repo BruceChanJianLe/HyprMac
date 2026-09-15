@@ -230,6 +230,8 @@ final class ActionDispatcher {
             moveToScratchpad()
         case .resizeDirection(let dir):
             resizeInDirection(dir)
+        case .toggleTiling:
+            break // handled by WindowManager so it remains available while paused
         }
 
         // let the Tour try-it hint (and any future observers) react. cheap —
@@ -258,6 +260,7 @@ final class ActionDispatcher {
         case .toggleScratchpad:    return "toggleScratchpad"
         case .moveToScratchpad:    return "moveToScratchpad"
         case .resizeDirection:     return "resizeDirection"
+        case .toggleTiling:        return "toggleTiling"
         }
     }
 

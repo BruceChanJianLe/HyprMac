@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Which Tour flow to render.
 enum WelcomeMode {
-    /// First-launch walkthrough (4 pages).
+    /// First-launch tutorial (6 pages).
     case firstRun
     /// Post-update / legacy "What's New" page.
     case whatsNew
@@ -23,8 +23,8 @@ struct WelcomeView: View {
 // MARK: - Window management
 
 /// NSWindow lifecycle for the welcome window. Built borderless with
-/// a draggable background; pinned to `.floating` level so it shows
-/// above tiled windows.
+/// a draggable background; pinned above passive chrome so it stays
+/// readable over tiled windows.
 class WelcomeWindowController {
     private var window: NSWindow?
 
@@ -36,10 +36,11 @@ class WelcomeWindowController {
         let hostingController = NSHostingController(rootView: view)
         let win = NSWindow(contentViewController: hostingController)
         win.styleMask = [.titled, .closable, .fullSizeContentView]
+        win.title = mode == .firstRun ? "HyprMac Tutorial" : "What's New in HyprMac"
         win.titlebarAppearsTransparent = true
         win.titleVisibility = .hidden
         win.isMovableByWindowBackground = true
-        win.level = .floating
+        win.level = Constants.interfaceWindowLevel
         win.center()
         win.setContentSize(NSSize(width: 520, height: 440))
         win.makeKeyAndOrderFront(nil)

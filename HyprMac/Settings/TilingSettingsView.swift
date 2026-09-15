@@ -84,53 +84,137 @@ struct TilingSettingsView: View {
 
     // MARK: focus indicator + dim
 
+    private enum FocusIndicatorChoice: String, Hashable {
+        case corners = "Corners"
+        case borders = "Window borders"
+        case both = "Both (saved)"
+        case none = "None"
+    }
+
+    private var focusIndicatorChoice: FocusIndicatorChoice {
+        switch (config.focusBracketStyle != .off, config.showFocusBorder) {
+        case (true, false): return .corners
+        case (false, true): return .borders
+        case (true, true): return .both
+        case (false, false): return .none
+        }
+    }
+
+    private var focusIndicatorChoices: [FocusIndicatorChoice] {
+        var choices: [FocusIndicatorChoice] = [.corners, .borders, .none]
+        if focusIndicatorChoice == .both { choices.insert(.both, at: 2) }
+        return choices
+    }
+
+    private func selectFocusIndicator(_ choice: FocusIndicatorChoice) {
+        switch choice {
+        case .corners:
+            config.setFocusIndicators(showCorners: true, showBorders: false)
+        case .borders:
+            config.setFocusIndicators(showCorners: false, showBorders: true)
+        case .both:
+            config.setFocusIndicators(showCorners: true, showBorders: true)
+        case .none:
+            config.setFocusIndicators(showCorners: false, showBorders: false)
+        }
+    }
+
     private var focusPanel: some View {
-        HyprPanel("Focus Chrome",
-                  footer: "Corner brackets appear around the focused window while the Hypr key is held. Show focus border adds a persistent outline that tints during traversal and settles to a thin border. Dim darkens everything except the focused window — no SIP required.") {
-            HyprRow("Focus color", icon: "paintpalette", divider: true) {
-                ColorPickerRow(
-                    label: "",
-                    isCustom: config.focusBorderColorHex != nil,
-                    onReset: { config.focusBorderColorHex = nil },
-                    color: Binding(
-                        get: { Color(config.resolvedFocusBorderColor) },
-                        set: { config.focusBorderColorHex = NSColor($0).hexString }
-                    ),
-                    defaultLabel: "hyprCyan · default"
-                )
-            }
-            // floating color is always shown — magenta ◇ marks it as
-            // floating-layer territory.
-            HyprRow("Floating color", icon: "paintpalette.fill", divider: true, floatingMarker: true) {
-                ColorPickerRow(
-                    label: "",
-                    isCustom: config.floatingBorderColorHex != nil,
-                    onReset: { config.floatingBorderColorHex = nil },
-                    color: Binding(
-                        get: { Color(config.resolvedFloatingBorderColor) },
-                        set: { config.floatingBorderColorHex = NSColor($0).hexString }
-                    ),
-                    defaultLabel: "hyprMagenta · default"
-                )
-            }
-            HyprRow("Show focus border", icon: "rectangle.dashed", divider: true) {
-                Toggle("", isOn: $config.showFocusBorder)
+        HyprPanel("Focus appearance",
+                  footer: "Dimming is independent from the focus indicator. Corners appear while the Hypr key is held; window borders remain visible.") {
+            HyprRow("Dim inactive windows", icon: "moon",
+                    divider: true) {
+                Toggle("", isOn: $config.dimInactiveWindows)
                     .toggleStyle(HyprToggleStyle())
                     .labelsHidden()
             }
+            if config.dimInactiveWindows {
+                HyprRow("Dim intensity", icon: "circle.lefthalf.filled",
+                        subtitle: config.dimIntensity > 0.27
+                            ? "Saved amount is outside the slider range; moving it chooses 0–27%."
+                            : nil) {
+                    HStack(spacing: HyprSpacing.sm) {
+                        Slider(value: Binding(
+                            get: { min(max(config.dimIntensity, 0), 0.27) },
+                            set: { config.dimIntensity = $0 }
+                        ), in: 0...0.27)
+                            .frame(width: 180)
+                        HyprChip(String(format: "%.1f%%", config.dimIntensity * 100))
+                            .frame(width: 56, alignment: .trailing)
+                    }
+                }
+            }
 
-            HyprRow("Corner radius", icon: "rectangle.roundedtop",
-                    subtitle: "Matches focus borders, brackets, and dim cut-outs. OS default adapts after macOS upgrades.",
+            HyprRow("Focus indicator", icon: "viewfinder", divider: true) {
+                Picker("", selection: Binding(
+                    get: { focusIndicatorChoice },
+                    set: { selectFocusIndicator($0) }
+                )) {
+                    ForEach(focusIndicatorChoices, id: \.self) { choice in
+                        Text(choice.rawValue).tag(choice)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 170)
+            }
+            if config.focusBracketStyle != .off {
+                HyprRow("Mark roundness", icon: "viewfinder.circle", divider: true) {
+                    VStack(alignment: .trailing, spacing: HyprSpacing.xs) {
+                        HStack(spacing: HyprSpacing.sm) {
+                            Slider(value: Binding(
+                                get: { config.resolvedFocusBracketRadius },
+                                set: { config.focusBracketRadiusOverride = $0 }
+                            ), in: 0...32, step: 1)
+                                .frame(width: 180)
+                            HyprChip("\(Int(config.resolvedFocusBracketRadius)) pt")
+                                .frame(width: 56, alignment: .trailing)
+                        }
+                        Button("Reset to 14 pt") {
+                            config.focusBracketRadiusOverride = nil
+                        }
+                        .controlSize(.small)
+                        .disabled(config.focusBracketRadiusOverride == nil)
+                    }
+                }
+                HyprRow("Mark thickness", icon: "lineweight", divider: true) {
+                    HStack(spacing: HyprSpacing.sm) {
+                        Slider(value: Binding(
+                            get: { config.resolvedFocusBracketThickness },
+                            set: { config.focusBracketThicknessOverride = $0 }
+                        ), in: 1...6, step: 0.5)
+                            .frame(width: 180)
+                        HyprChip(String(format: "%.1f pt", config.resolvedFocusBracketThickness))
+                            .frame(width: 56, alignment: .trailing)
+                    }
+                }
+                HyprRow("Corner color", icon: "paintpalette", divider: true) {
+                    ColorPickerRow(
+                        label: "",
+                        isCustom: config.focusBracketColorHex != nil,
+                        onReset: { config.focusBracketColorHex = nil },
+                        color: Binding(
+                            get: { Color(config.resolvedFocusBracketColor) },
+                            set: { config.focusBracketColorHex = NSColor($0).hexString }
+                        ),
+                        defaultLabel: "neutral · default"
+                    )
+                }
+            }
+
+            HyprRow("Window corner radius", icon: "rectangle.roundedtop",
+                    subtitle: "Match the app window edge for dimming and borders.",
                     divider: true) {
-                HStack(spacing: HyprSpacing.sm) {
-                    Slider(value: Binding(
-                        get: { config.windowCornerRadius },
-                        set: { config.windowCornerRadiusOverride = $0 }
-                    ), in: 0...32, step: 1)
-                        .frame(width: 180)
-                    HyprChip("\(Int(config.windowCornerRadius)) px")
-                        .frame(width: 56, alignment: .trailing)
-                    Button("OS default") {
+                VStack(alignment: .trailing, spacing: HyprSpacing.xs) {
+                    HStack(spacing: HyprSpacing.sm) {
+                        Slider(value: Binding(
+                            get: { config.windowCornerRadius },
+                            set: { config.windowCornerRadiusOverride = $0 }
+                        ), in: 0...32, step: 1)
+                            .frame(width: 180)
+                        HyprChip("\(Int(config.windowCornerRadius)) pt")
+                            .frame(width: 56, alignment: .trailing)
+                    }
+                    Button("Reset to Suggested") {
                         config.windowCornerRadiusOverride = nil
                     }
                     .controlSize(.small)
@@ -138,31 +222,49 @@ struct TilingSettingsView: View {
                 }
             }
 
-            HyprRow("Dim inactive windows", icon: "moon",
-                    divider: config.dimInactiveWindows) {
-                Toggle("", isOn: $config.dimInactiveWindows)
-                    .toggleStyle(HyprToggleStyle())
-                    .labelsHidden()
-            }
-            if config.dimInactiveWindows {
-                HyprRow("Dim intensity", icon: "circle.lefthalf.filled") {
-                    HStack(spacing: HyprSpacing.sm) {
-                        Slider(value: $config.dimIntensity, in: 0.05...0.6)
-                            .frame(width: 180)
-                        HyprChip(String(format: "%.0f%%", config.dimIntensity * 100))
-                            .frame(width: 56, alignment: .trailing)
-                    }
+            if config.showFocusBorder {
+                HyprRow("Tiled window color", icon: "paintpalette", divider: true) {
+                    ColorPickerRow(
+                        label: "",
+                        isCustom: config.focusBorderColorHex != nil,
+                        onReset: { config.focusBorderColorHex = nil },
+                        color: Binding(
+                            get: { Color(config.resolvedFocusBorderColor) },
+                            set: { config.focusBorderColorHex = NSColor($0).hexString }
+                        ),
+                        defaultLabel: "cyan · default"
+                    )
+                }
+                HyprRow("Floating window color", icon: "paintpalette.fill", divider: true, floatingMarker: true) {
+                    ColorPickerRow(
+                        label: "",
+                        isCustom: config.floatingBorderColorHex != nil,
+                        onReset: { config.floatingBorderColorHex = nil },
+                        color: Binding(
+                            get: { Color(config.resolvedFloatingBorderColor) },
+                            set: { config.floatingBorderColorHex = NSColor($0).hexString }
+                        ),
+                        defaultLabel: "magenta · default"
+                    )
                 }
             }
-            HyprRow("Chrome fade", icon: "timer",
-                    subtitle: "Shared by focus border, dimming, and the scratchpad scrim.",
-                    divider: false) {
+
+            HyprRow("Fade duration", icon: "timer",
+                    subtitle: "Shared by borders, dimming, and the scratchpad scrim.",
+                    divider: true) {
                 HStack(spacing: HyprSpacing.sm) {
                     Slider(value: $config.chromeFadeDurationSec, in: 0.0...1.0, step: 0.01)
                         .frame(width: 180)
                     HyprChip(String(format: "%.0fms", config.chromeFadeDurationSec * 1000))
                         .frame(width: 56, alignment: .trailing)
                 }
+            }
+
+            HyprRow("Appearance defaults", icon: "arrow.counterclockwise", divider: false) {
+                Button("Reset all appearance defaults") {
+                    config.resetAppearanceToDefaults()
+                }
+                .controlSize(.small)
             }
         }
     }

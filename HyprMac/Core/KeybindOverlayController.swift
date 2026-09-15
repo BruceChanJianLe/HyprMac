@@ -7,11 +7,13 @@ import SwiftUI
 
 /// Lifecycle for the keybind overlay HUD.
 ///
-/// Holds a borderless `.nonactivatingPanel` at `.floating` level and a
+/// Holds a borderless `.nonactivatingPanel` above passive chrome and a
 /// local keyDown monitor for type-to-filter. `toggle` shows or hides.
 ///
 /// Threading: main-thread only.
 class KeybindOverlayController {
+
+    var onShowTutorial: () -> Void = {}
 
     private var panel: NSPanel?
     private var keyMonitor: Any?
@@ -39,6 +41,11 @@ class KeybindOverlayController {
         panel = nil
     }
 
+    func openTutorial() {
+        close()
+        onShowTutorial()
+    }
+
     private func show(keybinds: [Keybind]) {
         guard let screen = NSScreen.main else { return }
 
@@ -46,9 +53,11 @@ class KeybindOverlayController {
 
         let maxHeight = screen.visibleFrame.height * 0.75
 
-        let content = KeybindOverlayView(keybinds: keybinds)
+        let content = KeybindOverlayView(keybinds: keybinds) { [weak self] in
+            self?.openTutorial()
+        }
             .environmentObject(filter)
-        let hosting = NSHostingView(rootView: content)
+        let hosting = KeybindOverlayHostingView(rootView: content)
         // force dark so dynamic accents resolve to their neon variants
         hosting.appearance = NSAppearance(named: .darkAqua)
         // card is 560 + 6px shadow margin each side; size panel to fit
@@ -66,7 +75,7 @@ class KeybindOverlayController {
         p.backgroundColor = .clear
         p.hasShadow = false  // shadow drawn in SwiftUI
         p.isFloatingPanel = true
-        p.level = .floating
+        p.level = Constants.interfaceWindowLevel
         p.hidesOnDeactivate = false
         p.appearance = NSAppearance(named: .darkAqua)
 
@@ -118,6 +127,11 @@ class KeybindOverlayController {
     }
 }
 
+// a nonactivating HUD should respond to the first click
+private final class KeybindOverlayHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 /// Borderless panel that can still become key so it receives typed
 /// characters without activating the app (Spotlight style).
 private final class KeybindOverlayPanel: NSPanel {
@@ -147,10 +161,32 @@ private struct OverlaySection: Identifiable {
     let rows: [OverlayRow]
 }
 
+enum KeybindOverlayGrouping {
+    static func usesCanonicalWorkspaceKey(_ bind: Keybind, number: Int) -> Bool {
+        bind.keyCodeName == String(number)
+    }
+
+    static func usesCanonicalDirectionKey(_ bind: Keybind, direction: Direction) -> Bool {
+        let expected: String
+        switch direction {
+        case .left: expected = "←"
+        case .up: expected = "↑"
+        case .down: expected = "↓"
+        case .right: expected = "→"
+        }
+        return bind.keyCodeName == expected
+    }
+
+    static func isCompleteWorkspaceRange(_ numbers: [Int]) -> Bool {
+        numbers.sorted() == Array(1...9)
+    }
+}
+
 // MARK: - overlay SwiftUI view
 
 private struct KeybindOverlayView: View {
     let keybinds: [Keybind]
+    let showTutorial: () -> Void
     @EnvironmentObject var filter: FilterModel
     @ObservedObject private var config = UserConfig.shared
 
@@ -177,20 +213,35 @@ private struct KeybindOverlayView: View {
     // MARK: header
 
     private var header: some View {
-        HStack(alignment: .center) {
-            HStack(spacing: 9) {
-                Text("Keybinds")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.hudPrimary)
-                HStack(spacing: 3) {
-                    KeyChip(config.hyprKey.badgeLabel)
-                    KeyChip("K")
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .center) {
+                HStack(spacing: 9) {
+                    Text("Keybinds")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.hudPrimary)
+                    HStack(spacing: 3) {
+                        KeyChip("HYPR")
+                        KeyChip("K")
+                    }
                 }
+                Spacer()
+                Button(action: showTutorial) {
+                    Text("Tutorial")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(Color.hyprCyan)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
+                        .background(Color.hyprCyan.opacity(0.12), in: RoundedRectangle(cornerRadius: 5))
+                }
+                .buttonStyle(.plain)
+                Text(hintText)
+                    .font(.system(size: 10, design: filter.text.isEmpty ? .default : .monospaced))
+                    .foregroundStyle(filter.text.isEmpty ? Color.hudFaint : Color.hyprCyan)
             }
-            Spacer()
-            Text(hintText)
-                .font(.system(size: 10, design: filter.text.isEmpty ? .default : .monospaced))
-                .foregroundStyle(filter.text.isEmpty ? Color.hudFaint : Color.hyprCyan)
+            Text("HYPR = \(config.hyprKey.displayName)  ·  N = workspace number (1–9)")
+                .font(.system(size: 9.5))
+                .foregroundStyle(Color.hudFaint)
         }
     }
 
@@ -275,7 +326,11 @@ private struct KeybindOverlayView: View {
 
     private func rows(for category: KeybindCategory) -> [OverlayRow] {
         let binds = keybinds.filter { KeybindCategory.from($0.action) == category }
-        return coalesce(binds).filter { matchesFilter($0.description) }
+        var result = coalesce(binds)
+        if category == .windowManagement {
+            result.append(OverlayRow(description: "Swap tiles by dragging", chord: "HYPR + drag", isFloating: false))
+        }
+        return result.filter { matchesFilter($0.description) }
     }
 
     private func matchesFilter(_ description: String) -> Bool {
@@ -333,6 +388,14 @@ private struct KeybindOverlayView: View {
     private func directionRow(matching seed: Keybind, in binds: [Keybind],
                               consuming consumed: inout Set<Int>) -> OverlayRow? {
         guard let family = dirFamily(seed.action) else { return nil }
+        let seedDirection: Direction
+        switch seed.action {
+        case .focusDirection(let d), .swapDirection(let d),
+             .moveWindowToMonitor(let d), .resizeDirection(let d): seedDirection = d
+        default: return nil
+        }
+        guard KeybindOverlayGrouping.usesCanonicalDirectionKey(
+            seed, direction: seedDirection) else { return nil }
 
         var arrows: [Direction] = []
         var indices: [Int] = []
@@ -346,7 +409,10 @@ private struct KeybindOverlayView: View {
             case .resizeDirection(let d):     dir = d
             default:                          dir = nil
             }
-            if let dir { arrows.append(dir); indices.append(j) }
+            if let dir, KeybindOverlayGrouping.usesCanonicalDirectionKey(other, direction: dir) {
+                arrows.append(dir)
+                indices.append(j)
+            }
         }
         // need at least two to justify coalescing
         guard arrows.count >= 2 else { return nil }
@@ -368,8 +434,18 @@ private struct KeybindOverlayView: View {
     private func workspaceRow(matching seed: Keybind, in binds: [Keybind],
                               consuming consumed: inout Set<Int>) -> OverlayRow? {
         let isSwitch: Bool
-        if case .switchWorkspace = seed.action { isSwitch = true }
-        else { isSwitch = false }
+        let seedNumber: Int
+        if case .switchWorkspace(let n) = seed.action {
+            isSwitch = true
+            seedNumber = n
+        } else if case .moveToWorkspace(let n) = seed.action {
+            isSwitch = false
+            seedNumber = n
+        } else {
+            return nil
+        }
+        guard KeybindOverlayGrouping.usesCanonicalWorkspaceKey(
+            seed, number: seedNumber) else { return nil }
 
         var numbers: [Int] = []
         var indices: [Int] = []
@@ -380,15 +456,17 @@ private struct KeybindOverlayView: View {
             case .moveToWorkspace(let v) where !isSwitch: n = v
             default: n = nil
             }
-            if let n { numbers.append(n); indices.append(j) }
+            if let n, KeybindOverlayGrouping.usesCanonicalWorkspaceKey(other, number: n) {
+                numbers.append(n)
+                indices.append(j)
+            }
         }
-        guard numbers.count >= 2 else { return nil }
+        let sorted = numbers.sorted()
+        guard KeybindOverlayGrouping.isCompleteWorkspaceRange(sorted) else { return nil }
         indices.forEach { consumed.insert($0) }
 
-        let sorted = numbers.sorted()
-        let range = "\(sorted.first!)–\(sorted.last!)"
-        let chord = chordString(modifiers: seed.modifiers, key: range)
-        let desc = isSwitch ? "Go to workspace" : "Send window to workspace"
+        let chord = chordString(modifiers: seed.modifiers, key: "N")
+        let desc = isSwitch ? "Switch to workspace N" : "Move window to workspace N"
         return OverlayRow(description: desc, chord: chord, isFloating: false)
     }
 
@@ -401,10 +479,10 @@ private struct KeybindOverlayView: View {
 
     // MARK: chord formatting
 
-    // spaced-glyph chord: modifier glyphs then key, e.g. "⇪ ⇧ T"
+    // textual Hypr modifier followed by standard modifier glyphs and key
     private func chordString(modifiers: ModifierFlags, key: String) -> String {
         var parts: [String] = []
-        if modifiers.contains(.hypr)    { parts.append(config.hyprKey.badgeLabel) }
+        if modifiers.contains(.hypr)    { parts.append("HYPR") }
         if modifiers.contains(.control) { parts.append("⌃") }
         if modifiers.contains(.option)  { parts.append("⌥") }
         if modifiers.contains(.shift)   { parts.append("⇧") }

@@ -279,6 +279,14 @@ versioning. Today: the monitor-config split (per-machine
 `maxSplitsPerMonitor` and `disabledMonitors` extracted from the
 synced config). Future schema bumps land here too.
 
+`ConfigUpdateCoordinator` observes one post-mutation signal from `UserConfig`
+and compares complete snapshots against the initial configuration. Disk reloads
+emit after all properties have been stored. Geometry and monitor changes route
+to layout callbacks; appearance changes route only to chrome updates. This
+avoids first-reload retiles, stale `@Published` reads, and duplicate listeners
+after restart. Hover response and focus-follows-mouse are read on each mouse
+event and need no update callback. See [settings polish](settings-polish.md).
+
 The on-disk JSON wire format for keybinds is frozen — see
 `docs/keybinds-and-actions.md` for the contract.
 

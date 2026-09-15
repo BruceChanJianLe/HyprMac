@@ -1,5 +1,9 @@
 # Border and scratchpad audit
 
+## Current policy
+
+The findings below record an earlier implementation. Rejection feedback now deliberately remains available when persistent borders are off: a rejected operation shows a bounded red overlay shake and message. Ordinary focus highlights and floating outlines still obey the border toggle. See [settings polish](settings-polish.md) for the current defaults and live-update behavior.
+
 ## Findings
 
 The disabled-border flash came from policy being enforced only in selected callers. `WindowManager.updateFocusBorder` checked `showFocusBorder`, and the settings observer hid the persistent focus and floating panels. Several one-shot paths called the renderer directly: scratchpad send/adopt used `flashInfo`, while rejected scratchpad, workspace, and action operations used `flashError`. Those calls could create colored panels even when the setting was false. Scratchpad transitions made the bug especially visible because sending a window to a hidden layer always issued `flashInfo("→ scratchpad")` after parking it.
@@ -56,4 +60,4 @@ The first implementation was made before the initial assertion RED because the o
 
 ## Manual visual verification
 
-Not run. The audit constraints prohibit launching or relaunching the live window manager and changing live settings. A later authorized visual pass should start with the border disabled, send a tiled window to a hidden scratchpad, show and hide the layer, trigger a rejected operation, and confirm that no cyan, magenta, or red panel appears. It should then enable the border and repeat the same actions to confirm normal focus, floating, info, and error feedback.
+Not run. The audit constraints prohibit launching or relaunching the live window manager and changing live settings. A later authorized visual pass should start with the border disabled, send a tiled window to a hidden scratchpad, show and hide the layer, trigger a rejected operation, and confirm that ordinary cyan or magenta highlights stay hidden while rejected operations still show their red feedback. It should then enable the border and repeat the same actions to confirm normal focus, floating, info, and error feedback.

@@ -19,6 +19,88 @@ import AppKit
 
 final class ConfigMigrationTests: XCTestCase {
 
+    func testFocusChromeDefaultsUseDimAndNeutralCorners() {
+        XCTAssertFalse(UserConfigDefaults.showFocusBorder)
+        XCTAssertTrue(UserConfigDefaults.dimInactiveWindows)
+        XCTAssertEqual(UserConfigDefaults.dimIntensity, 0.135, accuracy: 0.0001)
+        XCTAssertEqual(UserConfigDefaults.chromeFadeDurationSec, 0.13, accuracy: 0.0001)
+        XCTAssertEqual(UserConfigDefaults.focusBracketStyle, .rounded)
+        XCTAssertEqual(UserConfigDefaults.focusBracketRadius, 14)
+        XCTAssertEqual(UserConfigDefaults.focusBracketThickness, 3)
+        XCTAssertEqual(SavedConfig.empty.focusBracketStyle, .rounded)
+        XCTAssertNil(SavedConfig.empty.focusBracketColorHex)
+        XCTAssertNil(SavedConfig.empty.focusBracketRadius)
+        XCTAssertNil(SavedConfig.empty.focusBracketThickness)
+    }
+
+    func testBracketColorMigrationPreservesExplicitLegacyFocusColor() {
+        let saved = SavedConfig(
+            version: nil, keybinds: [], gapSize: 8, outerPadding: 8, enabled: true,
+            focusFollowsMouse: nil, hyprKey: nil, excludedBundleIDs: nil,
+            showMenuBarIndicator: nil, maxSplitsPerMonitor: nil, disabledMonitors: nil,
+            showFocusBorder: false, focusBorderColorHex: "000000", floatingBorderColorHex: nil,
+            focusBracketStyle: nil, focusBracketColorHex: nil,
+            focusBracketRadius: nil,
+            focusBracketThickness: nil,
+            dimInactiveWindows: true, dimIntensity: 0.135, mouseHoverPollHz: nil,
+            chromeFadeDurationSec: 0.13, windowCornerRadius: nil,
+            scratchpadTileByDefault: nil, scratchpadRegionInset: nil)
+
+        XCTAssertEqual(ConfigMigration.resolveFocusBracketColor(saved: saved), "000000")
+    }
+
+    func testBracketColorMigrationUsesNewFieldFirstAndNilMeansNeutral() throws {
+        let explicit = SavedConfig(
+            version: nil, keybinds: [], gapSize: 8, outerPadding: 8, enabled: true,
+            focusFollowsMouse: nil, hyprKey: nil, excludedBundleIDs: nil,
+            showMenuBarIndicator: nil, maxSplitsPerMonitor: nil, disabledMonitors: nil,
+            showFocusBorder: nil, focusBorderColorHex: "00FFFF", floatingBorderColorHex: nil,
+            focusBracketStyle: .rounded, focusBracketColorHex: "FFFFFF",
+            focusBracketRadius: 8,
+            focusBracketThickness: nil,
+            dimInactiveWindows: nil, dimIntensity: nil, mouseHoverPollHz: nil,
+            chromeFadeDurationSec: nil, windowCornerRadius: nil,
+            scratchpadTileByDefault: nil, scratchpadRegionInset: nil)
+        var neutralJSON = try JSONEncoder().encode(SavedConfig.empty)
+        var neutralObject = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: neutralJSON) as? [String: Any])
+        neutralObject.removeValue(forKey: "focusBracketColorHex")
+        neutralObject.removeValue(forKey: "focusBorderColorHex")
+        neutralJSON = try JSONSerialization.data(withJSONObject: neutralObject)
+        let neutral = try JSONDecoder().decode(SavedConfig.self, from: neutralJSON)
+
+        XCTAssertEqual(ConfigMigration.resolveFocusBracketColor(saved: explicit), "FFFFFF")
+        XCTAssertNil(ConfigMigration.resolveFocusBracketColor(saved: neutral))
+    }
+
+    func testResetNeutralBracketDoesNotReimportLegacyBorderColor() throws {
+        var data = try JSONEncoder().encode(SavedConfig.empty)
+        var object = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object["focusBorderColorHex"] = "000000"
+        object["focusBracketStyle"] = FocusBracketStyle.rounded.rawValue
+        object.removeValue(forKey: "focusBracketColorHex")
+        data = try JSONSerialization.data(withJSONObject: object)
+        let saved = try JSONDecoder().decode(SavedConfig.self, from: data)
+
+        XCTAssertNil(ConfigMigration.resolveFocusBracketColor(saved: saved))
+    }
+
+    func testUnknownFutureBracketStyleDoesNotDiscardConfig() throws {
+        var data = try JSONEncoder().encode(SavedConfig.empty)
+        var object = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object["focusBracketStyle"] = "future-style"
+        object["focusBorderColorHex"] = "000000"
+        object.removeValue(forKey: "focusBracketColorHex")
+        object["dimIntensity"] = 0.17
+        data = try JSONSerialization.data(withJSONObject: object)
+
+        let saved = try JSONDecoder().decode(SavedConfig.self, from: data)
+
+        XCTAssertEqual(saved.focusBracketStyle, .rounded)
+        XCTAssertNil(ConfigMigration.resolveFocusBracketColor(saved: saved))
+        XCTAssertEqual(saved.dimIntensity, 0.17)
+    }
+
     func testScratchpadTilesNewMembersByDefault() {
         XCTAssertTrue(UserConfigDefaults.scratchpadTileByDefault)
         XCTAssertTrue(SavedConfig.empty.scratchpadTileByDefault == true)
@@ -91,6 +173,9 @@ final class ConfigMigrationTests: XCTestCase {
         XCTAssertNil(saved.dimIntensity)
         XCTAssertNil(saved.maxSplitsPerMonitor)
         XCTAssertNil(saved.windowCornerRadius)
+        XCTAssertNil(saved.focusBracketStyle)
+        XCTAssertNil(saved.focusBracketColorHex)
+        XCTAssertNil(saved.focusBracketRadius)
         XCTAssertNil(saved.scratchpadTileByDefault)
         XCTAssertNil(saved.scratchpadRegionInset)
     }
@@ -106,6 +191,9 @@ final class ConfigMigrationTests: XCTestCase {
             maxSplitsPerMonitor: nil, disabledMonitors: nil,
             showFocusBorder: true,
             focusBorderColorHex: "007AFF", floatingBorderColorHex: nil,
+            focusBracketStyle: .rounded, focusBracketColorHex: "FFFFFF",
+            focusBracketRadius: 8,
+            focusBracketThickness: 4.5,
             dimInactiveWindows: true, dimIntensity: 0.5,
             mouseHoverPollHz: nil, chromeFadeDurationSec: nil,
             windowCornerRadius: 13,
@@ -118,6 +206,10 @@ final class ConfigMigrationTests: XCTestCase {
         XCTAssertEqual(decoded.excludedBundleIDs, ["com.apple.FaceTime"])
         XCTAssertEqual(decoded.dimIntensity, 0.5)
         XCTAssertEqual(decoded.focusBorderColorHex, "007AFF")
+        XCTAssertEqual(decoded.focusBracketStyle, .rounded)
+        XCTAssertEqual(decoded.focusBracketColorHex, "FFFFFF")
+        XCTAssertEqual(decoded.focusBracketRadius, 8)
+        XCTAssertEqual(decoded.focusBracketThickness, 4.5)
         XCTAssertEqual(decoded.windowCornerRadius, 13)
         XCTAssertEqual(decoded.scratchpadTileByDefault, true)
         XCTAssertEqual(decoded.scratchpadRegionInset, 0.03)
@@ -135,7 +227,10 @@ final class ConfigMigrationTests: XCTestCase {
             showMenuBarIndicator: nil,
             maxSplitsPerMonitor: ["Old": 99], disabledMonitors: ["Old"],
             showFocusBorder: nil, focusBorderColorHex: nil,
-            floatingBorderColorHex: nil, dimInactiveWindows: nil, dimIntensity: nil,
+            floatingBorderColorHex: nil, focusBracketStyle: nil, focusBracketColorHex: nil,
+            focusBracketRadius: nil,
+            focusBracketThickness: nil,
+            dimInactiveWindows: nil, dimIntensity: nil,
             mouseHoverPollHz: nil, chromeFadeDurationSec: nil,
             windowCornerRadius: nil,
             scratchpadTileByDefault: nil, scratchpadRegionInset: nil)
@@ -154,7 +249,10 @@ final class ConfigMigrationTests: XCTestCase {
             maxSplitsPerMonitor: ["DELL U2723QE": 2],
             disabledMonitors: ["External"],
             showFocusBorder: nil, focusBorderColorHex: nil,
-            floatingBorderColorHex: nil, dimInactiveWindows: nil, dimIntensity: nil,
+            floatingBorderColorHex: nil, focusBracketStyle: nil, focusBracketColorHex: nil,
+            focusBracketRadius: nil,
+            focusBracketThickness: nil,
+            dimInactiveWindows: nil, dimIntensity: nil,
             mouseHoverPollHz: nil, chromeFadeDurationSec: nil,
             windowCornerRadius: nil,
             scratchpadTileByDefault: nil, scratchpadRegionInset: nil)
@@ -179,7 +277,10 @@ final class ConfigMigrationTests: XCTestCase {
             showMenuBarIndicator: nil,
             maxSplitsPerMonitor: nil, disabledMonitors: nil,
             showFocusBorder: nil, focusBorderColorHex: nil,
-            floatingBorderColorHex: nil, dimInactiveWindows: nil, dimIntensity: nil,
+            floatingBorderColorHex: nil, focusBracketStyle: nil, focusBracketColorHex: nil,
+            focusBracketRadius: nil,
+            focusBracketThickness: nil,
+            dimInactiveWindows: nil, dimIntensity: nil,
             mouseHoverPollHz: nil, chromeFadeDurationSec: nil,
             windowCornerRadius: nil,
             scratchpadTileByDefault: nil, scratchpadRegionInset: nil)
@@ -198,6 +299,7 @@ final class ConfigMigrationTests: XCTestCase {
     func testWindowCornerRadiusDefaultsPreservePreviousBehavior() {
         XCTAssertEqual(UserConfigDefaults.windowCornerRadius(forOSMajorVersion: 15), 10)
         XCTAssertEqual(UserConfigDefaults.windowCornerRadius(forOSMajorVersion: 26), 16)
+        XCTAssertEqual(UserConfigDefaults.windowCornerRadius(forOSMajorVersion: 27), 16)
     }
 
     func testUnsetWindowCornerRadiusTracksOSVersion() {

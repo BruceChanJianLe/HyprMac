@@ -46,6 +46,7 @@ class HotkeyManager {
     private var pressedModifierKeyCodes: Set<UInt16> = []
 
     private var keybinds: [Keybind] = Keybind.defaults
+    private var tilingEnabled = true
     // O(1) lookup: packed key = (keyCode << 16) | modifiers.rawValue
     private var keybindMap: [UInt32: Keybind] = [:]
 
@@ -67,6 +68,25 @@ class HotkeyManager {
         }
     }
 
+    func updateTilingEnabled(_ enabled: Bool) {
+        stateLock.lock()
+        tilingEnabled = enabled
+        stateLock.unlock()
+    }
+
+    static func actionIsAvailable(_ action: Action, tilingEnabled: Bool) -> Bool {
+        tilingEnabled || action == .toggleTiling || action == .showKeybinds
+    }
+
+    static func shouldDispatchAction(
+        _ action: Action,
+        tilingEnabled: Bool,
+        isRepeat: Bool
+    ) -> Bool {
+        actionIsAvailable(action, tilingEnabled: tilingEnabled)
+            && !(action == .toggleTiling && isRepeat)
+    }
+
     /// Switch the physical key acting as the Hypr modifier. Resets any
     /// in-progress modifier state so a key already down at the moment
     /// of the swap is not misinterpreted.
@@ -84,6 +104,11 @@ class HotkeyManager {
     /// permission is missing; the failure is logged and `isInstalled`
     /// remains `false`.
     func start() {
+        stateLock.lock()
+        let alreadyStarted = eventTap != nil
+        stateLock.unlock()
+        guard !alreadyStarted else { return }
+
         let mask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
             | (1 << CGEventType.keyUp.rawValue)
             | (1 << CGEventType.flagsChanged.rawValue)
@@ -220,7 +245,7 @@ class HotkeyManager {
     /// Runs on the tap thread, per keystroke. Holds `stateLock` for the
     /// duration — pure dictionary/set work plus at most one IOKit query,
     /// so hold times are microseconds.
-    fileprivate func handleEvent(_ type: CGEventType, _ event: CGEvent) -> CGEvent? {
+    func handleEvent(_ type: CGEventType, _ event: CGEvent) -> CGEvent? {
         stateLock.lock()
         defer { stateLock.unlock() }
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
@@ -257,6 +282,14 @@ class HotkeyManager {
         let packed = HotkeyManager.packKey(keyCode, flags)
         if let bind = keybindMap[packed] {
             let action = bind.action
+            guard Self.actionIsAvailable(action, tilingEnabled: tilingEnabled) else {
+                return event
+            }
+            let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+            guard Self.shouldDispatchAction(
+                action, tilingEnabled: tilingEnabled, isRepeat: isRepeat) else {
+                return nil
+            }
             hyprLog(.debug, .lifecycle, "matched: \(action)")
             DispatchQueue.main.async { [weak self] in
                 self?.onAction?(action)

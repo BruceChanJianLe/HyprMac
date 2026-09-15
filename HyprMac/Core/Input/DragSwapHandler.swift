@@ -7,18 +7,54 @@ struct MouseDragLifecycleState {
     var buttonDown = false
     var sawDragEvent = false
     var preDragFocusedID: CGWindowID = 0
+    var swapRequested = false
 
-    mutating func resetForStop() {
+    mutating func beginPress(hyprHeld: Bool) {
+        buttonDown = true
+        sawDragEvent = false
+        swapRequested = hyprHeld
+    }
+
+    mutating func observeDrag(hyprHeld: Bool) {
+        sawDragEvent = true
+        swapRequested = swapRequested || hyprHeld
+    }
+
+    mutating func noteHyprKeyDown() {
+        guard buttonDown else { return }
+        swapRequested = true
+    }
+
+    func releaseRequestsSwap(hyprHeld: Bool, optionDown: Bool) -> Bool {
+        swapRequested || hyprHeld || optionDown
+    }
+
+    mutating func finishPress() {
         buttonDown = false
         sawDragEvent = false
+        swapRequested = false
+    }
+
+    mutating func resetForStop() {
+        finishPress()
         preDragFocusedID = 0
     }
 }
 
 struct TiledDragRelease: Equatable {
     let pointer: CGPoint
-    let optionDown: Bool
+    let swapRequested: Bool
     let sawDragEvent: Bool
+
+    init(pointer: CGPoint, swapRequested: Bool, sawDragEvent: Bool) {
+        self.pointer = pointer
+        self.swapRequested = swapRequested
+        self.sawDragEvent = sawDragEvent
+    }
+
+    init(pointer: CGPoint, optionDown: Bool, sawDragEvent: Bool) {
+        self.init(pointer: pointer, swapRequested: optionDown, sawDragEvent: sawDragEvent)
+    }
 }
 
 struct TiledDragPressResolver {
@@ -210,7 +246,7 @@ final class TiledDragSessionCoordinator {
             guard let self, self.pressEpoch == epoch else { return }
             let mode: TiledDragMode?
             if let target = self.resolveTarget(release.pointer, snapshot) {
-                mode = release.optionDown
+                mode = release.swapRequested
                     ? .swap(targetID: target.windowID)
                     : .insert(targetID: target.windowID, edge: target.edge)
             } else {

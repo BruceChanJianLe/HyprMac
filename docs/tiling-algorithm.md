@@ -644,18 +644,20 @@ the actual frames of the source tree and visible floating occluders once.
 A press must hit exactly one tile and no occluder. Floating and scratchpad
 presses do not start tiled insertion.
 
-The mouse-up event supplies the release point and Option state. After the
-100 ms settle delay, a bounded read of the captured dragged window separates
-manual resizing from movement. A width or height change greater than 20 AX
-points produces a resize candidate. Position and size changes within one
-point are ignored, so text selection does not rearrange unmoved windows.
+The mouse-up event supplies the release point. The mouse lifecycle latches the
+logical Hypr key when it is held at press, pressed during the drag, or still
+held at release. Option at release remains a compatibility shortcut. After
+the 100 ms settle delay, a bounded read of the captured dragged window
+separates manual resizing from movement. A width or height change greater than
+20 AX points produces a resize candidate. Position and size changes within
+one point are ignored, so text selection does not rearrange unmoved windows.
 
 An ordinary move chooses a target from the release point within the source
 workspace and physical display. The nearest normalized target edge selects
-left, right, top, or bottom insertion; ties use that order. Option at release
-requests a same-tree swap instead. A release without a target restores and
-verifies the captured frames. Cross-monitor and cross-workspace insertion
-are excluded.
+left, right, top, or bottom insertion; ties use that order. A latched Hypr
+gesture or Option at release requests a same-tree swap instead. A release
+without a target restores and verifies the captured frames. Cross-monitor and
+cross-workspace insertion are excluded.
 
 `BSPTree.candidateTree` clones the source, removes the dragged leaf, and
 splits the target on the selected side. Horizontal splits create columns;
