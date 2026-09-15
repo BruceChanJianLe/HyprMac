@@ -187,15 +187,14 @@ private struct TourHeroPage: View {
             keycap
                 .padding(.bottom, 22)
 
-            Text("Meet your Hypr key")
+            Text(config.hyprKey == .capsLock
+                 ? "Caps Lock is your HYPR Key by Default."
+                 : "\(config.hyprKey.displayName) is your HYPR Key.")
                 .font(.system(size: 19, weight: .semibold))
                 .foregroundStyle(Color.hyprTextPrimary)
+                .multilineTextAlignment(.center)
 
-            // body copy with "Hypr key" in cyan bold
-            (Text(config.hyprKey.displayName).foregroundColor(.hyprCyan).bold()
-                + Text(" is the physical key. The shortcuts in this tutorial call it ")
-                + Text("HYPR").foregroundColor(.hyprCyan).bold()
-                + Text(". Hold it while pressing another key to manage windows."))
+            Text("This is your portal into HyprMac! All shortcuts start with this key.")
                 .font(.system(size: 12.5))
                 .lineSpacing(4)
                 .foregroundStyle(Color.hyprTextPrimary.opacity(0.55))
@@ -256,7 +255,7 @@ private struct TourHeroPage: View {
                     Text("✓")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color.hyprCyan)
-                    Text("Nice — you focused a window")
+                    Text("Nice! You switched windows.")
                         .font(.system(size: 11))
                         .foregroundStyle(Color.hyprCyan)
                 }
@@ -375,7 +374,7 @@ private struct TourFocusPage: View {
     private var focusBullets: [(icon: String, text: String)] {
         let directionText: String
         if let focusChord, let swapChord {
-            directionText = "\(focusChord) moves focus left; other arrows move in their directions. \(swapChord) swaps left."
+            directionText = "\(focusChord) takes you to the window on your left. \(swapChord) swaps places with it. Try the other arrows too."
         } else {
             directionText = "Add Focus Direction and Swap Direction shortcuts in Settings → Keys."
         }
@@ -388,7 +387,7 @@ private struct TourFocusPage: View {
         if config.focusBracketStyle != .off {
             result.append(("rectangle.dashed", "Hold \(config.hyprKey.displayName) to show corner marks on the focused window."))
         } else {
-            result.append(("rectangle.dashed", "Hypr key corner marks are currently off; enable them in Layout settings."))
+            result.append(("rectangle.dashed", "You can turn on corner marks in Layout settings."))
         }
         return result
     }
@@ -408,9 +407,7 @@ private struct TourFocusPage: View {
     }
 
     private var attributed: Text {
-        Text("Focus is how you say ")
-            + Text("this window").foregroundColor(.hyprCyan).bold()
-            + Text(". Everything you type goes to whatever is focused.")
+        Text("The focused window is the one you’re using right now. Here’s how to get around without clicking.")
     }
 }
 
@@ -426,10 +423,9 @@ private struct TourWorkspacesPage: View {
             copy: attributed,
             bullets: [
                 ("number", workspaceInstruction),
-                ("menubar.rectangle", "The menu bar shows each one: ● active  ○ occupied  · empty."),
-                ("diamond", "◇ marks a workspace holding floating windows — magenta."),
-            ],
-            magentaBulletIndex: 2
+                ("menubar.rectangle", "Check the menu bar to see which workspace each monitor is showing."),
+                ("square.stack", "Your windows stay on their workspace when you switch."),
+            ]
         )
     }
 
@@ -443,15 +439,13 @@ private struct TourWorkspacesPage: View {
             return false
         }
         guard let switchChord, let sendChord else {
-            return "Add workspace shortcuts in Settings → Keys; numbers choose the destination."
+            return "You can add workspace shortcuts in Settings → Keys."
         }
-        return "\(switchChord) opens workspace 1. \(sendChord) sends the focused window there. Other numbers target other workspaces."
+        return "\(switchChord) opens workspace 1. \(sendChord) sends the focused window there. Try another number for a different workspace."
     }
 
     private var attributed: Text {
-        Text("Nine ")
-            + Text("workspaces").foregroundColor(.hyprCyan).bold()
-            + Text(" per setup. Each monitor shows one at a time.")
+        Text("Workspaces let you keep separate groups of windows. Each monitor shows one group at a time.")
     }
 }
 
@@ -465,7 +459,7 @@ private struct TourFinishPage: View {
             HeroGlyph(icon: "keyboard")
                 .padding(.bottom, 20)
 
-            Text("That's the core of it")
+            Text("You’re ready to go!")
                 .font(.system(size: 19, weight: .semibold))
                 .foregroundStyle(Color.hyprTextPrimary)
 
@@ -485,7 +479,7 @@ private struct TourFinishPage: View {
             .multilineTextAlignment(.center)
             .padding(.top, 10)
 
-            Text("The searchable keymap includes a Tutorial button. You can also reopen this tutorial from the menu bar at any time.")
+            Text("You don’t have to memorize everything. Your shortcuts and this tutorial are always here, or in the menu bar.")
                 .font(.system(size: 12.5))
                 .lineSpacing(4)
                 .foregroundStyle(Color.hyprTextPrimary.opacity(0.55))
@@ -514,7 +508,7 @@ private struct TourFinishPage: View {
             if case .toggleTiling = $0 { return true }
             return false
         }) else { return "Add Pause / Resume Tiling in Settings → Keys when you want a break." }
-        return "Need a break? \(chord) pauses or resumes automatic tiling."
+        return "If things get in your way, press \(chord) to pause tiling. Press it again when you’re ready."
     }
 }
 

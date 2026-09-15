@@ -1,13 +1,12 @@
-// Menu bar dropdown contents and the compact dot-grid label that
-// lives in the menu bar itself.
+// Menu bar dropdown contents and compact workspace label.
 
 import SwiftUI
 #if !HYPRMAC_DEBUG_VARIANT
 import Sparkle
 #endif
 
-/// `MenuBarExtra` dropdown contents: status header, per-screen
-/// workspace badges, and standard actions (Settings, Retile, Check
+/// `MenuBarExtra` dropdown contents: status header, per-monitor
+/// workspace state, and standard actions (Settings, Retile, Check
 /// for Updates, Quit). Restyled to match the settings window — same
 /// surface treatment, mono accent typography, cyan active-state
 /// indicator. The label rendered in the menu bar itself is
@@ -15,8 +14,8 @@ import Sparkle
 struct MenuBarView: View {
     let appDelegate: AppDelegate
     @ObservedObject var config = UserConfig.shared
+    @ObservedObject private var menuBarState = MenuBarState.shared
     @Environment(\.openWindow) private var openWindow
-    @State private var refreshID = UUID()
     #if !HYPRMAC_DEBUG_VARIANT
     let updater: SPUUpdater
     #endif
@@ -25,15 +24,11 @@ struct MenuBarView: View {
         VStack(alignment: .leading, spacing: HyprSpacing.md) {
             header
             workspacePanel
-                .id(refreshID)
             actions
         }
         .padding(HyprSpacing.md)
         .frame(width: 280)
         .background(Color.hyprBackground)
-        .onReceive(NotificationCenter.default.publisher(for: .hyprMacWorkspaceChanged)) { _ in
-            refreshID = UUID()
-        }
     }
 
     // MARK: header
@@ -61,129 +56,52 @@ struct MenuBarView: View {
 
     @ViewBuilder
     private var workspacePanel: some View {
-        let wm = appDelegate.windowManager
-        let ws = wm?.workspaceManager
-        let occupied = MenuBarState.shared.occupiedWorkspaces
-        let floatingWs = MenuBarState.shared.floatingWorkspaces
-
-        if let ws = ws {
+        if MenuBarPresentation.showsWorkspaceState(
+            enabled: config.enabled,
+            indicatorEnabled: true,
+            hasData: menuBarState.hasData,
+            monitors: menuBarState.monitors,
+            scratchpadCount: menuBarState.scratchpadCount) {
             HyprPanel("Workspaces") {
-                ForEach(Array(NSScreen.screens.enumerated()), id: \.offset) { idx, screen in
-                    let active = ws.workspaceForScreen(screen)
-                    let maxWs = max(active, occupied.max() ?? 1, 3)
-                    workspaceRow(
-                        screenIndex: idx,
-                        screenCount: NSScreen.screens.count,
-                        active: active,
-                        maxWs: maxWs,
-                        occupied: occupied,
-                        floatingWs: floatingWs,
-                        isLast: idx == NSScreen.screens.count - 1
-                    )
+                ForEach(menuBarState.monitors) { monitor in
+                    monitorRow(monitor)
                 }
-                workspaceLegend
-            }
-        }
-    }
-
-    // glyph legend + optional stash chip, below the workspace rows and
-    // separated by a hairline top border.
-    private var workspaceLegend: some View {
-        VStack(spacing: 0) {
-            Rectangle()
-                .fill(Color.hyprSeparator)
-                .frame(height: 0.5)
-            HStack(spacing: HyprSpacing.sm) {
-                HStack(spacing: 2) {
-                    Text("● active").foregroundStyle(Color.hyprTextTertiary)
-                    Text("○ occupied").foregroundStyle(Color.hyprTextTertiary)
-                    Text("◇ floating").foregroundStyle(Color.hyprMagenta)
-                }
-                .font(.hyprMonoXs)
-                Spacer(minLength: HyprSpacing.sm)
-                if MenuBarState.shared.scratchpadCount > 0 {
+                if menuBarState.scratchpadCount > 0 {
+                    Rectangle()
+                        .fill(Color.hyprSeparator)
+                        .frame(height: 0.5)
                     HStack(spacing: 3) {
                         Image(systemName: "tray")
                             .font(.system(size: 10))
-                        Text("\(MenuBarState.shared.scratchpadCount) stashed")
+                        Text("\(menuBarState.scratchpadCount) stashed")
                             .font(.hyprMonoXs)
+                        Spacer()
                     }
                     .foregroundStyle(Color.hyprMagenta)
+                    .padding(.horizontal, HyprSpacing.md)
+                    .padding(.vertical, HyprSpacing.sm)
                 }
-            }
-            .padding(.horizontal, HyprSpacing.md)
-            .padding(.vertical, HyprSpacing.sm)
-        }
-    }
-
-    private func workspaceRow(screenIndex idx: Int,
-                              screenCount: Int,
-                              active: Int,
-                              maxWs: Int,
-                              occupied: Set<Int>,
-                              floatingWs: Set<Int>,
-                              isLast: Bool) -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: HyprSpacing.sm) {
-                Image(systemName: "display")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.hyprTextSecondary)
-                if screenCount > 1 {
-                    Text("\(idx + 1)")
-                        .font(.hyprMonoXs)
-                        .foregroundStyle(Color.hyprTextSecondary)
-                }
-                Spacer(minLength: HyprSpacing.sm)
-                HStack(spacing: 2) {
-                    ForEach(1...maxWs, id: \.self) { num in
-                        workspaceBadge(
-                            num: num,
-                            active: num == active,
-                            occupied: occupied.contains(num),
-                            floating: floatingWs.contains(num)
-                        )
-                    }
-                }
-            }
-            .padding(.horizontal, HyprSpacing.md)
-            .padding(.vertical, HyprSpacing.sm)
-
-            if !isLast {
-                Rectangle()
-                    .fill(Color.hyprSeparator)
-                    .frame(height: 0.5)
-                    .padding(.leading, HyprSpacing.md)
             }
         }
     }
 
-    private func workspaceBadge(num: Int, active: Bool, occupied: Bool, floating: Bool) -> some View {
-        HStack(spacing: 1) {
-            Text("\(num)")
+    private func monitorRow(_ monitor: MenuBarMonitorSnapshot) -> some View {
+        HStack(spacing: HyprSpacing.sm) {
+            Image(systemName: monitor.isPortrait ? "rectangle.portrait" : "display")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.hyprTextSecondary)
+            Text(monitor.name)
+                .font(.hyprBody)
+                .foregroundStyle(Color.hyprTextSecondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: HyprSpacing.sm)
+            Text("Workspace \(monitor.currentWorkspace)")
                 .font(.hyprMonoSm)
-            if floating {
-                // floating marker is always magenta, per accent semantics.
-                Text("◇").font(.system(size: 8)).foregroundStyle(Color.hyprMagenta)
-            }
+                .foregroundStyle(Color.hyprCyan)
         }
-        .frame(minWidth: 20, minHeight: 18)
-        .padding(.horizontal, floating ? 2 : 0)
-        .foregroundStyle(active ? Color.hyprCyan
-                         : occupied ? Color.hyprTextPrimary
-                         : Color.hyprTextTertiary)
-        .background(
-            RoundedRectangle(cornerRadius: HyprRadius.sm, style: .continuous)
-                .fill(active ? Color.hyprCyan.opacity(0.18)
-                      : occupied ? Color.hyprSurfaceElevated
-                      : Color.clear)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: HyprRadius.sm, style: .continuous)
-                .strokeBorder(active ? Color.hyprCyan.opacity(0.55)
-                              : occupied ? Color.hyprSeparator
-                              : Color.clear,
-                              lineWidth: 0.5)
-        )
+        .padding(.horizontal, HyprSpacing.md)
+        .padding(.vertical, HyprSpacing.sm)
     }
 
     // MARK: actions
@@ -297,9 +215,7 @@ private struct MenuBarRow<Trailing: View>: View {
 // WorkspaceIndicatorLabel observes it.
 class MenuBarState: ObservableObject {
     static let shared = MenuBarState()
-    @Published var labelText: String = ""
-    @Published var occupiedWorkspaces: Set<Int> = []
-    @Published var floatingWorkspaces: Set<Int> = []
+    @Published var monitors: [MenuBarMonitorSnapshot] = []
     @Published var hasData = false
     /// Number of windows in the scratchpad (0 = hide the tray glyph).
     @Published var scratchpadCount = 0
@@ -307,27 +223,48 @@ class MenuBarState: ObservableObject {
     @Published var scratchpadVisible = false
 }
 
-// Compact dot-grid menu bar label, one symbol per workspace 1..N where N
-// is the highest occupied (or active) workspace. Encoding:
-//   ●  active workspace
-//   ◆  active workspace, contains floating window(s)
-//   ○  occupied (has windows) but not active
-//   ◇  occupied + floating, not active
-//   ·  empty
-// String is computed by WindowManager.updateMenuBarState and pushed via
-// MenuBarState.labelText. A full-size tray glyph follows when the
-// scratchpad holds windows (filled while the layer is summoned). Falls
-// back to a static icon if disabled or if no workspace data yet.
+struct MenuBarMonitorSnapshot: Equatable, Identifiable {
+    let id: Int
+    let name: String
+    let currentWorkspace: Int
+    let isPortrait: Bool
+}
+
+enum MenuBarPresentation {
+    static func compactWorkspaceText(_ monitors: [MenuBarMonitorSnapshot]) -> String {
+        monitors.map { String($0.currentWorkspace) }.joined(separator: " · ")
+    }
+
+    static func monitorSummary(_ monitors: [MenuBarMonitorSnapshot]) -> String {
+        monitors.map { "\($0.name): Workspace \($0.currentWorkspace)" }
+            .joined(separator: "\n")
+    }
+
+    static func showsWorkspaceState(enabled: Bool, indicatorEnabled: Bool,
+                                    hasData: Bool, monitors: [MenuBarMonitorSnapshot],
+                                    scratchpadCount: Int) -> Bool {
+        enabled && indicatorEnabled && hasData
+            && (!monitors.isEmpty || scratchpadCount > 0)
+    }
+}
+
+// Shows current workspaces in left-to-right monitor order, plus stash state.
 struct WorkspaceIndicatorLabel: View {
     @ObservedObject private var config = UserConfig.shared
     @ObservedObject private var state = MenuBarState.shared
 
     var body: some View {
-        if config.showMenuBarIndicator, state.hasData,
-           !state.labelText.isEmpty || state.scratchpadCount > 0 {
+        let workspaceText = MenuBarPresentation.compactWorkspaceText(state.monitors)
+        if MenuBarPresentation.showsWorkspaceState(
+            enabled: config.enabled,
+            indicatorEnabled: config.showMenuBarIndicator,
+            hasData: state.hasData,
+            monitors: state.monitors,
+            scratchpadCount: state.scratchpadCount) {
             HStack(spacing: 5) {
-                if !state.labelText.isEmpty {
-                    Text(state.labelText)
+                if !workspaceText.isEmpty {
+                    Image(systemName: "display")
+                    Text(workspaceText)
                         .font(.system(size: 12, weight: .regular))
                 }
                 if state.scratchpadCount > 0 {
@@ -338,6 +275,7 @@ struct WorkspaceIndicatorLabel: View {
                     }
                 }
             }
+            .help(MenuBarPresentation.monitorSummary(state.monitors))
         } else {
             Image(systemName: "rectangle.split.2x2")
         }

@@ -2158,61 +2158,26 @@ class WindowManager {
             floaterOccluders: floaterOccluders)
     }
 
-    /// Render the dot-grid string for the menu bar indicator and publish it
-    /// to `MenuBarState.shared` for SwiftUI consumption.
-    ///
-    /// Encoding: `●` active, `◆` active+floating, `○` occupied, `◇`
-    /// occupied+floating, `·` empty. The string is truncated at the
-    /// highest-numbered active or occupied workspace so empty trailing
-    /// dots do not pad the menu bar.
+    /// Publish current workspaces in left-to-right monitor order for the menu.
     private func updateMenuBarState() {
-        let active = Set(activeWorkspaces())
-        let occupied = occupiedWorkspaces()
-        let floatingWs = workspacesWithFloatingWindows()
-        let maxWs = max(active.max() ?? 1, occupied.max() ?? 1)
-
-        // dots: ● active, ◆ active+floating, ○ occupied, ◇ occupied+floating, · empty
-        var parts: [String] = []
-        for i in 1...maxWs {
-            let hasFloat = floatingWs.contains(i)
-            if active.contains(i) {
-                parts.append(hasFloat ? "◆" : "●")
-            } else if occupied.contains(i) {
-                parts.append(hasFloat ? "◇" : "○")
-            } else {
-                parts.append("·")
+        let monitors = workspaceManager.enabledScreensLeftToRight().enumerated().map {
+            index, screen in
+                MenuBarMonitorSnapshot(
+                    id: index,
+                    name: screen.localizedName,
+                    currentWorkspace: workspaceManager.workspaceForScreen(screen),
+                    isPortrait: screen.frame.height > screen.frame.width)
             }
-        }
-        let text = parts.joined(separator: " ")
-        // scratchpad shows as a full-size tray glyph in the label, not a
-        // string glyph — a superscript marker was too small to read.
         let scratchpadCount = scratchpad.members.count
         let scratchpadVisible = scratchpad.isVisible
 
         DispatchQueue.main.async {
             let state = MenuBarState.shared
-            state.labelText = text
-            state.occupiedWorkspaces = occupied
-            state.floatingWorkspaces = floatingWs
+            state.monitors = monitors
             state.scratchpadCount = scratchpadCount
             state.scratchpadVisible = scratchpadVisible
             state.hasData = true
         }
-    }
-
-    /// Workspaces that hold at least one live (non-hidden) floating window.
-    /// Drives the diamond glyphs (`◆` / `◇`) in the menu bar grid.
-    private func workspacesWithFloatingWindows() -> Set<Int> {
-        var result = Set<Int>()
-        // only count live (non-hidden) floating windows
-        let liveFloating = stateCache.floatingWindowIDs.subtracting(stateCache.hiddenWindowIDs)
-        for ws in 1...9 {
-            let wsWindows = workspaceManager.windowIDs(onWorkspace: ws)
-            if !wsWindows.isDisjoint(with: liveFloating) {
-                result.insert(ws)
-            }
-        }
-        return result
     }
 
     // MARK: - poll

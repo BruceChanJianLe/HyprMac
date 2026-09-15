@@ -138,7 +138,7 @@ struct GeneralSettingsView: View {
     private var systemPanel: some View {
         HyprPanel("System",
                   footer: "Add HyprMac to Login Items in System Settings → General → Login Items to launch at startup.") {
-            HyprRow("Menu bar workspace indicator", icon: "rectangle.fill.on.rectangle.fill") {
+            HyprRow("Show current workspaces in menu bar", icon: "rectangle.fill.on.rectangle.fill") {
                 Toggle("", isOn: $config.showMenuBarIndicator)
                     .toggleStyle(HyprToggleStyle())
                     .labelsHidden()
