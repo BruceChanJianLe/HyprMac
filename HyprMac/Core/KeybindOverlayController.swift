@@ -7,7 +7,7 @@ import SwiftUI
 
 /// Lifecycle for the keybind overlay HUD.
 ///
-/// Holds a borderless `.nonactivatingPanel` at `.floating` level and a
+/// Holds a borderless `.nonactivatingPanel` above passive chrome and a
 /// local keyDown monitor for type-to-filter. `toggle` shows or hides.
 ///
 /// Threading: main-thread only.
@@ -46,7 +46,10 @@ class KeybindOverlayController {
 
         let maxHeight = screen.visibleFrame.height * 0.75
 
-        let content = KeybindOverlayView(keybinds: keybinds)
+        let content = KeybindOverlayView(keybinds: keybinds) { [weak self] in
+            self?.close()
+            (NSApp.delegate as? AppDelegate)?.showTour()
+        }
             .environmentObject(filter)
         let hosting = NSHostingView(rootView: content)
         // force dark so dynamic accents resolve to their neon variants
@@ -66,7 +69,7 @@ class KeybindOverlayController {
         p.backgroundColor = .clear
         p.hasShadow = false  // shadow drawn in SwiftUI
         p.isFloatingPanel = true
-        p.level = .floating
+        p.level = Constants.interfaceWindowLevel
         p.hidesOnDeactivate = false
         p.appearance = NSAppearance(named: .darkAqua)
 
@@ -151,6 +154,7 @@ private struct OverlaySection: Identifiable {
 
 private struct KeybindOverlayView: View {
     let keybinds: [Keybind]
+    let showTutorial: () -> Void
     @EnvironmentObject var filter: FilterModel
     @ObservedObject private var config = UserConfig.shared
 
@@ -188,6 +192,13 @@ private struct KeybindOverlayView: View {
                 }
             }
             Spacer()
+            Button("Tutorial", action: showTutorial)
+                .buttonStyle(.plain)
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(Color.hyprCyan)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.hyprCyan.opacity(0.12), in: RoundedRectangle(cornerRadius: 5))
             Text(hintText)
                 .font(.system(size: 10, design: filter.text.isEmpty ? .default : .monospaced))
                 .foregroundStyle(filter.text.isEmpty ? Color.hudFaint : Color.hyprCyan)

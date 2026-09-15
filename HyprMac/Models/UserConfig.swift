@@ -80,6 +80,12 @@ class UserConfig: ObservableObject {
     var resolvedFocusBracketRadius: CGFloat {
         focusBracketRadiusOverride ?? UserConfigDefaults.focusBracketRadius
     }
+    @Published var focusBracketThicknessOverride: CGFloat? {
+        didSet { persistRuntimeChange() }
+    }
+    var resolvedFocusBracketThickness: CGFloat {
+        focusBracketThicknessOverride ?? UserConfigDefaults.focusBracketThickness
+    }
     @Published var dimInactiveWindows: Bool {
         didSet { persistRuntimeChange() }
     }
@@ -168,6 +174,7 @@ class UserConfig: ObservableObject {
             // border. Preserve an explicit legacy color during migration.
             self.focusBracketColorHex = ConfigMigration.resolveFocusBracketColor(saved: saved)
             self.focusBracketRadiusOverride = saved.focusBracketRadius
+            self.focusBracketThicknessOverride = saved.focusBracketThickness
             self.dimInactiveWindows = saved.dimInactiveWindows ?? UserConfigDefaults.dimInactiveWindows
             self.dimIntensity = saved.dimIntensity ?? UserConfigDefaults.dimIntensity
             self.chromeFadeDurationSec = saved.chromeFadeDurationSec ?? UserConfigDefaults.chromeFadeDurationSec
@@ -190,6 +197,7 @@ class UserConfig: ObservableObject {
             self.focusBracketStyle = UserConfigDefaults.focusBracketStyle
             self.focusBracketColorHex = nil
             self.focusBracketRadiusOverride = nil
+            self.focusBracketThicknessOverride = nil
             self.dimInactiveWindows = UserConfigDefaults.dimInactiveWindows
             self.dimIntensity = UserConfigDefaults.dimIntensity
             self.chromeFadeDurationSec = UserConfigDefaults.chromeFadeDurationSec
@@ -223,7 +231,7 @@ class UserConfig: ObservableObject {
     // never inject onto a chord the user already bound — the injected bind
     // would silently shadow (or be shadowed by) the user's, and neither is
     // discoverable. the user can bind the new action manually in Settings.
-    private static func mergeNewDefaults(saved: [Keybind]) -> [Keybind] {
+    static func mergeNewDefaults(saved: [Keybind]) -> [Keybind] {
         let savedActions = Set(saved.map { "\($0.action)" })
         let takenChords = Set(saved.map { "\($0.modifiers.rawValue)-\($0.keyCode)" })
         var merged = saved
@@ -276,6 +284,7 @@ class UserConfig: ObservableObject {
             focusBracketStyle: focusBracketStyle,
             focusBracketColorHex: focusBracketColorHex,
             focusBracketRadius: focusBracketRadiusOverride,
+            focusBracketThickness: focusBracketThicknessOverride,
             dimInactiveWindows: dimInactiveWindows,
             dimIntensity: dimIntensity,
             mouseHoverPollHz: mouseHoverPollHz,
@@ -303,12 +312,42 @@ class UserConfig: ObservableObject {
         focusBracketStyle = UserConfigDefaults.focusBracketStyle
         focusBracketColorHex = nil
         focusBracketRadiusOverride = nil
+        focusBracketThicknessOverride = nil
         dimInactiveWindows = UserConfigDefaults.dimInactiveWindows
         dimIntensity = UserConfigDefaults.dimIntensity
         chromeFadeDurationSec = UserConfigDefaults.chromeFadeDurationSec
         windowCornerRadiusOverride = nil
         scratchpadTileByDefault = UserConfigDefaults.scratchpadTileByDefault
         scratchpadRegionInset = UserConfigDefaults.scratchpadRegionInset
+    }
+
+    /// Restore the controls in Focus Chrome without changing layout,
+    /// keybind, monitor, or scratchpad preferences.
+    func resetAppearanceToDefaults() {
+        isReloading = true
+        dimInactiveWindows = UserConfigDefaults.dimInactiveWindows
+        dimIntensity = UserConfigDefaults.dimIntensity
+        focusBracketStyle = UserConfigDefaults.focusBracketStyle
+        focusBracketColorHex = nil
+        focusBracketRadiusOverride = nil
+        focusBracketThicknessOverride = nil
+        windowCornerRadiusOverride = nil
+        showFocusBorder = UserConfigDefaults.showFocusBorder
+        focusBorderColorHex = nil
+        floatingBorderColorHex = nil
+        chromeFadeDurationSec = UserConfigDefaults.chromeFadeDurationSec
+        isReloading = false
+        save()
+        didApplyRuntimeChange.send()
+    }
+
+    func setFocusIndicators(showCorners: Bool, showBorders: Bool) {
+        isReloading = true
+        focusBracketStyle = showCorners ? .rounded : .off
+        showFocusBorder = showBorders
+        isReloading = false
+        save()
+        didApplyRuntimeChange.send()
     }
 
     // resolve the border color — custom hex or brand cyan
@@ -332,7 +371,7 @@ class UserConfig: ObservableObject {
         guard let saved = store.loadSavedConfig() else { return }
 
         isReloading = true
-        keybinds = saved.keybinds
+        keybinds = Self.mergeNewDefaults(saved: saved.keybinds)
         gapSize = saved.gapSize
         outerPadding = saved.outerPadding
         enabled = saved.enabled
@@ -347,6 +386,7 @@ class UserConfig: ObservableObject {
         focusBracketStyle = saved.focusBracketStyle ?? UserConfigDefaults.focusBracketStyle
         focusBracketColorHex = ConfigMigration.resolveFocusBracketColor(saved: saved)
         focusBracketRadiusOverride = saved.focusBracketRadius
+        focusBracketThicknessOverride = saved.focusBracketThickness
         dimInactiveWindows = saved.dimInactiveWindows ?? UserConfigDefaults.dimInactiveWindows
         dimIntensity = saved.dimIntensity ?? UserConfigDefaults.dimIntensity
         chromeFadeDurationSec = saved.chromeFadeDurationSec ?? UserConfigDefaults.chromeFadeDurationSec
@@ -389,6 +429,7 @@ extension SavedConfig {
             focusBracketStyle: UserConfigDefaults.focusBracketStyle,
             focusBracketColorHex: nil,
             focusBracketRadius: nil,
+            focusBracketThickness: nil,
             dimInactiveWindows: UserConfigDefaults.dimInactiveWindows,
             dimIntensity: UserConfigDefaults.dimIntensity,
             mouseHoverPollHz: UserConfigDefaults.mouseHoverPollHz,

@@ -38,6 +38,7 @@ final class KeybindEditorViewModel: ObservableObject {
         case toggleScratchpad       = "Toggle Scratchpad"
         case moveToScratchpad       = "Send to Scratchpad"
         case resizeDirection        = "Resize Direction"
+        case toggleTiling           = "Pause / Resume Tiling"
     }
 
     var canSave: Bool { recordedKeyCode != 0 }
@@ -67,6 +68,7 @@ final class KeybindEditorViewModel: ObservableObject {
         case .toggleScratchpad:              selectedAction = .toggleScratchpad
         case .moveToScratchpad:              selectedAction = .moveToScratchpad
         case .resizeDirection(let d):        selectedAction = .resizeDirection;       directionParam = d
+        case .toggleTiling:                  selectedAction = .toggleTiling
         }
     }
 
@@ -93,6 +95,7 @@ final class KeybindEditorViewModel: ObservableObject {
         case .toggleScratchpad:       action = .toggleScratchpad
         case .moveToScratchpad:       action = .moveToScratchpad
         case .resizeDirection:        action = .resizeDirection(directionParam)
+        case .toggleTiling:           action = .toggleTiling
         }
         return Keybind(keyCode: recordedKeyCode, modifiers: mods, action: action)
     }

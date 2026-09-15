@@ -171,7 +171,7 @@ struct GeneralSettingsView: View {
             Button {
                 (NSApp.delegate as? AppDelegate)?.showTour()
             } label: {
-                HyprRow("Replay the tour", icon: "sparkles") {
+                HyprRow("HyprMac Tutorial", icon: "sparkles") {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Color.hyprTextTertiary)

@@ -33,8 +33,8 @@ enum WhatsNewFeatures {
         ),
         WhatsNewFeature(
             icon: "rectangle.roundedtop",
-            title: "Corner Radius Follows the OS Again",
-            description: "The corner radius now tracks the macOS default (16 px on macOS 26 and later, 10 px before) until you set one yourself. A new OS Default button next to the slider clears your override, and the red swap-rejection border keeps its width when the radius changes.",
+            title: "Window Corners Are Adjustable",
+            description: "Window corner radius now starts from a suggested value until you set one yourself. The Suggested button clears your override, and the red swap-rejection border keeps its width when the radius changes.",
             credit: "@Amin-El-Sayed"
         ),
         WhatsNewFeature(
@@ -49,5 +49,21 @@ enum WhatsNewFeatures {
 enum WelcomeContent {
     static var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+    }
+
+    static func chord(
+        in keybinds: [Keybind],
+        hyprKey: HyprKey,
+        matching predicate: (Action) -> Bool
+    ) -> String? {
+        guard let bind = keybinds.first(where: { predicate($0.action) }) else { return nil }
+        var parts: [String] = []
+        if bind.modifiers.contains(.hypr) { parts.append(hyprKey.badgeLabel) }
+        if bind.modifiers.contains(.control) { parts.append("⌃") }
+        if bind.modifiers.contains(.option) { parts.append("⌥") }
+        if bind.modifiers.contains(.shift) { parts.append("⇧") }
+        if bind.modifiers.contains(.command) { parts.append("⌘") }
+        parts.append(bind.keyCodeName)
+        return parts.joined(separator: " ")
     }
 }

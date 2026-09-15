@@ -198,8 +198,8 @@ class WindowManager {
     /// 3. Subscribe to `UserConfig` `@Published` properties so runtime
     ///    config changes flow through to the right subsystem.
     ///
-    /// Nothing observable starts running here — `start()` does the
-    /// activation. `init` is safe to run before AX permission is granted.
+    /// The recovery hotkey tap starts here so pause/resume works even when
+    /// tiling launches disabled. Window discovery and tiling start in `start()`.
     init(config: UserConfig) {
         self.config = config
         self.focusController = FocusStateController(focusBorder: focusBorder)
@@ -285,17 +285,24 @@ class WindowManager {
         }
 
         hotkeyManager.onAction = { [weak self] action in
-            self?.suppressions.suppress("mouse-focus", for: 0.15)
-            self?.handleAction(action)
+            guard let self else { return }
+            if action == .toggleTiling {
+                self.config.enabled.toggle()
+                return
+            }
+            guard self.config.enabled || action == .showKeybinds else { return }
+            self.suppressions.suppress("mouse-focus", for: 0.15)
+            self.handleAction(action)
         }
 
         hotkeyManager.onHyprKeyDown = { [weak self] in
-            self?.hyprHeld = true
-            self?.ensureFocus()
+            guard let self, self.config.enabled else { return }
+            self.hyprHeld = true
+            self.ensureFocus()
             // visual cue: corner brackets snap inward around the focused
             // window so the user sees which window the next Hypr action
             // will target. shown regardless of focus-border setting.
-            self?.showFocusBracketsForCurrentFocus()
+            self.showFocusBracketsForCurrentFocus()
         }
         hotkeyManager.onHyprKeyUp = { [weak self] in
             self?.hyprHeld = false
@@ -389,6 +396,11 @@ class WindowManager {
         actionDispatcher.toggleScratchpad = { [weak self] in self?.scratchpad.toggle() }
         actionDispatcher.moveToScratchpad = { [weak self] in self?.scratchpad.sendFocusedWindow() }
         configureLiveConfigUpdates()
+        hotkeyManager.updateHyprKey(config.hyprKey)
+        hotkeyManager.updateKeybinds(config.keybinds)
+        hotkeyManager.start()
+        hotkeyManager.updateTilingEnabled(config.enabled)
+        hotkeyManager.start()
     }
 
     /// Observe the model's post-mutation signal once and route a complete
@@ -398,6 +410,7 @@ class WindowManager {
 
         coordinator.onEnabled = { [weak self] enabled in
             guard let self else { return }
+            self.hotkeyManager.updateTilingEnabled(enabled)
             if enabled && !self.isRunning {
                 hyprLog(.debug, .lifecycle, "config re-enabled, starting")
                 self.start()
@@ -464,7 +477,8 @@ class WindowManager {
             focusBrackets.applyAppearance(
                 style: state.focusBracketStyle,
                 color: bracketColor.cgColor,
-                radius: state.focusBracketRadius)
+                radius: state.focusBracketRadius,
+                thickness: state.focusBracketThickness)
             if FocusBracketAppearanceUpdate.shouldShow(
                 isRunning: isRunning,
                 hyprHeld: hyprHeld,
@@ -545,7 +559,8 @@ class WindowManager {
         focusBrackets.applyAppearance(
             style: config.focusBracketStyle,
             color: config.resolvedFocusBracketColor.cgColor,
-            radius: config.resolvedFocusBracketRadius)
+            radius: config.resolvedFocusBracketRadius,
+            thickness: config.resolvedFocusBracketThickness)
         focusBorder.refreshAppearance(
             focusColor: config.resolvedFocusBorderColor.cgColor,
             floatingColor: config.resolvedFloatingBorderColor.cgColor)
@@ -553,7 +568,6 @@ class WindowManager {
         workspaceManager.disabledMonitors = config.disabledMonitors
         hotkeyManager.updateHyprKey(config.hyprKey)
         hotkeyManager.updateKeybinds(config.keybinds)
-        hotkeyManager.start()
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             guard let self, self.isRunning else { return }
@@ -661,9 +675,10 @@ class WindowManager {
     /// Restores hidden workspace windows to visible positions before
     /// detaching observers — without this, windows would remain stranded in
     /// the hide-corner sliver after the app quits or is toggled off. Stops
-    /// the polling scheduler, removes mouse monitors, halts the hotkey tap,
-    /// and hides every focus indicator. Safe to call when not running.
-    func stop() {
+    /// the polling scheduler, removes mouse monitors, and hides every focus
+    /// indicator. The hotkey tap stays available for the pause/resume binding
+    /// unless this is final application teardown. Safe to call when not running.
+    func stop(keepPauseShortcut: Bool = true) {
         isRunning = false
         hyprHeld = false
         focusBrackets.hide()
@@ -678,7 +693,7 @@ class WindowManager {
         axNotifications.detachAll()
         pollingScheduler.stop()
         stopMouseTracking()
-        hotkeyManager.stop()
+        if !keepPauseShortcut { hotkeyManager.stop() }
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         NotificationCenter.default.removeObserver(self)
         DistributedNotificationCenter.default().removeObserver(self)
@@ -1003,7 +1018,8 @@ class WindowManager {
             focusBrackets.applyAppearance(
                 style: config.focusBracketStyle,
                 color: config.resolvedFocusBracketColor.cgColor,
-                radius: config.resolvedFocusBracketRadius)
+                radius: config.resolvedFocusBracketRadius,
+                thickness: config.resolvedFocusBracketThickness)
             focusBrackets.show(around: frame, windowID: window.windowID)
         }
         if config.showFocusBorder, let frame = window.frame {
@@ -1038,7 +1054,8 @@ class WindowManager {
         focusBrackets.applyAppearance(
             style: config.focusBracketStyle,
             color: config.resolvedFocusBracketColor.cgColor,
-            radius: config.resolvedFocusBracketRadius)
+            radius: config.resolvedFocusBracketRadius,
+            thickness: config.resolvedFocusBracketThickness)
         focusBrackets.show(around: frame, windowID: fid)
     }
 
@@ -1049,7 +1066,10 @@ class WindowManager {
     /// window. Runs at 0.05s and 0.25s to catch both fast and slow OS
     /// re-raise paths.
     private func reassertFocusBorderAfterHyprRelease() {
-        guard config.showFocusBorder else { return }
+        guard Self.permitsHyprReleaseReassert(
+            isRunning: isRunning,
+            enabled: config.enabled,
+            showFocusBorder: config.showFocusBorder) else { return }
         // cache-based: this fires on every Hypr release and previously ran
         // up to three full-desktop enumerations (one here + two delayed
         // reasserts). the border geometry comes from live frame reads of
@@ -1060,6 +1080,10 @@ class WindowManager {
               stateCache.floatingWindowIDs.contains(tid) else { return }
 
         func reassert() {
+            guard Self.permitsHyprReleaseReassert(
+                isRunning: isRunning,
+                enabled: config.enabled,
+                showFocusBorder: config.showFocusBorder) else { return }
             if let window = stateCache.cachedWindows[tid] {
                 window.isFloating = true
                 updateFocusBorder(for: window)
@@ -1073,6 +1097,14 @@ class WindowManager {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             reassert()
         }
+    }
+
+    static func permitsHyprReleaseReassert(
+        isRunning: Bool,
+        enabled: Bool,
+        showFocusBorder: Bool
+    ) -> Bool {
+        isRunning && enabled && showFocusBorder
     }
 
     // scratchpad scrim fill: 4% magenta composited over `intensity` black,

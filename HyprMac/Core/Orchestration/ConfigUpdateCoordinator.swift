@@ -16,6 +16,7 @@ struct RuntimeConfigState: Equatable {
     let focusBracketStyle: FocusBracketStyle
     let focusBracketColorHex: String?
     let focusBracketRadius: CGFloat
+    let focusBracketThickness: CGFloat
     let dimInactiveWindows: Bool
     let dimIntensity: Double
     let chromeFadeDurationSec: Double
@@ -30,6 +31,7 @@ struct RuntimeConfigState: Equatable {
         showFocusBorder: Bool, focusBorderColorHex: String?, floatingBorderColorHex: String?,
         focusBracketStyle: FocusBracketStyle, focusBracketColorHex: String?,
         focusBracketRadius: CGFloat,
+        focusBracketThickness: CGFloat,
         dimInactiveWindows: Bool, dimIntensity: Double, chromeFadeDurationSec: Double,
         windowCornerRadius: CGFloat, scratchpadTileByDefault: Bool,
         scratchpadRegionInset: CGFloat
@@ -47,6 +49,7 @@ struct RuntimeConfigState: Equatable {
         self.focusBracketStyle = focusBracketStyle
         self.focusBracketColorHex = focusBracketColorHex
         self.focusBracketRadius = focusBracketRadius
+        self.focusBracketThickness = focusBracketThickness
         self.dimInactiveWindows = dimInactiveWindows
         self.dimIntensity = dimIntensity
         self.chromeFadeDurationSec = chromeFadeDurationSec
@@ -67,6 +70,7 @@ struct RuntimeConfigState: Equatable {
             focusBracketStyle: config.focusBracketStyle,
             focusBracketColorHex: config.focusBracketColorHex,
             focusBracketRadius: config.resolvedFocusBracketRadius,
+            focusBracketThickness: config.resolvedFocusBracketThickness,
             dimInactiveWindows: config.dimInactiveWindows,
             dimIntensity: config.dimIntensity,
             chromeFadeDurationSec: config.chromeFadeDurationSec,
@@ -152,7 +156,8 @@ final class ConfigUpdateCoordinator {
         }
         if next.focusBracketStyle != previous.focusBracketStyle
             || next.focusBracketColorHex != previous.focusBracketColorHex
-            || next.focusBracketRadius != previous.focusBracketRadius {
+            || next.focusBracketRadius != previous.focusBracketRadius
+            || next.focusBracketThickness != previous.focusBracketThickness {
             chrome.insert(.bracketAppearance)
         }
         if next.dimInactiveWindows != previous.dimInactiveWindows

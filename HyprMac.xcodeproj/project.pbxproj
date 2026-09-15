@@ -188,6 +188,7 @@
 		D0F7E9093162AFE0D4B5AE56 /* BSPNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = D14B540996EBFC8839339556 /* BSPNode.swift */; };
 		D181B66CA786C3A32097B09D /* ScratchpadController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4461955B9373BBC5DD00DB15 /* ScratchpadController.swift */; };
 		D1DF9408D40B20ADFE58C85D /* HoverResponseRateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 075CB706E42649E175CB784A /* HoverResponseRateTests.swift */; };
+		A4B8D9E15F20493E9F7C1102 /* WelcomeContentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4B8D9E15F20493E9F7C1101 /* WelcomeContentTests.swift */; };
 		D215F368DD012037B9304463 /* FloatingWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 984C8889680F5B0CDD449061 /* FloatingWindowController.swift */; };
 		D2364C0428C5CEDC5AF46D76 /* KeybindDisplayHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7681B5C6FAEC2BFB53A30743 /* KeybindDisplayHelpers.swift */; };
 		D380E4A1BDD2AD4281299E72 /* KeybindDecoderToleranceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3521F94E7B0FCC0E03B50D3 /* KeybindDecoderToleranceTests.swift */; };
@@ -256,6 +257,7 @@
 		05FDF12C01F99F4A9DEAEB09 /* TilingEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TilingEngine.swift; sourceTree = "<group>"; };
 		0675BA00E19351F741399A5F /* TilingEngineVerifiedLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TilingEngineVerifiedLayoutTests.swift; sourceTree = "<group>"; };
 		075CB706E42649E175CB784A /* HoverResponseRateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoverResponseRateTests.swift; sourceTree = "<group>"; };
+		A4B8D9E15F20493E9F7C1101 /* WelcomeContentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeContentTests.swift; sourceTree = "<group>"; };
 		07F2DB0FB7A2441364DD7616 /* StateDump.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StateDump.swift; sourceTree = "<group>"; };
 		084CC77D9BC9594A5E7DE366 /* FocusStateControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusStateControllerTests.swift; sourceTree = "<group>"; };
 		091BAD650A42E0A20E0E19BD /* RatioMemoryEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RatioMemoryEngineTests.swift; sourceTree = "<group>"; };
@@ -626,6 +628,7 @@
 				3F7802C236774AA24452B3E1 /* FrameSizingTransactionTests.swift */,
 				43D8A7DDD1BB3D497B6F88EF /* HandleDisplayChangeTests.swift */,
 				075CB706E42649E175CB784A /* HoverResponseRateTests.swift */,
+				A4B8D9E15F20493E9F7C1101 /* WelcomeContentTests.swift */,
 				31EF3D85D0E0F9BCD33F6455 /* HyprWindowAXReadTests.swift */,
 				D3521F94E7B0FCC0E03B50D3 /* KeybindDecoderToleranceTests.swift */,
 				298318CA91C080E2C130A4DE /* LayoutEngineTests.swift */,
@@ -1057,6 +1060,7 @@
 				4C307BB05F3FA6FC89B4A9F5 /* FrameSizingTransactionTests.swift in Sources */,
 				C1CCA6C07D0B273CF3AB3D6C /* HandleDisplayChangeTests.swift in Sources */,
 				D1DF9408D40B20ADFE58C85D /* HoverResponseRateTests.swift in Sources */,
+				A4B8D9E15F20493E9F7C1102 /* WelcomeContentTests.swift in Sources */,
 				E8EB88F6C13061D33ECC0B59 /* HyprWindowAXReadTests.swift in Sources */,
 				D380E4A1BDD2AD4281299E72 /* KeybindDecoderToleranceTests.swift in Sources */,
 				15AB8B9331E6A03CDD991F3C /* LayoutEngineTests.swift in Sources */,

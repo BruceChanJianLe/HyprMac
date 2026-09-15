@@ -26,9 +26,11 @@ final class ConfigMigrationTests: XCTestCase {
         XCTAssertEqual(UserConfigDefaults.chromeFadeDurationSec, 0.13, accuracy: 0.0001)
         XCTAssertEqual(UserConfigDefaults.focusBracketStyle, .rounded)
         XCTAssertEqual(UserConfigDefaults.focusBracketRadius, 14)
+        XCTAssertEqual(UserConfigDefaults.focusBracketThickness, 3)
         XCTAssertEqual(SavedConfig.empty.focusBracketStyle, .rounded)
         XCTAssertNil(SavedConfig.empty.focusBracketColorHex)
         XCTAssertNil(SavedConfig.empty.focusBracketRadius)
+        XCTAssertNil(SavedConfig.empty.focusBracketThickness)
     }
 
     func testBracketColorMigrationPreservesExplicitLegacyFocusColor() {
@@ -39,6 +41,7 @@ final class ConfigMigrationTests: XCTestCase {
             showFocusBorder: false, focusBorderColorHex: "000000", floatingBorderColorHex: nil,
             focusBracketStyle: nil, focusBracketColorHex: nil,
             focusBracketRadius: nil,
+            focusBracketThickness: nil,
             dimInactiveWindows: true, dimIntensity: 0.135, mouseHoverPollHz: nil,
             chromeFadeDurationSec: 0.13, windowCornerRadius: nil,
             scratchpadTileByDefault: nil, scratchpadRegionInset: nil)
@@ -54,6 +57,7 @@ final class ConfigMigrationTests: XCTestCase {
             showFocusBorder: nil, focusBorderColorHex: "00FFFF", floatingBorderColorHex: nil,
             focusBracketStyle: .rounded, focusBracketColorHex: "FFFFFF",
             focusBracketRadius: 8,
+            focusBracketThickness: nil,
             dimInactiveWindows: nil, dimIntensity: nil, mouseHoverPollHz: nil,
             chromeFadeDurationSec: nil, windowCornerRadius: nil,
             scratchpadTileByDefault: nil, scratchpadRegionInset: nil)
@@ -189,6 +193,7 @@ final class ConfigMigrationTests: XCTestCase {
             focusBorderColorHex: "007AFF", floatingBorderColorHex: nil,
             focusBracketStyle: .rounded, focusBracketColorHex: "FFFFFF",
             focusBracketRadius: 8,
+            focusBracketThickness: 4.5,
             dimInactiveWindows: true, dimIntensity: 0.5,
             mouseHoverPollHz: nil, chromeFadeDurationSec: nil,
             windowCornerRadius: 13,
@@ -204,6 +209,7 @@ final class ConfigMigrationTests: XCTestCase {
         XCTAssertEqual(decoded.focusBracketStyle, .rounded)
         XCTAssertEqual(decoded.focusBracketColorHex, "FFFFFF")
         XCTAssertEqual(decoded.focusBracketRadius, 8)
+        XCTAssertEqual(decoded.focusBracketThickness, 4.5)
         XCTAssertEqual(decoded.windowCornerRadius, 13)
         XCTAssertEqual(decoded.scratchpadTileByDefault, true)
         XCTAssertEqual(decoded.scratchpadRegionInset, 0.03)
@@ -223,6 +229,7 @@ final class ConfigMigrationTests: XCTestCase {
             showFocusBorder: nil, focusBorderColorHex: nil,
             floatingBorderColorHex: nil, focusBracketStyle: nil, focusBracketColorHex: nil,
             focusBracketRadius: nil,
+            focusBracketThickness: nil,
             dimInactiveWindows: nil, dimIntensity: nil,
             mouseHoverPollHz: nil, chromeFadeDurationSec: nil,
             windowCornerRadius: nil,
@@ -244,6 +251,7 @@ final class ConfigMigrationTests: XCTestCase {
             showFocusBorder: nil, focusBorderColorHex: nil,
             floatingBorderColorHex: nil, focusBracketStyle: nil, focusBracketColorHex: nil,
             focusBracketRadius: nil,
+            focusBracketThickness: nil,
             dimInactiveWindows: nil, dimIntensity: nil,
             mouseHoverPollHz: nil, chromeFadeDurationSec: nil,
             windowCornerRadius: nil,
@@ -271,6 +279,7 @@ final class ConfigMigrationTests: XCTestCase {
             showFocusBorder: nil, focusBorderColorHex: nil,
             floatingBorderColorHex: nil, focusBracketStyle: nil, focusBracketColorHex: nil,
             focusBracketRadius: nil,
+            focusBracketThickness: nil,
             dimInactiveWindows: nil, dimIntensity: nil,
             mouseHoverPollHz: nil, chromeFadeDurationSec: nil,
             windowCornerRadius: nil,

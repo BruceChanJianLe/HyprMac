@@ -27,6 +27,7 @@ enum UserConfigDefaults {
     static let showFocusBorder: Bool = false
     static let focusBracketStyle: FocusBracketStyle = .rounded
     static let focusBracketRadius: CGFloat = 14
+    static let focusBracketThickness: CGFloat = 3
     static let dimInactiveWindows: Bool = true
     static let dimIntensity: Double = 0.135
     // shared fade duration for both the focus border (show/hide) and the

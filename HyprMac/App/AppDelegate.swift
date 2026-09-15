@@ -153,7 +153,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         guard !diagnosticOnly else { return }
-        windowManager?.stop()
+        windowManager?.stop(keepPauseShortcut: false)
         // restore caps lock to normal when quitting
         KeyRemapper.restoreCapsLock()
     }

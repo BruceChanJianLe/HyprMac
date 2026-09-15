@@ -35,6 +35,7 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
         bracketStyle: FocusBracketStyle = .rounded,
         bracketColor: String? = nil,
         bracketRadius: CGFloat = 14,
+        bracketThickness: CGFloat = 3,
         dim: Bool = false,
         intensity: Double = 0.2,
         fade: Double = 0.22,
@@ -48,6 +49,7 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
             floatingBorderColorHex: floatingColor,
             focusBracketStyle: bracketStyle, focusBracketColorHex: bracketColor,
             focusBracketRadius: bracketRadius,
+            focusBracketThickness: bracketThickness,
             dimInactiveWindows: dim, dimIntensity: intensity,
             chromeFadeDurationSec: fade, windowCornerRadius: radius,
             scratchpadTileByDefault: true, scratchpadRegionInset: 0.06)
@@ -81,6 +83,7 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
             state(bracketStyle: .off),
             state(bracketColor: "778899"),
             state(bracketRadius: 9),
+            state(bracketThickness: 5),
             state(dim: true),
             state(intensity: 0.4),
             state(fade: 0.5),
@@ -186,6 +189,7 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
             showFocusBorder: true, focusBorderColorHex: nil, floatingBorderColorHex: nil,
             focusBracketStyle: .rounded, focusBracketColorHex: nil,
             focusBracketRadius: 14,
+            focusBracketThickness: 3,
             dimInactiveWindows: false, dimIntensity: 0.2,
             chromeFadeDurationSec: 0.22, windowCornerRadius: 10,
             scratchpadTileByDefault: false, scratchpadRegionInset: 0.1))
@@ -282,6 +286,21 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
         XCTAssertEqual(statefulRoutes, 0)
     }
 
+    func testBracketThicknessIsChromeOnly() {
+        let coordinator = ConfigUpdateCoordinator(initial: state())
+        var effects: ChromeConfigChanges = []
+        var statefulRoutes = 0
+        coordinator.onChrome = { _, newEffects in effects = newEffects }
+        coordinator.onLayoutGeometry = { _, _ in statefulRoutes += 1 }
+        coordinator.onMaximumSplits = { _ in statefulRoutes += 1 }
+        coordinator.onDisabledMonitors = { _ in statefulRoutes += 1 }
+
+        coordinator.receive(state(bracketThickness: 5))
+
+        XCTAssertEqual(effects, [.bracketAppearance])
+        XCTAssertEqual(statefulRoutes, 0)
+    }
+
     func testDiskReloadAppliesHoverRateBeforeItsSingleRuntimeSignal() throws {
         try requireIsolatedHome()
         let configBefore = try? Data(contentsOf: ConfigStore.configPath)
@@ -306,5 +325,53 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(config.mouseHoverPollHz, 47)
         XCTAssertEqual(observed, [47])
+    }
+
+    func testAppearanceResetIsAtomicAndLeavesLayoutPreferencesAlone() throws {
+        try requireIsolatedHome()
+        let configBefore = try? Data(contentsOf: ConfigStore.configPath)
+        let monitorBefore = try? Data(contentsOf: ConfigStore.monitorConfigPath)
+        defer {
+            restore(configBefore, to: ConfigStore.configPath)
+            restore(monitorBefore, to: ConfigStore.monitorConfigPath)
+        }
+        let config = UserConfig()
+        config.gapSize = 23
+        config.focusBracketThicknessOverride = 5
+        config.focusBracketRadiusOverride = 2
+        config.showFocusBorder = true
+        config.dimInactiveWindows = false
+
+        var notifications = 0
+        let observation = config.didApplyRuntimeChange.sink { notifications += 1 }
+        defer { observation.cancel() }
+        config.resetAppearanceToDefaults()
+
+        XCTAssertEqual(notifications, 1)
+        XCTAssertEqual(config.gapSize, 23)
+        XCTAssertEqual(config.resolvedFocusBracketThickness, 3)
+        XCTAssertEqual(config.resolvedFocusBracketRadius, 14)
+        XCTAssertEqual(config.focusBracketStyle, .rounded)
+        XCTAssertFalse(config.showFocusBorder)
+        XCTAssertTrue(config.dimInactiveWindows)
+    }
+
+    func testDiskReloadInjectsMissingPauseBinding() throws {
+        try requireIsolatedHome()
+        let configBefore = try? Data(contentsOf: ConfigStore.configPath)
+        let monitorBefore = try? Data(contentsOf: ConfigStore.monitorConfigPath)
+        defer {
+            restore(configBefore, to: ConfigStore.configPath)
+            restore(monitorBefore, to: ConfigStore.monitorConfigPath)
+        }
+        let config = UserConfig()
+        let oldCustomBind = Keybind(
+            keyCode: 32, modifiers: [.hypr, .shift], action: .showKeybinds)
+        config.keybinds = [oldCustomBind]
+
+        config.reloadFromDisk()
+
+        XCTAssertTrue(config.keybinds.contains { $0 == oldCustomBind })
+        XCTAssertTrue(config.keybinds.contains { $0.action == .toggleTiling })
     }
 }

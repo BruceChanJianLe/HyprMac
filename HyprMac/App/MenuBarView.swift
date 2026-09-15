@@ -202,6 +202,9 @@ struct MenuBarView: View {
                 openWindow(id: "settings")
                 NSApp.activate(ignoringOtherApps: true)
             }
+            MenuBarRow("Tutorial", icon: "sparkles") {
+                (NSApp.delegate as? AppDelegate)?.showTour()
+            }
             MenuBarRow("Retile all spaces", icon: "rectangle.3.group") {
                 NotificationCenter.default.post(name: .hyprMacRetileAll, object: nil)
             }
@@ -218,7 +221,7 @@ struct MenuBarView: View {
                 .fill(Color.hyprSeparator)
                 .frame(height: 0.5)
                 .padding(.vertical, HyprSpacing.xs)
-            MenuBarRow("Quit HyprMac", icon: "power", shortcut: "⌘Q", destructive: true) {
+            MenuBarRow("Quit HyprMac", icon: "power", destructive: true) {
                 NSApp.terminate(nil)
             }
         }

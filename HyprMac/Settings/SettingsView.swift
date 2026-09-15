@@ -1,6 +1,5 @@
 // Top-level settings shell. NavigationSplitView with a custom sidebar
-// and a detail pane; the hosting NSWindow is bumped to `.floating`
-// level so it stays above tiled HyprMac-managed windows.
+// and a detail pane; its window stays above tiles and passive overlays.
 
 import SwiftUI
 
@@ -180,7 +179,7 @@ private struct SidebarItem: View {
     }
 }
 
-// sets the hosting NSWindow to floating level once it's available
+// keeps settings above passive overlays once its window is available
 private struct WindowLevelSetter: NSViewRepresentable {
     func makeNSView(context: Context) -> WLView { WLView() }
     func updateNSView(_ nsView: WLView, context: Context) {}
@@ -188,7 +187,7 @@ private struct WindowLevelSetter: NSViewRepresentable {
     class WLView: NSView {
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            window?.level = .floating
+            window?.level = Constants.interfaceWindowLevel
         }
     }
 }
