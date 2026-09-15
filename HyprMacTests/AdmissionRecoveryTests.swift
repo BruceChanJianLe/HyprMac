@@ -681,16 +681,30 @@ final class FloatingFlagConsistencyTests: XCTestCase {
         refused.observedMinSize = CGSize(width: 100_000, height: 100_000)
         refused.isFloating = true
         stateCache.floatingWindowIDs.insert(refused.windowID)
-        var flashed: [CGWindowID] = []
-        controller.rejectFloatToTile = { flashed.append($0.windowID) }
+        var flashed: [(CGWindowID, TilingEngine.ForceInsertFailure)] = []
+        controller.rejectFloatToTile = { flashed.append(($0.windowID, $1)) }
 
         controller.toggle(refused, on: screen, in: workspace)
 
         XCTAssertTrue(stateCache.floatingWindowIDs.contains(783), "still a floater")
         XCTAssertTrue(refused.isFloating, "and its own flag agrees")
-        XCTAssertEqual(flashed, [783])
+        XCTAssertEqual(flashed.map(\.0), [783])
+        XCTAssertEqual(flashed.map(\.1), [.noFittingSlot])
         XCTAssertEqual(Set(tilingEngine.windowIDs(inTreeForWorkspace: workspace, screen: screen)),
                        [781, 782], "the tree the refusal left alone")
+    }
+}
+
+final class FloatToTileRejectionMessageTests: XCTestCase {
+    func testCapacityAndGeometryFailuresUseDifferentMessages() {
+        XCTAssertEqual(FloatToTileRejectionMessage.text(for: .noFittingSlot),
+                       "No room to tile this window")
+        XCTAssertEqual(FloatToTileRejectionMessage.text(
+            for: .layoutRejected(.geometryMismatch(91))),
+            "This window did not accept the tile size")
+        XCTAssertEqual(FloatToTileRejectionMessage.text(
+            for: .layoutRejected(.writeFailed(91, .cannotComplete))),
+            "Could not apply the tiled layout")
     }
 }
 

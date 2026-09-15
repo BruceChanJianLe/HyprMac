@@ -5,6 +5,11 @@ struct RetileAllPlan {
     let overflow: [CGWindowID]
 }
 
+struct RetileAllBatch {
+    let preferredWorkspace: Int
+    let windowIDs: [CGWindowID]
+}
+
 enum RetileAllPlanner {
     static func availableStartupCapacity(
         capacity: Int,
@@ -40,20 +45,59 @@ enum RetileAllPlanner {
                 if left.origin.x != right.origin.x { return left.origin.x < right.origin.x }
                 if left.origin.y != right.origin.y { return left.origin.y < right.origin.y }
                 return lhs < rhs
-            case (_?, nil):
-                return true
-            case (nil, _?):
-                return false
-            case (nil, nil):
-                return lhs < rhs
+            case (_?, nil): return true
+            case (nil, _?): return false
+            case (nil, nil): return lhs < rhs
             }
         }
-        if let focusedWindowID,
-           let index = ordered.firstIndex(of: focusedWindowID) {
+        if let focusedWindowID, let index = ordered.firstIndex(of: focusedWindowID) {
             ordered.remove(at: index)
             ordered.insert(focusedWindowID, at: 0)
         }
         return ordered
+    }
+
+    /// Fill every batch's visible home first, then route only its excess
+    /// through the global cyclic workspace order.
+    static func admitStartupBatches(
+        _ batches: [RetileAllBatch],
+        workspaceCount: Int,
+        reservedAssignments: [Int: Set<CGWindowID>],
+        capacityForWorkspace: (Int) -> Int
+    ) -> RetileAllPlan {
+        let workspaces = Array(1...workspaceCount)
+        var remaining = Dictionary(uniqueKeysWithValues: workspaces.map { workspace in
+            (workspace, max(0, capacityForWorkspace(workspace)
+                - reservedAssignments[workspace, default: []].count))
+        })
+        var assignments: [Int: [CGWindowID]] = [:]
+        var spill: [(CGWindowID, Int)] = []
+
+        for batch in batches {
+            for windowID in batch.windowIDs {
+                if remaining[batch.preferredWorkspace, default: 0] > 0 {
+                    assignments[batch.preferredWorkspace, default: []].append(windowID)
+                    remaining[batch.preferredWorkspace, default: 0] -= 1
+                } else {
+                    spill.append((windowID, batch.preferredWorkspace))
+                }
+            }
+        }
+
+        var overflow: [CGWindowID] = []
+        for (windowID, source) in spill {
+            if let destination = nextFittingHome(
+                after: source,
+                eligibleWorkspaces: workspaces,
+                canAccept: { remaining[$0, default: 0] > 0 }
+            ) {
+                assignments[destination, default: []].append(windowID)
+                remaining[destination, default: 0] -= 1
+            } else {
+                overflow.append(windowID)
+            }
+        }
+        return RetileAllPlan(assignments: assignments, overflow: overflow)
     }
 
     static func nextFittingHome(
@@ -130,8 +174,9 @@ enum RetileAllPlanner {
     }
 
     /// Plan placement for a discovery batch without rewriting existing
-    /// workspace assignments. `eligibleWorkspaces` is supplied by the caller
-    /// so admission stays on the window's physical monitor.
+    /// workspace assignments. `eligibleWorkspaces` is supplied in global
+    /// numeric order so overflow can cross monitor homes without changing
+    /// the preferred workspace for windows that still fit there.
     static func admit(
         windowIDs: [CGWindowID],
         preferredWorkspace: Int,

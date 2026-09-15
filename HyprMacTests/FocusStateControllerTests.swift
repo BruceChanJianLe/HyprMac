@@ -72,8 +72,12 @@ final class FocusBorderFeedbackLifecycleTests: XCTestCase {
 
         lifecycle.begin()
         XCTAssertFalse(lifecycle.permitsPersistentShow)
+        XCTAssertNil(lifecycle.persistentTrackedID(71),
+                     "the error overlay target must not become persistent focus identity")
         XCTAssertTrue(lifecycle.finish())
         XCTAssertTrue(lifecycle.permitsPersistentShow)
+        XCTAssertEqual(lifecycle.persistentTrackedID(72), 72,
+                       "the latest persistent focus identity resumes after feedback")
         XCTAssertFalse(lifecycle.finish(), "completion must be delivered once")
     }
 
@@ -128,7 +132,8 @@ final class FocusBorderCornerRadiusTests: XCTestCase {
         border.flashError(around: CGRect(x: 100, y: 100, width: 400, height: 300),
                           windowID: 44)
 
-        XCTAssertEqual(border.trackedWindowID, 44)
+        XCTAssertNil(border.trackedWindowID, "one-shot feedback must not become focus identity")
+        XCTAssertTrue(border.isErrorFeedbackActive)
         XCTAssertEqual(border.visibleOwnedPanelCount, 1)
         border.hide()
     }
@@ -169,7 +174,7 @@ final class FocusBorderCornerRadiusTests: XCTestCase {
         border.show(around: frame, windowID: 48)
 
         let deadline = Date().addingTimeInterval(2)
-        while border.trackedWindowID != nil, Date() < deadline {
+        while border.isErrorFeedbackActive, Date() < deadline {
             try? await Task.sleep(nanoseconds: 20_000_000)
         }
 
@@ -195,9 +200,10 @@ final class FocusBorderCornerRadiusTests: XCTestCase {
         try? await Task.sleep(nanoseconds: 100_000_000)
 
         XCTAssertFalse(finished, "an ordinary focus refresh must not cancel rejection feedback")
-        XCTAssertEqual(border.trackedWindowID, 48)
+        XCTAssertNil(border.trackedWindowID, "the rejected window is visual feedback, not focus intent")
+        XCTAssertTrue(border.isErrorFeedbackActive)
 
-        let deadline = Date().addingTimeInterval(2)
+        let deadline = Date().addingTimeInterval(3)
         while !finished, Date() < deadline {
             try? await Task.sleep(nanoseconds: 20_000_000)
         }

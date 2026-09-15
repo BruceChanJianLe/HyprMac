@@ -5,6 +5,19 @@
 
 import Cocoa
 
+struct FloatToTileRejectionMessage {
+    static func text(for failure: TilingEngine.ForceInsertFailure) -> String {
+        switch failure {
+        case .noFittingSlot:
+            return "No room to tile this window"
+        case .layoutRejected(.geometryMismatch):
+            return "This window did not accept the tile size"
+        case .layoutRejected:
+            return "Could not apply the tiled layout"
+        }
+    }
+}
+
 /// Owner of floating-window behavior.
 ///
 /// Public surface: `toggle` flips a window between tiled and floating;
@@ -56,7 +69,7 @@ final class FloatingWindowController {
     var restoreFocusWithoutRaise: (HyprWindow) -> Void = { $0.focusWithoutRaise() }
     var windowFrameForZOrder: (HyprWindow) -> CGRect? = { $0.frame }
     // red flash on a float→tile the tree or the screen refused.
-    var rejectFloatToTile: ((HyprWindow) -> Void)?
+    var rejectFloatToTile: ((HyprWindow, TilingEngine.ForceInsertFailure) -> Void)?
 
     // same-stack-frame reentrancy guard for raiseBehind. paired with defer.
     // moved here from WindowManager (per §5.5 — not a SuppressionRegistry key).
@@ -121,7 +134,7 @@ final class FloatingWindowController {
                     // the tree never took it, so it is still a floater. put
                     // both flags back the way they were and say so.
                     floatInPlace(window, reason: "float→tile refused: \(reason)")
-                    rejectFloatToTile?(window)
+                    rejectFloatToTile?(window, reason)
                 }
             }
         } else {

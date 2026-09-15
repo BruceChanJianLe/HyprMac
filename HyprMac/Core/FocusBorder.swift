@@ -9,6 +9,10 @@ struct FocusBorderFeedbackLifecycle {
 
     var permitsPersistentShow: Bool { !isActive }
 
+    func persistentTrackedID(_ renderedWindowID: CGWindowID?) -> CGWindowID? {
+        isActive ? nil : renderedWindowID
+    }
+
     mutating func begin() { isActive = true }
 
     mutating func finish() -> Bool {
@@ -43,7 +47,10 @@ struct FocusBorderFeedbackLifecycle {
 /// Threading: main-thread only. Public methods assert via
 /// `mainThreadOnly()`.
 class FocusBorder {
-    private(set) var trackedWindowID: CGWindowID?
+    private var renderedWindowID: CGWindowID?
+    var trackedWindowID: CGWindowID? {
+        errorFeedback.persistentTrackedID(renderedWindowID)
+    }
 
     /// Global persistent-chrome policy pushed from `UserConfig.showFocusBorder`.
     /// One-shot rejection feedback remains available when chrome is disabled.
@@ -104,7 +111,8 @@ class FocusBorder {
         static let floatingHideAnimationDurationSec: TimeInterval = 0.28
         static let shakeStepDurationSec: TimeInterval = 0.04
         static let shakeOffsets: [CGFloat] = [10, -10, 7, -7, 3, -3, 0]
-        static let shakeFadeDelaySec: TimeInterval = 0.15
+        // hold the message after the shake stops
+        static let errorMessageHoldSec: TimeInterval = 1.15
         static let activeBorderWidth: CGFloat = 2
         static let settledBorderWidth: CGFloat = 1.5
         static let floatingBorderWidth: CGFloat = 1.5
@@ -157,7 +165,7 @@ class FocusBorder {
         // refocus, raiseBehind, app-activated polls) would re-fire the
         // active-tint → settle cycle and the user sees the window "light up
         // again" on each click.
-        if state != .hidden, trackedWindowID == windowID,
+        if state != .hidden, renderedWindowID == windowID,
            let f = trackedWindowFrame,
            abs(f.minX - rect.minX) < 1, abs(f.minY - rect.minY) < 1,
            abs(f.width - rect.width) < 1, abs(f.height - rect.height) < 1 {
@@ -176,7 +184,7 @@ class FocusBorder {
         // Same-window repositioning (tile resize/move) keeps snap so the
         // border tracks live geometry without animation lag.
         let isFreshAppearance = (panel == nil) || (state == .hidden)
-        let isWindowSwitch = (trackedWindowID != nil) && (trackedWindowID != windowID)
+        let isWindowSwitch = (renderedWindowID != nil) && (renderedWindowID != windowID)
         let shouldFadeIn = isFreshAppearance || isWindowSwitch
 
         let expansion = Tuning.activeBorderWidth / 2
@@ -215,7 +223,7 @@ class FocusBorder {
             }
         }
         state = .active
-        trackedWindowID = windowID
+        renderedWindowID = windowID
         trackedWindowFrame = rect
 
         // schedule transition to settled (outline only)
@@ -242,7 +250,7 @@ class FocusBorder {
         mainThreadOnly()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        if let windowID = trackedWindowID, let layer = glowView?.layer {
+        if let windowID = errorFeedbackWindowID ?? renderedWindowID, let layer = glowView?.layer {
             layer.cornerRadius = WindowCornerRadius.resolve(for: windowID)
                 + focusedCornerRadiusExpansion
         }
@@ -363,7 +371,7 @@ class FocusBorder {
         cancelActiveShake()
         errorFeedback.cancel()
         errorFeedbackWindowID = nil
-        trackedWindowID = nil
+        renderedWindowID = nil
         trackedWindowFrame = nil
         focusedCornerRadiusExpansion = Tuning.activeBorderWidth / 2
         removeMessageBanner()
@@ -442,7 +450,7 @@ class FocusBorder {
         p.alphaValue = 1.0
         p.orderFront(nil)
         state = .active
-        trackedWindowID = windowID
+        renderedWindowID = windowID
         trackedWindowFrame = rect
 
         // reason pill, centered over the flashed window
@@ -480,8 +488,8 @@ class FocusBorder {
                 step += 1
             } else {
                 self.cancelActiveShake()
-                // fade out after shake
-                DispatchQueue.main.asyncAfter(deadline: .now() + Tuning.shakeFadeDelaySec) { [weak self] in
+                // leave the message still before fading out
+                DispatchQueue.main.asyncAfter(deadline: .now() + Tuning.errorMessageHoldSec) { [weak self] in
                     guard let self, self.renderGeneration == generation else { return }
                     guard self.errorFeedback.finish() else { return }
                     let finishedID = self.errorFeedbackWindowID ?? 0
@@ -727,7 +735,7 @@ class FocusBorder {
         floatingPanels.removeAll()
         floaterFrames.removeAll()
         infoPanels.removeAll()
-        trackedWindowID = nil
+        renderedWindowID = nil
         trackedWindowFrame = nil
         state = .hidden
         focusedCornerRadiusExpansion = Tuning.activeBorderWidth / 2

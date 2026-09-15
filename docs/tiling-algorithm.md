@@ -379,19 +379,22 @@ slot`, and `AdmissionRecovery` gives it one bounded retry and then floats it
 in place. It is never offered to another workspace, and no other workspace is
 probed, activated or retiled on its behalf.
 
-Initial assignment is a separate policy and it is unchanged. Choosing which
-workspace a brand-new window belongs to happens before any fit check, and it
-counts windows rather than measuring them. Discovery assigns new tiled
-windows within the physical monitor's regular workspaces. It fills the active workspace up to
-`2^maxDepth`, then visits the next anchored workspace in cyclic numeric order.
+Initial assignment is a separate policy. Choosing which workspace a brand-new
+window belongs to happens before any fit check, and it counts windows rather
+than measuring them. Discovery fills the active workspace up to `2^maxDepth`,
+then visits every regular workspace in cyclic numeric order. This sequence
+crosses monitor homes: overflow from workspace 2 goes to workspace 3 before
+workspace 4. Each destination uses its home monitor's configured capacity.
 Only new IDs are assigned; existing workspace membership, floating windows,
 and scratchpad members are preserved. New windows assigned to a hidden
-workspace are parked there. Startup packing uses the same capacity. This
-count limit does not guarantee that every application's dimensions will fit.
+workspace retain that destination's home assignment while parked. A visible
+destination is tiled on its home monitor in the discovery pass. Startup and
+Retile All first fill each monitor's visible workspace in stable screen,
+focus, and frame order. Only the excess probes later workspace numbers across
+monitor homes, wrapping after workspace 9. This count limit does not guarantee
+that every application's dimensions will fit.
 Hidden assigned nonfloating windows reserve capacity in admission and startup
-packing. Startup/Retile All groups by monitor, fills its visible workspace
-first, and places the focused window first followed by frame order. Discovery
-events wait until the initial snapshot completes.
+packing. Discovery events wait until the initial snapshot completes.
 The old post-readback overflow auto-floating path remains disabled. Target
 insertion uses one candidate pass and one possible restoration, without
 ratio adjustment, eviction, or automatic floating.

@@ -600,6 +600,12 @@ it does not replay a captured window or frame. Notice lines
 `error feedback begin/end/cancel: wid=<id>` distinguish completion from
 cancellation without recording titles.
 
+The message now holds still for 1.15 seconds after the brief shake, one
+second longer than before. The error panel does not supply focus identity
+during that interval; keyboard actions follow the latest recorded focus.
+Float-to-tile feedback distinguishes no fitting slot from an app returning
+different geometry: the latter says it did not accept the tile size.
+
 At 21:49:23.963, a cross-monitor Terminal drag was classified as a manual
 resize because its released size differed from the captured size. There was
 no target on the source monitor, but that did not prevent the resize from
@@ -629,6 +635,12 @@ log is where you will find them. Watch for `swap overflows min-size
 constraints (post-readback) — rejected swap` (the seeded min lied) or `swap
 would violate min-size constraints — rejected swap` (rejected up front by
 `canSwapWindows`).
+
+Keyboard swaps revalidate refusals based on old observed or app-hint minima
+through a bounded AX attempt. Seeded and structural constraints remain hard
+preflight limits. Accepted readback can update the remembered minimum;
+failed attempts restore the original tree and frames. Prepared swaps keep
+this revalidation scope only through their matching final application.
 
 ### "Why is dimming wrong?"
 

@@ -32,6 +32,22 @@ final class RetileAllPlannerTests: XCTestCase {
         XCTAssertEqual(parked.map { [$0.0, CGWindowID($0.1)] }, [[5, 2]])
     }
 
+    func testVisibleNumericDestinationStaysLiveWhileHiddenDestinationParks() {
+        let plan = RetileAllPlan(assignments: [3: [30], 4: [40]], overflow: [])
+        var assigned: [CGWindowID: Int] = [:]
+        var parked: [(CGWindowID, Int)] = []
+
+        RetileAllPlanner.applyAdmission(
+            plan,
+            isWorkspaceVisible: { $0 == 3 },
+            assign: { assigned[$0] = $1 },
+            park: { parked.append(($0, $1)) }
+        )
+
+        XCTAssertEqual(assigned, [30: 3, 40: 4])
+        XCTAssertEqual(parked.map { [$0.0, CGWindowID($0.1)] }, [[40, 4]])
+    }
+
     func testAdmissionPreservesParkedAssignmentsAndSkipsFloatingOccupancy() {
         let existing: [Int: Set<CGWindowID>] = [
             1: [10, 11, 12, 13],
@@ -93,34 +109,50 @@ final class RetileAllPlannerTests: XCTestCase {
         XCTAssertTrue(result.overflow.isEmpty)
     }
 
-    func testAdmissionCyclesFromPreferredAndStaysOnEligibleMonitorHomes() {
+    func testAdmissionUsesNextNumericWorkspaceAcrossMonitorHomes() {
         let result = RetileAllPlanner.admit(
             windowIDs: [100, 101, 102],
-            preferredWorkspace: 5,
-            eligibleWorkspaces: [1, 3, 5, 7, 9],
-            existingAssignments: [5: [50], 7: [70]],
+            preferredWorkspace: 2,
+            eligibleWorkspaces: Array(1...9),
+            existingAssignments: [2: [20, 21], 3: [30]],
             excludedWindowIDs: [],
             capacityForWorkspace: { _ in 2 }
         )
 
-        XCTAssertEqual(result.assignments[5], [100])
-        XCTAssertEqual(result.assignments[7], [101])
-        XCTAssertEqual(result.assignments[9], [102])
-        XCTAssertNil(result.assignments[2], "admission must not cross to another monitor's workspace")
+        XCTAssertEqual(result.assignments[3], [100])
+        XCTAssertEqual(result.assignments[4], [101, 102])
+        XCTAssertNil(result.assignments[5], "ws2 overflow must use ws3 before ws4")
+        XCTAssertTrue(result.overflow.isEmpty)
     }
 
-    func testAdmissionReportsOverflowOnlyWhenEligibleHomesAreFull() {
+    func testAdmissionWrapsFromWorkspaceNineToOne() {
         let result = RetileAllPlanner.admit(
-            windowIDs: [100, 101],
-            preferredWorkspace: 1,
-            eligibleWorkspaces: [1, 3],
-            existingAssignments: [1: [10], 3: [30]],
+            windowIDs: [100],
+            preferredWorkspace: 9,
+            eligibleWorkspaces: Array(1...9),
+            existingAssignments: [9: [90]],
             excludedWindowIDs: [],
             capacityForWorkspace: { _ in 1 }
         )
 
-        XCTAssertEqual(result.assignments[1], [100, 101], "overflow keeps active workspace membership for existing spill routing")
-        XCTAssertEqual(result.overflow, [100, 101])
+        XCTAssertEqual(result.assignments[1], [100])
+        XCTAssertTrue(result.overflow.isEmpty)
+    }
+
+    func testAdmissionReportsOverflowOnlyWhenAllNumericWorkspacesAreFull() {
+        let result = RetileAllPlanner.admit(
+            windowIDs: [100],
+            preferredWorkspace: 2,
+            eligibleWorkspaces: Array(1...9),
+            existingAssignments: Dictionary<Int, Set<CGWindowID>>(uniqueKeysWithValues: (1...9).map {
+                ($0, [CGWindowID($0)])
+            }),
+            excludedWindowIDs: [],
+            capacityForWorkspace: { _ in 1 }
+        )
+
+        XCTAssertEqual(result.assignments[2], [100])
+        XCTAssertEqual(result.overflow, [100])
     }
 
     func testIncomingFloatingWindowDoesNotConsumeTileCapacity() {
@@ -311,6 +343,37 @@ final class RetileAllPlannerTests: XCTestCase {
         )
 
         XCTAssertEqual(result, [10, 30, 20, 40])
+    }
+
+    func testStartupFillsEachVisibleHomeBeforeNumericCrossMonitorOverflow() {
+        let result = RetileAllPlanner.admitStartupBatches(
+            [
+                RetileAllBatch(preferredWorkspace: 1, windowIDs: [10, 11, 12]),
+                RetileAllBatch(preferredWorkspace: 2, windowIDs: [20, 21])
+            ],
+            workspaceCount: 5,
+            reservedAssignments: [:],
+            capacityForWorkspace: { [1: 2, 2: 2, 3: 1, 4: 2, 5: 2][$0] ?? 0 }
+        )
+
+        XCTAssertEqual(result.assignments[1], [10, 11])
+        XCTAssertEqual(result.assignments[2], [20, 21], "monitor two keeps its fitting windows")
+        XCTAssertEqual(result.assignments[3], [12], "workspace one overflow crosses to numeric workspace two's next free successor")
+        XCTAssertTrue(result.overflow.isEmpty)
+    }
+
+    func testStartupOverflowWrapsAndRespectsReservedHomeCapacity() {
+        let result = RetileAllPlanner.admitStartupBatches(
+            [RetileAllBatch(preferredWorkspace: 9, windowIDs: [90, 91])],
+            workspaceCount: 9,
+            reservedAssignments: [9: [900], 1: [100]],
+            capacityForWorkspace: { $0 == 2 ? 2 : 1 }
+        )
+
+        XCTAssertNil(result.assignments[9])
+        XCTAssertNil(result.assignments[1])
+        XCTAssertEqual(result.assignments[2], [90, 91])
+        XCTAssertTrue(result.overflow.isEmpty)
     }
 
     func testNextFittingHomeCyclesAfterSourceAndSkipsRejectedHomes() {

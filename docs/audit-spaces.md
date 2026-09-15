@@ -2,10 +2,11 @@
 
 ## Result
 
-`Retile All` now enumerates eligible windows from all nine tracked workspaces,
-sorts their union with newly discovered windows by window ID, and packs them
-into workspace 1, then 2, through 9. Each workspace keeps its static monitor
-home and uses that monitor's configured dwindle capacity. Scratchpad members,
+`Retile All` now enumerates eligible windows from all nine tracked workspaces.
+It keeps each monitor's ordered windows on that monitor's visible workspace
+while capacity remains, then sends only excess windows through later workspace
+numbers across monitor homes. Each workspace uses its home monitor's configured
+dwindle capacity. Scratchpad members,
 minimized or app-hidden windows, semantic auto-float exclusions, and windows on
 disabled monitors stay out of redistribution.
 
@@ -24,7 +25,11 @@ The redistribution entered in commit `194a8086` with visible workspaces first,
 then hidden spillover workspaces. Commit `85e57ded` added frame sorting and
 focused-window promotion to address `Set` iteration, but both inputs still
 depended on current UI state. Scratchpad exclusions were added in `85e57ded` and
-`834a27cb`. Static home-monitor routing followed in `a25b43ba`.
+`834a27cb`. Static home-monitor routing followed in `a25b43ba`. Packing keeps
+each monitor's visible workspace and its stable focus/frame ordering first.
+Only structural excess enters one global numeric sequence. Each destination
+still gets capacity from its static home monitor, so workspace 2 excess uses
+workspace 3 before workspace 4 on a two-monitor setup.
 
 ## Root cause and ranked hypotheses
 

@@ -1124,6 +1124,113 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
     }
 }
 
+final class TilingEngineSwapRevalidationTests: XCTestCase {
+    func testSwapProbesPastAStaleObservedMinimumAndLowersItOnAcceptance() throws {
+        let f = try fixture(provenance: .observed)
+
+        XCTAssertTrue(f.engine.swapWindows(f.windows[0], f.windows[3],
+                                           onWorkspace: 1, screen: f.screen))
+        XCTAssertFalse(f.trace.written.isEmpty)
+        XCTAssertLessThan(f.engine.knownMinimumSizes[f.windows[0].windowID]?.size.width
+                          ?? .infinity, 1500)
+    }
+
+    func testSwapProbesPastAnAppHintAndAdoptsItsOwnAcceptedSize() throws {
+        let f = try fixture(provenance: .appHint)
+
+        XCTAssertTrue(f.engine.swapWindows(f.windows[0], f.windows[3],
+                                           onWorkspace: 1, screen: f.screen))
+        XCTAssertEqual(f.engine.knownMinimumSizes[f.windows[0].windowID]?.provenance,
+                       .observed)
+        XCTAssertLessThan(f.engine.knownMinimumSizes[f.windows[0].windowID]?.size.width
+                          ?? .infinity, 1500)
+    }
+
+    func testPreparedSwapCarriesItsScopedRevalidationIntoFinalApply() throws {
+        let f = try fixture(provenance: .observed)
+
+        XCTAssertNotNil(f.engine.prepareSwapLayout(f.windows[0], f.windows[3],
+                                                    onWorkspace: 1, screen: f.screen))
+        XCTAssertTrue(f.engine.applyComputedLayout(onWorkspace: 1, screen: f.screen))
+        XCTAssertLessThan(f.engine.knownMinimumSizes[f.windows[0].windowID]?.size.width
+                          ?? .infinity, 1500)
+    }
+
+    func testSupersededPreparedSwapCannotReuseItsBypassOrWriteStaleFrames() throws {
+        let f = try fixture(provenance: .observed)
+        XCTAssertNotNil(f.engine.prepareSwapLayout(f.windows[0], f.windows[3],
+                                                    onWorkspace: 1, screen: f.screen))
+
+        _ = f.engine.beginLayoutGeneration()
+        f.engine.forgetMinimumSize(windowID: f.windows[0].windowID)
+        f.windows[0].observedMinSize = CGSize(width: 1500, height: 0)
+        f.windows[0].minSizeProvenance = .seeded
+        f.engine.primeMinimumSizes(f.windows)
+        f.trace.written = []
+
+        XCTAssertFalse(f.engine.applyComputedLayout(onWorkspace: 1, screen: f.screen))
+        XCTAssertTrue(f.trace.written.isEmpty)
+        XCTAssertFalse(f.engine.canSwapWindows(f.windows[0], f.windows[3],
+                                               onWorkspace: 1, screen: f.screen),
+                       "the superseded operation's learned-bound bypass must be gone")
+    }
+
+    func testSeededSwapRefusalRemainsPreflightOnly() throws {
+        let f = try fixture(provenance: .seeded)
+
+        XCTAssertFalse(f.engine.swapWindows(f.windows[0], f.windows[3],
+                                            onWorkspace: 1, screen: f.screen))
+        XCTAssertTrue(f.trace.written.isEmpty)
+    }
+
+    func testRevalidatedSwapStillRestoresWhenAXConfirmsTheMinimum() throws {
+        let f = try fixture(provenance: .observed)
+        let originalOrder = f.tree.allWindows.map(\.windowID)
+        let usable = f.engine.displayManager.cgRect(for: f.screen)
+        let rightX = usable.minX + 1716
+        f.trace.frames = [
+            f.windows[0].windowID: CGRect(x: usable.minX + 8, y: usable.minY + 8,
+                                          width: 1700, height: usable.height - 16),
+            f.windows[1].windowID: CGRect(x: rightX, y: usable.minY + 8,
+                                          width: usable.maxX - rightX - 8, height: 344),
+            f.windows[2].windowID: CGRect(x: rightX, y: usable.minY + 360,
+                                          width: usable.maxX - rightX - 8, height: 344),
+            f.windows[3].windowID: CGRect(x: rightX, y: usable.minY + 712,
+                                          width: usable.maxX - rightX - 8,
+                                          height: usable.maxY - usable.minY - 720)
+        ]
+        f.windows[0].observedMinSize = CGSize(width: 1700, height: 0)
+        let originalFrames = f.trace.frames
+        f.trace.minSize[f.windows[0].windowID] = CGSize(width: 1700, height: 0)
+
+        XCTAssertFalse(f.engine.swapWindows(f.windows[0], f.windows[3],
+                                            onWorkspace: 1, screen: f.screen))
+        XCTAssertEqual(f.tree.allWindows.map(\.windowID), originalOrder)
+        XCTAssertEqual(f.trace.frames, originalFrames)
+    }
+
+    private func fixture(provenance: MinSizeProvenance) throws
+        -> (engine: TilingEngine, tree: BSPTree, windows: [HyprWindow],
+            screen: NSScreen, trace: MembershipTrace) {
+        let screen = MembershipHomeScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(
+            displayManager: DisplayManager(screenSource: { [screen] }),
+            frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let windows = (981...984).map { makeWindow(id: CGWindowID($0)) }
+        _ = engine.prepareTileLayout(windows, onWorkspace: 1, screen: screen)
+        let tree = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen))
+        let rect = engine.displayManager.cgRect(for: screen)
+        trace.frames = Dictionary(uniqueKeysWithValues: tree.layout(
+            in: rect, gap: engine.gapSize, padding: engine.outerPadding
+        ).map { ($0.0.windowID, $0.1) })
+        windows[0].observedMinSize = CGSize(width: 1500, height: 0)
+        windows[0].minSizeProvenance = provenance
+        trace.written = []
+        return (engine, tree, windows, screen, trace)
+    }
+}
+
 private final class MembershipTrace {
     var frames: [CGWindowID: CGRect] = [:]
     var rejectNextRead = false

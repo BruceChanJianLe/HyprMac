@@ -298,7 +298,7 @@ final class ActionDispatcher {
         let plan = RetileAllPlanner.admit(
             windowIDs: windows.map(\.windowID),
             preferredWorkspace: preferredWorkspace,
-            eligibleWorkspaces: workspaceManager.workspacesAnchoredTo(screen),
+            eligibleWorkspaces: Array(1...workspaceManager.workspaceCount),
             existingAssignments: Self.existingAssignmentsForAdmission(
                 workspaceManager.regularWorkspaceWindowIDs(),
                 fullyForgottenIDs: fullyForgottenIDs
@@ -322,7 +322,8 @@ final class ActionDispatcher {
                     let cursor = screenUnderCursor()
                     let frameDesc = window.frame.map { "(\(Int($0.minX)),\(Int($0.minY)) \(Int($0.width))×\(Int($0.height)))" } ?? "nil"
                     let physicalName = physical?.localizedName ?? "nil"
-                    hyprLog(.notice, .orchestration, "assignNewWindow: '\(window.title ?? "?")' (\(window.windowID)) frame=\(frameDesc) physical=\(physicalName) cursor=\(cursor.localizedName) → ws\(workspace) on \(screen.localizedName)")
+                    let homeName = workspaceManager.homeScreenForWorkspace(workspace)?.localizedName ?? "nil"
+                    hyprLog(.notice, .orchestration, "assignNewWindow: '\(window.title ?? "?")' (\(window.windowID)) frame=\(frameDesc) physical=\(physicalName) cursor=\(cursor.localizedName) → ws\(workspace) home=\(homeName)")
                 }
                 workspaceManager.assignWindow(windowID, toWorkspace: workspace)
             },

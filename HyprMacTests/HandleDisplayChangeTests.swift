@@ -84,9 +84,47 @@ final class HandleDisplayChangeTests: XCTestCase {
     }
 }
 
+final class FitAwareDisplayMigrationTests: XCTestCase {
+    func testCollidingMigrationsDoNotMergeWindowsWhoseKnownMinimumsCannotFit() throws {
+        let left = CollisionScreen(x: 0, width: 1400)
+        let right = CollisionScreen(x: 2000, width: 1400)
+        let destination = CollisionScreen(x: 4000, width: 1400)
+        let displayManager = DisplayManager(screenSource: { [left, right, destination] })
+        let engine = TilingEngine(displayManager: displayManager)
+        let first = makeWindow(id: 971)
+        let second = makeWindow(id: 972)
+        first.observedMinSize = CGSize(width: 1000, height: 0)
+        second.observedMinSize = CGSize(width: 1000, height: 0)
+
+        engine.prepareTileLayout([first], onWorkspace: 1, screen: left)
+        engine.prepareTileLayout([second], onWorkspace: 1, screen: right)
+
+        engine.handleDisplayChange(currentScreens: [destination],
+                                   homeScreenForWorkspace: { _ in destination })
+
+        let migrated = try XCTUnwrap(engine.existingTree(forWorkspace: 1,
+                                                         screen: destination))
+        XCTAssertEqual(migrated.allWindows.count, 1,
+                       "migration must use the same geometric fit decision as admission")
+    }
+}
+
 private final class MigrationScreen: NSScreen {
     override var frame: NSRect { NSRect(x: 6000, y: 0, width: 1400, height: 900) }
     override var visibleFrame: NSRect { frame }
+}
+
+private final class CollisionScreen: NSScreen {
+    let bounds: NSRect
+
+    init(x: CGFloat, width: CGFloat) {
+        bounds = NSRect(x: x, y: 0, width: width, height: 900)
+        super.init()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override var frame: NSRect { bounds }
+    override var visibleFrame: NSRect { bounds }
 }
 
 private final class MigrationTrace {

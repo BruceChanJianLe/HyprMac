@@ -339,10 +339,10 @@ class WindowManager {
         floatingController.updatePositionCache = { [weak self] in self?.updatePositionCache() }
         floatingController.isMenuTracking = { [weak self] in self?.mouseTracker.menuTracking ?? false }
         floatingController.isScratchpadVisible = { [weak self] in self?.scratchpad.isVisible ?? false }
-        floatingController.rejectFloatToTile = { [weak self] w in
+        floatingController.rejectFloatToTile = { [weak self] w, reason in
             guard let self, let frame = w.frame ?? self.stateCache.cachedWindows[w.windowID]?.frame else { return }
             self.focusBorder.flashError(around: frame, windowID: w.windowID, window: w,
-                                        message: "No room to tile this window")
+                                        message: FloatToTileRejectionMessage.text(for: reason))
         }
 
         wireAdmissionRecovery()
@@ -2779,31 +2779,32 @@ private extension WindowManager {
             window.frame.map { (window.windowID, $0) }
         })
         let focusedID = accessibility.getFocusedWindow()?.windowID
-        var assignments: [Int: [CGWindowID]] = [:]
-        var overflow: [CGWindowID] = []
-        for screen in screens {
+        let batches = screens.map { screen in
             let localIDs = windowIDs.filter { id in
                 let assignedHome = workspaceManager.workspaceFor(id).flatMap(workspaceManager.homeScreenForWorkspace)
                 let home = assignedHome ?? byID[id].flatMap(displayManager.screen(for:)) ?? screens[0]
                 return home == screen
             }
-            let orderedIDs = RetileAllPlanner.startupWindowOrder(
-                windowIDs: localIDs, framesByID: frames, focusedWindowID: focusedID)
-            let homes = RetileAllPlanner.startupWorkspaceOrder(
-                visibleWorkspaces: [workspaceManager.workspaceForScreen(screen)],
-                eligibleWorkspaces: workspaceManager.workspacesAnchoredTo(screen))
-            let plan = RetileAllPlanner.pack(windowIDs: orderedIDs, workspaceOrder: homes,
-                                            capacityForWorkspace: { [self] workspace in
-                RetileAllPlanner.availableStartupCapacity(
-                    capacity: RetileAllPlanner.workspaceCapacity(maxDepth: tilingEngine.maxDepth(for: screen)),
-                    assignedWindowIDs: workspaceManager.windowIDs(onWorkspace: workspace),
-                    reservedHiddenWindowIDs: stateCache.reservedHiddenWindowIDs,
-                    floatingWindowIDs: stateCache.floatingWindowIDs)
-            })
-            assignments.merge(plan.assignments, uniquingKeysWith: +)
-            overflow.append(contentsOf: plan.overflow)
+            return RetileAllBatch(
+                preferredWorkspace: workspaceManager.workspaceForScreen(screen),
+                windowIDs: RetileAllPlanner.startupWindowOrder(
+                    windowIDs: localIDs, framesByID: frames, focusedWindowID: focusedID)
+            )
         }
-        return RetileAllPlan(assignments: assignments, overflow: overflow)
+        let reserved = Dictionary(uniqueKeysWithValues: (1...workspaceManager.workspaceCount).map { workspace in
+            (workspace, workspaceManager.windowIDs(onWorkspace: workspace)
+                .intersection(stateCache.reservedHiddenWindowIDs)
+                .subtracting(stateCache.floatingWindowIDs))
+        })
+        return RetileAllPlanner.admitStartupBatches(
+            batches,
+            workspaceCount: workspaceManager.workspaceCount,
+            reservedAssignments: reserved
+        ) { [self] workspace in
+            guard let home = workspaceManager.homeScreenForWorkspace(workspace),
+                  screens.contains(home) else { return 0 }
+            return RetileAllPlanner.workspaceCapacity(maxDepth: tilingEngine.maxDepth(for: home))
+        }
     }
 
     /// Give `admissionRecovery` its probes and its two actions.

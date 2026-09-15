@@ -652,14 +652,14 @@ class TilingEngine {
                 let rect = displayManager.cgRect(for: newScreen)
                 var merged = 0
                 for w in donor.allWindows where !keepIDs.contains(w.windowID) {
-                    if keep.smartInsert(w, maxDepth: maxDepth(for: newScreen), in: rect,
-                                        gap: gapSize, padding: outerPadding,
-                                        minSlotDimension: minSlotDimension) {
+                    if smartInsertFitting(w, into: keep,
+                                          maxDepth: maxDepth(for: newScreen), rect: rect) {
                         merged += 1
                     } else {
-                        // depth ceiling — the window keeps its workspace
-                        // assignment, so the next tile pass re-inserts or
-                        // auto-floats it instead of it silently vanishing.
+                        // depth or known-minimum refusal — the window keeps
+                        // its workspace assignment, so the next tile pass
+                        // re-inserts or auto-floats it instead of it silently
+                        // vanishing.
                         hyprLog(.notice, .lifecycle, "display change: no room to merge '\(w.title ?? "?")' (\(w.windowID)) into ws\(oldKey.workspace) tree — deferring to next tile pass")
                     }
                 }
@@ -1543,8 +1543,14 @@ class TilingEngine {
     /// original tree before returning regardless of outcome. Primes
     /// `MinSizeMemory` for every window in the tree first — siblings'
     /// min sizes still influence the post-swap fit decision.
-    func canSwapWindows(_ a: HyprWindow, _ b: HyprWindow,
-                        onWorkspace workspace: Int, screen: NSScreen) -> Bool {
+    private enum SwapFit {
+        case fits
+        case revalidatable([CGWindowID: UInt64])
+        case refused
+    }
+
+    private func swapFit(_ a: HyprWindow, _ b: HyprWindow,
+                         onWorkspace workspace: Int, screen: NSScreen) -> SwapFit {
         let key = TilingKey(workspace: workspace, screen: screen)
         let t = tree(for: key)
         // prime ALL tree windows, not just [a, b]. siblings still influence
@@ -1554,22 +1560,34 @@ class TilingEngine {
         // sibling has a hard minimum sneaks through because its min wasn't
         // re-synced).
         primeMinimumSizes(t.allWindows)
-        guard t.contains(a) && t.contains(b) else { return false }
+        guard t.contains(a) && t.contains(b) else { return .refused }
 
         let snapshot = t.snapshot()
         defer { t.restore(snapshot) }
 
         let rect = displayManager.cgRect(for: screen)
-        t.swap(a, b)
-        // clear userSetRatio + reset to 50/50 for the test layout. matches
-        // what the actual swap does below, so canSwapWindows and the
-        // post-acceptance retile evaluate against the same baseline. without
-        // this, a previously user-resized split that favored Spotify's old
-        // slot biases the test in favor of *whatever lands in that slot
-        // post-swap*, masking conflicts that the actual retile would hit.
-        t.root.clearUserSetRatios()
-        t.root.resetSplitRatios()
-        return layoutCanAccommodateKnownMinimums(t, rect: rect)
+        func trial() -> Bool {
+            t.restore(snapshot)
+            t.swap(a, b)
+            // clear userSetRatio + reset to 50/50 for the test layout. matches
+            // what the actual swap does below, so preflight and the
+            // post-acceptance retile evaluate against the same baseline.
+            t.root.clearUserSetRatios()
+            t.root.resetSplitRatios()
+            return layoutCanAccommodateKnownMinimums(t, rect: rect)
+        }
+        if trial() { return .fits }
+
+        let bypass = revalidationBypass(incoming: [a.windowID, b.windowID], key: key)
+        return withMinimaBypass(bypass, trial) ? .revalidatable(bypass) : .refused
+    }
+
+    func canSwapWindows(_ a: HyprWindow, _ b: HyprWindow,
+                        onWorkspace workspace: Int, screen: NSScreen) -> Bool {
+        if case .refused = swapFit(a, b, onWorkspace: workspace, screen: screen) {
+            return false
+        }
+        return true
     }
 
     /// Synchronous swap path (no animation).
@@ -1581,7 +1599,13 @@ class TilingEngine {
     /// or reverted after readback.
     @discardableResult
     func swapWindows(_ a: HyprWindow, _ b: HyprWindow, onWorkspace workspace: Int, screen: NSScreen) -> Bool {
-        guard canSwapWindows(a, b, onWorkspace: workspace, screen: screen) else { return false }
+        let fit = swapFit(a, b, onWorkspace: workspace, screen: screen)
+        if case .refused = fit { return false }
+        return performSwap(a, b, fit: fit, onWorkspace: workspace, screen: screen)
+    }
+
+    private func performSwap(_ a: HyprWindow, _ b: HyprWindow, fit: SwapFit,
+                             onWorkspace workspace: Int, screen: NSScreen) -> Bool {
         let key = TilingKey(workspace: workspace, screen: screen)
         let t = tree(for: key)
 
@@ -1598,7 +1622,16 @@ class TilingEngine {
         t.root.clearUserSetRatios()
         let rect = displayManager.cgRect(for: screen)
         let generation = beginLayoutGeneration()
-        let outcome = applyTrackedLayout(t, in: rect, generation: generation, key: key)
+        let apply = { self.applyTrackedLayout(t, in: rect, generation: generation, key: key) }
+        let outcome: LayoutApplicationOutcome
+        switch fit {
+        case .fits:
+            outcome = apply()
+        case let .revalidatable(bypass):
+            outcome = withMinimaBypass(bypass, apply)
+        case .refused:
+            return false
+        }
         switch outcome {
         case .accepted:
             return true
@@ -1617,7 +1650,8 @@ class TilingEngine {
     /// a non-swap action between the two halves.
     private var pendingSwapRevert: (key: TilingKey, generation: UInt64,
                                     snapshot: BSPTree.Snapshot,
-                                    originalFrames: [CGWindowID: CGRect])?
+                                    originalFrames: [CGWindowID: CGRect],
+                                    minimaBypass: [CGWindowID: UInt64]?)?
 
     /// Swap two windows' positions in the tree and return post-swap layout
     /// rects without applying frames.
@@ -1627,11 +1661,18 @@ class TilingEngine {
     ///   caller does nothing with the returned layout, the tree is still in
     ///   its post-swap state. Captures a pre-swap snapshot for revert; the
     ///   matching `applyComputedLayout` call consumes it.
-    /// - Returns: `nil` if either window is missing from the tree or the
-    ///   pair fails the cross-axis fit check; otherwise the new layout.
+    /// - Returns: `nil` if either window is missing or the swap cannot fit
+    ///   even after learned evidence is set aside; otherwise the new layout.
     func prepareSwapLayout(_ a: HyprWindow, _ b: HyprWindow,
                            onWorkspace workspace: Int, screen: NSScreen) -> [(HyprWindow, CGRect)]? {
-        guard canSwapWindows(a, b, onWorkspace: workspace, screen: screen) else { return nil }
+        let fit = swapFit(a, b, onWorkspace: workspace, screen: screen)
+        if case .refused = fit { return nil }
+        return prepareSwap(a, b, fit: fit, onWorkspace: workspace, screen: screen)
+    }
+
+    private func prepareSwap(_ a: HyprWindow, _ b: HyprWindow, fit: SwapFit,
+                             onWorkspace workspace: Int,
+                             screen: NSScreen) -> [(HyprWindow, CGRect)]? {
         let key = TilingKey(workspace: workspace, screen: screen)
         let t = tree(for: key)
         guard t.contains(a) && t.contains(b) else { return nil }
@@ -1650,7 +1691,11 @@ class TilingEngine {
         // (triggered by applyComputedLayout) is the ground truth, and
         // applyComputedLayout reverts via this snapshot if overflow persists.
         pendingSwapRevert = (key: key, generation: generation,
-                             snapshot: t.snapshot(), originalFrames: captured.actualFrames)
+                             snapshot: t.snapshot(), originalFrames: captured.actualFrames,
+                             minimaBypass: {
+                                 if case let .revalidatable(bypass) = fit { return bypass }
+                                 return nil
+                             }())
         t.swap(a, b)
         // clear userSetRatio + reset to 50/50 so the test layout matches
         // canSwapWindows's evaluation baseline (see canSwapWindows).
@@ -1680,8 +1725,11 @@ class TilingEngine {
 
         guard layoutGeneration == pending.generation else { return false }
         let rect = displayManager.cgRect(for: screen)
-        let outcome = applyTrackedLayout(t, in: rect, generation: pending.generation, key: key,
-                                         originalFrames: pending.originalFrames)
+        let apply = {
+            self.applyTrackedLayout(t, in: rect, generation: pending.generation, key: key,
+                                    originalFrames: pending.originalFrames)
+        }
+        let outcome = pending.minimaBypass.map { withMinimaBypass($0, apply) } ?? apply()
         switch outcome {
         case .accepted:
             return true
@@ -1779,7 +1827,8 @@ class TilingEngine {
         guard case .accepted = captured.verdict,
               captured.actualFrames.count == t.allWindows.count else { return nil }
         pendingSwapRevert = (key: key, generation: generation,
-                             snapshot: t.snapshot(), originalFrames: captured.actualFrames)
+                             snapshot: t.snapshot(), originalFrames: captured.actualFrames,
+                             minimaBypass: nil)
         let rect = displayManager.cgRect(for: screen)
         t.toggleSplit(for: window, in: rect, gap: gapSize, padding: outerPadding)
         t.root.resetSplitRatios()
@@ -1900,8 +1949,13 @@ class TilingEngine {
     /// one check or the one attempt it wraps.
     private func withRevalidationBypass<T>(incoming: Set<CGWindowID>, key: TilingKey,
                                            _ body: () -> T) -> T {
+        withMinimaBypass(revalidationBypass(incoming: incoming, key: key), body)
+    }
+
+    private func withMinimaBypass<T>(_ bypass: [CGWindowID: UInt64],
+                                     _ body: () -> T) -> T {
         let previous = minimaBypass
-        minimaBypass = revalidationBypass(incoming: incoming, key: key)
+        minimaBypass = bypass
         defer { minimaBypass = previous }
         return body()
     }
