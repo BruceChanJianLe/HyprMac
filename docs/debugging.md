@@ -681,13 +681,14 @@ Verification on the isolated branch based on `46c2496`:
   real sizing transactions plus feedback and border components; they do not
   replace live verification of the complete macOS notification path.
 
-Live acceptance for this fix remains separate from isolated tests. With an
-approved debug build, detach a Safari tab to the desktop and also create a
-window in another app. Verify every resulting tile, check that no restoration
-warning survives a verified successor layout, and correlate the drag,
-discovery, admission, and feedback logs. Also check a genuinely unrecovered
-layout failure still produces feedback. This investigation only read existing
-laptop logs; it did not deploy, launch, restart, or move any live window.
+Live acceptance update, September 15, 2026: the signed universal Debug build
+`f66ba8ac2692+972a10741228` replaced the canonical MacBook debug app at the
+user's request. Its signature and installed checksum verified; startup logged
+Accessibility trust and successful manager startup. HyprMac configuration
+JSON hashes were unchanged, and the previous app was archived for rollback.
+The user then confirmed that the fix works and authorized landing it on main.
+This confirms the reported Safari symptom; the broader manual matrix for
+another app and deliberately unrecovered failures was not separately run.
 
 ### "Why didn't a swap take effect?"
 
