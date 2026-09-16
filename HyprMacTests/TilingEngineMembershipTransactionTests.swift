@@ -514,6 +514,51 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
                         "the bypass lasts one pass; it does not erase the memory")
     }
 
+    func testStartupRetryRebuildsAfterLearningPortraitWindowWidths() {
+        let screen = PortraitMembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        engine.maxSplitsPerMonitor[screen.localizedName] = 2
+        let windows = (1...4).map { makeWindow(id: CGWindowID(59_000 + $0)) }
+        let widths: [CGFloat] = [574, 528, 708, 640]
+        let rect = engine.displayManager.cgRect(for: screen)
+        for window in windows {
+            window.observedMinSize = CGSize(width: 420, height: 300)
+            window.minSizeProvenance = .seeded
+            trace.frames[window.windowID] = rect
+        }
+        trace.failNextSizeWriteID = windows.last?.windowID
+
+        let admission = engine.tileWindows(windows, onWorkspace: 1, screen: screen)
+        XCTAssertFalse(admission.published)
+        XCTAssertTrue(admission.publishedIDs.isEmpty)
+
+        for (window, width) in zip(windows, widths) {
+            trace.minSize[window.windowID] = CGSize(width: width, height: 300)
+        }
+        trace.requested = [:]
+        trace.written = []
+        var retryWrites = 0
+        trace.onWrite = { retryWrites += 1 }
+        let bypass = Dictionary(uniqueKeysWithValues: windows.map {
+            ($0.windowID, admission.generation &+ 1)
+        })
+
+        let retry = engine.retryAdmission(windows, onWorkspace: 1, screen: screen,
+                                          bypassingMinimaBefore: bypass,
+                                          refusingImpossibleArrangements: true)
+
+        XCTAssertTrue(retry.published,
+                      "failure=\(String(describing: retry.failure)) minima=\(engine.knownMinimumSizes) requested=\(trace.requested) frames=\(trace.frames)")
+        XCTAssertEqual(retry.publishedIDs, Set(windows.map(\.windowID)))
+        XCTAssertTrue(retry.refusedIDs.isEmpty)
+        XCTAssertLessThanOrEqual(retryWrites, 24, "one candidate and one recovered topology")
+        XCTAssertEqual(Set(engine.windowIDs(inTreeForWorkspace: 1, screen: screen)),
+                       Set(windows.map(\.windowID)))
+        XCTAssertTrue(windows.allSatisfy { trace.requested[$0.windowID]?.width == 1064 })
+    }
+
     /// The Outlook thrash: two tenants whose learned floors cannot both sit
     /// on one screen. The admission probes and learns; the retry has nothing
     /// left to find out, so it must not probe again.
@@ -1238,6 +1283,7 @@ private final class MembershipTrace {
     /// can be aimed at one target instead of whichever is read first
     var rejectReadsFor: Set<CGWindowID> = []
     var onWrite: (() -> Void)?
+    var failNextSizeWriteID: CGWindowID?
     /// floor a window refuses to shrink below, the way a real min-size app behaves
     var minSize: [CGWindowID: CGSize] = [:]
     /// how far short of the height it is asked for a window settles — the
@@ -1261,6 +1307,10 @@ private final class MembershipTrace {
         var io = FrameSizingIO(setMessagingTimeout: { _, _ in .success },
                       writeSize: { [self] id, size, _ in
                           onWrite?(); wrote = true; written.insert(id)
+                          if failNextSizeWriteID == id {
+                              failNextSizeWriteID = nil
+                              return .cannotComplete
+                          }
                           requested[id, default: .zero].size = size
                           let floor = minSize[id] ?? .zero
                           let short = heightShortfall[id] ?? 0
@@ -1291,6 +1341,11 @@ private final class MembershipTrace {
 
 private final class MembershipTestScreen: NSScreen {
     override var frame: NSRect { NSRect(x: 4000, y: 0, width: 1600, height: 1000) }
+    override var visibleFrame: NSRect { frame }
+}
+
+private final class PortraitMembershipTestScreen: NSScreen {
+    override var frame: NSRect { NSRect(x: 4000, y: 0, width: 1080, height: 1890) }
     override var visibleFrame: NSRect { frame }
 }
 

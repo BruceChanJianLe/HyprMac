@@ -799,3 +799,25 @@ An incompatible returning incumbent produces `noFittingSlot(id)` and keeps the
 whole key unverified without writing. It is excluded from recovery fallback
 IDs. See [the audit](stability-audit-2026-09-13.md) for the exact test evidence
 and remaining manual gates. Earlier log examples describe their dated builds.
+
+## Portrait startup admission recovery
+
+A depth-two batch on a 1064×1874 usable portrait display previously chose a
+two-column grid. Its half-width slots were 528 points, while four observed
+window widths were 574, 528, 708, and 640. The same four windows fit at the
+same depth when both child splits use the vertical axis.
+
+The startup failure had two stages. The initial write failed before readback,
+so it learned no constraints. The automatic retry built the same grid from
+seeded minima, then learned the real widths. Ratio adjustment could not make
+that topology fit, so recovery floated the batch.
+
+Smart insertion now tries the alternate axis when the preferred aspect-ratio
+split cannot satisfy both windows. If an automatic retry starts from an empty
+live key and its first write learns constraints that ratio adjustment cannot
+resolve, it gets one private topology rebuild using that evidence. The rebuilt
+layout must pass normal verified readback before publication; otherwise the
+existing rollback runs. Ordinary retiles, explicit insertion, drag, incumbent
+trees, saved split directions, hidden windows, disabled windows, and scratchpad
+layouts do not opt into this rebuild. A workspace overflow router was not
+needed because the four-window batch fits the original workspace and depth.

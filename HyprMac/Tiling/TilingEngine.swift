@@ -230,6 +230,9 @@ class TilingEngine {
     /// retried together were admitted at different generations and one must
     /// not inherit the other's reach. Set for one retry only.
     private var minimaBypass: [CGWindowID: UInt64]?
+    /// One bounded topology retry for automatic admission recovery. This is
+    /// never enabled for ordinary retiles, explicit insertion, or drag.
+    private var admissionTopologyRecovery = false
     private var layoutGeneration: UInt64 = 0
     var currentLayoutGeneration: UInt64 { layoutGeneration }
     private let frameSizingIOFactory: ([CGWindowID: HyprWindow], @escaping () -> UInt64) -> FrameSizingIO
@@ -701,10 +704,12 @@ class TilingEngine {
                                     key: TilingKey,
                                     inserted: [CGWindowID] = [],
                                     originalFrames: [CGWindowID: CGRect]? = nil,
-                                    restorationUsableFrame: CGRect? = nil) -> LayoutApplicationOutcome {
+                                    restorationUsableFrame: CGRect? = nil,
+                                    topologyRecoveryMaxDepth: Int? = nil) -> LayoutApplicationOutcome {
         let outcome = applyVerifiedLayout(tree, in: rect, generation: generation,
                                           originalFrames: originalFrames,
-                                          restorationUsableFrame: restorationUsableFrame)
+                                          restorationUsableFrame: restorationUsableFrame,
+                                          topologyRecoveryMaxDepth: topologyRecoveryMaxDepth)
         noteGeometry(outcome, for: key, generation: generation, inserted: inserted)
         return outcome
     }
@@ -712,10 +717,12 @@ class TilingEngine {
     internal func applyVerifiedLayout(_ tree: BSPTree, in rect: CGRect,
                                       generation: UInt64,
                                       originalFrames suppliedOriginalFrames: [CGWindowID: CGRect]? = nil,
-                                      restorationUsableFrame suppliedRestorationFrame: CGRect? = nil) -> LayoutApplicationOutcome {
+                                      restorationUsableFrame suppliedRestorationFrame: CGRect? = nil,
+                                      topologyRecoveryMaxDepth: Int? = nil) -> LayoutApplicationOutcome {
         let outcome = applyVerifiedLayoutAttempt(tree, in: rect, generation: generation,
                                                   originalFrames: suppliedOriginalFrames,
-                                                  restorationUsableFrame: suppliedRestorationFrame)
+                                                  restorationUsableFrame: suppliedRestorationFrame,
+                                                  topologyRecoveryMaxDepth: topologyRecoveryMaxDepth)
         switch outcome {
         case .accepted: break
         case let .rejectedRestored(reason, frames, progress):
@@ -862,7 +869,8 @@ class TilingEngine {
 
     private func applyVerifiedLayoutAttempt(_ tree: BSPTree, in rect: CGRect, generation: UInt64,
                                             originalFrames suppliedOriginalFrames: [CGWindowID: CGRect]?,
-                                            restorationUsableFrame suppliedRestorationFrame: CGRect?) -> LayoutApplicationOutcome {
+                                            restorationUsableFrame suppliedRestorationFrame: CGRect?,
+                                            topologyRecoveryMaxDepth: Int?) -> LayoutApplicationOutcome {
         let windows = tree.allWindows
         let restorationFrame = suppliedRestorationFrame ?? rect
         let originalFrames: [CGWindowID: CGRect]
@@ -919,7 +927,25 @@ class TilingEngine {
                     return .accepted(actualFrames: terminal.actualFrames,
                                      progress: FrameSizingProgressReport(candidate: terminal.progress))
                 }
-            } else {
+            }
+
+            let adjustedStillRefused = !resolves || !terminal.conflicts.isEmpty
+            let recovered = topologyRecoveryMaxDepth.flatMap { maxDepth in
+                topologyRecoveredTree(windows, in: rect, maxDepth: maxDepth)
+            }
+            if adjustedStillRefused, layoutGeneration == generation,
+               let recovered {
+                hyprLog(.notice, .tiling, "admission topology recovery: ids="
+                        + "[" + windows.map { String($0.windowID) }.joined(separator: ", ") + "]")
+                let layouts = recovered.layout(in: rect, gap: gapSize, padding: outerPadding)
+                terminal = applyLayoutFinal(layouts, usableFrame: rect, generation: generation)
+                if case .accepted = terminal.verdict {
+                    tree.root = recovered.root
+                    hyprLog(.notice, .tiling, "admission topology recovery accepted")
+                    return .accepted(actualFrames: terminal.actualFrames,
+                                     progress: FrameSizingProgressReport(candidate: terminal.progress))
+                }
+            } else if !resolves {
                 hyprLog(.notice, .tiling, "adjusted layout cannot resolve observed constraints — restoring")
             }
         }
@@ -961,6 +987,26 @@ class TilingEngine {
                          restorationAttempted: true,
                          actualFrames: restored.actualFrames,
                          progress: progress)
+    }
+
+    /// Rebuild a private batch after its first write taught stricter minima.
+    /// The caller gates this to the automatic retry of an empty live key.
+    private func topologyRecoveredTree(_ windows: [HyprWindow], in rect: CGRect,
+                                       maxDepth: Int) -> BSPTree? {
+        let recovered = BSPTree()
+        let ordered = windows.enumerated().sorted { lhs, rhs in
+            let left = minimumSize(for: lhs.element)
+            let right = minimumSize(for: rhs.element)
+            if left.width != right.width { return left.width > right.width }
+            if left.height != right.height { return left.height > right.height }
+            return lhs.offset < rhs.offset
+        }.map(\.element)
+        for window in ordered {
+            guard smartInsertFitting(window, into: recovered, maxDepth: maxDepth, rect: rect) else {
+                return nil
+            }
+        }
+        return layoutCanAccommodateKnownMinimums(recovered, rect: rect) ? recovered : nil
     }
 
     private func copyVerifiedRatios(from source: BSPNode, to destination: BSPNode) {
@@ -1233,7 +1279,12 @@ class TilingEngine {
         _ = consumePendingInserted(for: key, in: t)
         let outcome = applyTrackedLayout(t, in: rect, generation: generation, key: key,
                                          inserted: m.insertedWindows.map(\.windowID).filter { !incumbents.contains($0) },
-                                         restorationUsableFrame: extraReach.map { rect.union($0) })
+                                         restorationUsableFrame: extraReach.map { rect.union($0) },
+                                         topologyRecoveryMaxDepth: admissionTopologyRecovery
+                                             && live == nil && incumbents.isEmpty
+                                             && m.insertedWindows.count
+                                                == windows.filter { !$0.isFloating }.count
+                                             ? maxDepth(for: screen) : nil)
         if publishes(outcome), layoutGeneration == generation {
             if let live { live.root = candidate.root } else { trees[key] = candidate }
             admittedWindowIDs[workspace, default: []].formUnion(candidate.allWindows.map(\.windowID))
@@ -1302,8 +1353,13 @@ class TilingEngine {
                         refusingImpossibleArrangements: Bool = false,
                         restorationReach: CGRect? = nil) -> AdmissionResult {
         let previous = minimaBypass
+        let previousTopologyRecovery = admissionTopologyRecovery
         minimaBypass = bypass
-        defer { minimaBypass = previous }
+        admissionTopologyRecovery = refusingImpossibleArrangements
+        defer {
+            minimaBypass = previous
+            admissionTopologyRecovery = previousTopologyRecovery
+        }
         if refusingImpossibleArrangements {
             // only the newcomers this retry is for, against the live tree's
             // incumbents. a held window or a second stranded newcomer beside

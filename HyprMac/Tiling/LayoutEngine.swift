@@ -134,6 +134,21 @@ struct LayoutEngine {
                      rect: CGRect,
                      minimumSize: (HyprWindow?) -> CGSize,
                      noting: ((SlotRefusal) -> Void)? = nil) -> BSPNode? {
+        fittingPlacement(for: window, in: tree, maxDepth: maxDepth, rect: rect,
+                         minimumSize: minimumSize, noting: noting)?.leaf
+    }
+
+    /// Find both the leaf and the split direction that makes the pair fit.
+    /// A leaf with an explicit override keeps that direction. Otherwise the
+    /// aspect-ratio direction is preferred, with the other axis as a bounded
+    /// fallback when window constraints reject the preferred split.
+    private func fittingPlacement(for window: HyprWindow?,
+                                  in tree: BSPTree,
+                                  maxDepth: Int,
+                                  rect: CGRect,
+                                  minimumSize: (HyprWindow?) -> CGSize,
+                                  noting: ((SlotRefusal) -> Void)? = nil)
+        -> (leaf: BSPNode, direction: SplitDirection)? {
         let leaves = tree.root.allLeavesRightToLeft()
         for pass in 0...1 {
             for leaf in leaves {
@@ -151,22 +166,34 @@ struct LayoutEngine {
                     continue
                 }
                 guard let leafRect = tree.rectForNode(leaf, in: rect, gap: gapSize, padding: outerPadding) else { continue }
-                let dir = leaf.direction(for: leafRect)
-
-                if pass == 0 {
-                    let (a, b) = splitRects(leafRect, dir: dir)
-                    let childMin = min(min(a.width, a.height), min(b.width, b.height))
-                    if childMin < minSlotDimension { continue }
-                }
-
                 let existingMin = minimumSize(leaf.window)
                 let incomingMin = minimumSize(window)
-                let fit = pairFit(existingMin, incomingMin, in: leafRect, dir: dir)
-                if fit.fits { return leaf }
+                let preferred = leaf.savedSplitRatio == nil
+                    ? leaf.direction(for: leafRect)
+                    : (leaf.savedSplitOverride ?? leaf.direction(for: leafRect))
+                let alternate: SplitDirection = preferred == .horizontal ? .vertical : .horizontal
+                let canChooseAxis = leaf.splitOverride == nil && leaf.savedSplitRatio == nil
+                let directions = canChooseAxis ? [preferred, alternate] : [preferred]
+                var preferredFit: PairFit?
+
+                for dir in directions {
+                    if pass == 0 {
+                        let (a, b) = splitRects(leafRect, dir: dir)
+                        let childMin = min(min(a.width, a.height), min(b.width, b.height))
+                        if childMin < minSlotDimension { continue }
+                    }
+
+                    let fit = pairFit(existingMin, incomingMin, in: leafRect, dir: dir)
+                    if dir == preferred { preferredFit = fit }
+                    if fit.fits { return (leaf, dir) }
+                }
+
                 if pass == 1, let noting {
+                    let fit = preferredFit ?? pairFit(existingMin, incomingMin,
+                                                      in: leafRect, dir: preferred)
                     noting(SlotRefusal(tenantID: leaf.window?.windowID,
                                        slot: leafRect.size,
-                                       direction: dir,
+                                       direction: preferred,
                                        depthExhausted: false,
                                        axis: fit.refusedAxis,
                                        incomingMinimum: incomingMin,
@@ -190,12 +217,19 @@ struct LayoutEngine {
             return true
         }
 
-        guard let leaf = fittingLeaf(for: window, in: tree, maxDepth: maxDepth,
-                                     rect: rect, minimumSize: minimumSize) else {
+        guard let placement = fittingPlacement(for: window, in: tree, maxDepth: maxDepth,
+                                               rect: rect, minimumSize: minimumSize) else {
             return false
         }
 
+        let leaf = placement.leaf
+        let leafRect = tree.rectForNode(leaf, in: rect, gap: gapSize,
+                                        padding: outerPadding) ?? rect
+        let needsOverride = leaf.splitOverride == nil
+            && leaf.savedSplitRatio == nil
+            && placement.direction != leaf.direction(for: leafRect)
         leaf.insert(window)
+        if needsOverride { leaf.splitOverride = placement.direction }
         if let leafRect = tree.rectForNode(leaf, in: rect, gap: gapSize, padding: outerPadding) {
             hyprLog(.debug, .lifecycle, "smart insert fit at depth \(leaf.depth) (\(Int(leafRect.width))x\(Int(leafRect.height)))")
         }

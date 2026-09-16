@@ -100,6 +100,59 @@ final class LayoutEngineTests: XCTestCase {
         XCTAssertEqual(tree.root.right?.right?.window?.windowID, 3)
     }
 
+    func testSmartInsertFittingUsesAlternateAxisForConstrainedPortraitBatch() {
+        let tree = BSPTree()
+        let rect = CGRect(x: 0, y: 0, width: 1080, height: 1890)
+        let widths: [CGWindowID: CGFloat] = [1: 574, 2: 528, 3: 708, 4: 640]
+        let windows = (1...4).map { makeWindow(id: CGWindowID($0)) }
+        let mins: (HyprWindow?) -> CGSize = { window in
+            CGSize(width: widths[window?.windowID ?? 0] ?? 0, height: 300)
+        }
+
+        for window in windows {
+            XCTAssertTrue(layout.smartInsertFitting(window, into: tree, maxDepth: 2,
+                                                    rect: rect, minimumSize: mins))
+        }
+
+        XCTAssertEqual(Set(tree.allWindows.map(\.windowID)), Set(widths.keys))
+        XCTAssertEqual(tree.root.left?.splitOverride, .vertical)
+        XCTAssertEqual(tree.root.right?.splitOverride, .vertical)
+        let frames = tree.layout(in: rect, gap: layout.gapSize, padding: layout.outerPadding)
+        XCTAssertEqual(frames.count, 4)
+        XCTAssertTrue(frames.allSatisfy { $0.1.width == 1064 })
+    }
+
+    func testSmartInsertFittingKeepsPreferredAxisWhenBothAxesFit() {
+        let tree = BSPTree()
+        XCTAssertTrue(layout.smartInsertFitting(makeWindow(id: 1), into: tree, maxDepth: 3,
+                                                rect: bigRect, minimumSize: zeroMins))
+        XCTAssertTrue(layout.smartInsertFitting(makeWindow(id: 2), into: tree, maxDepth: 3,
+                                                rect: bigRect, minimumSize: zeroMins))
+
+        XCTAssertEqual(tree.root.direction(for: bigRect.insetBy(dx: 8, dy: 8)), .horizontal)
+        XCTAssertNil(tree.root.splitOverride)
+    }
+
+    func testSmartInsertFittingDoesNotReplaceASavedSplitDirection() {
+        let tree = BSPTree()
+        let tenant = makeWindow(id: 1)
+        tree.root.window = tenant
+        tree.root.savedSplitRatio = 0.5
+        tree.root.savedChildWasLeft = false
+        tree.root.savedSplitOverride = .horizontal
+        let incoming = makeWindow(id: 2)
+        let mins: (HyprWindow?) -> CGSize = { window in
+            window === tenant ? CGSize(width: 574, height: 300)
+                : CGSize(width: 640, height: 300)
+        }
+
+        XCTAssertFalse(layout.smartInsertFitting(incoming, into: tree, maxDepth: 2,
+                                                 rect: CGRect(x: 0, y: 0, width: 1080, height: 950),
+                                                 minimumSize: mins))
+        XCTAssertEqual(tree.root.window?.windowID, tenant.windowID)
+        XCTAssertEqual(tree.root.savedSplitOverride, .horizontal)
+    }
+
     func testSmartInsertFittingFailsAtMaxDepth() {
         let tree = BSPTree()
         // fill a maxDepth=1 tree (2 leaves at depth 1)
@@ -205,6 +258,27 @@ final class LayoutEngineTests: XCTestCase {
         XCTAssertEqual(only.tenantMinimum, .zero)
         XCTAssertFalse(only.depthExhausted)
         XCTAssertEqual(only.slot.width, bigRect.width - 2 * 8, accuracy: 0.001)
+    }
+
+    func testFittingLeafReportsOnceWhenBothAxesRefuse() {
+        let tree = BSPTree()
+        let tenant = makeWindow(id: 1)
+        layout.smartInsertFitting(tenant, into: tree, maxDepth: 3,
+                                  rect: bigRect, minimumSize: zeroMins)
+        let incoming = makeWindow(id: 2)
+        let mins: (HyprWindow?) -> CGSize = { window in
+            window == nil ? .zero : CGSize(width: 2_000, height: 2_000)
+        }
+        var refusals: [LayoutEngine.SlotRefusal] = []
+
+        let leaf = layout.fittingLeaf(for: incoming, in: tree, maxDepth: 3,
+                                      rect: bigRect, minimumSize: mins,
+                                      noting: { refusals.append($0) })
+
+        XCTAssertNil(leaf)
+        XCTAssertEqual(refusals.count, 1)
+        XCTAssertEqual(tree.root.window?.windowID, tenant.windowID)
+        XCTAssertNil(tree.root.splitOverride)
     }
 
     func testFittingLeafReportsNothingWhenALeafTakesTheWindow() {
