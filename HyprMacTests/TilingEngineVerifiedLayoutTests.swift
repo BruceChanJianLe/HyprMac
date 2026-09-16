@@ -3,6 +3,129 @@ import XCTest
 @testable import HyprMac
 
 final class TilingEngineVerifiedLayoutTests: XCTestCase {
+    func testTimeoutShapedReadFailureRecoversExactLayoutAfterVerifiedRollback() {
+        let fixture = timeoutRecoveryFixture(mode: .readTimeout)
+
+        let outcome = fixture.engine.applyVerifiedLayout(
+            fixture.tree, in: fixture.usable, generation: fixture.generation,
+            originalFrames: fixture.originals
+        )
+
+        guard case let .accepted(frames, progress) = outcome else {
+            return XCTFail("expected relaxed retry to succeed, got \(outcome)")
+        }
+        XCTAssertEqual(frames, fixture.targets)
+        XCTAssertEqual(fixture.trace.candidateApplications, 2)
+        XCTAssertEqual(fixture.trace.restorationApplications, 1)
+        XCTAssertEqual(progress.candidate.targetIDs, [901])
+        XCTAssertTrue(progress.candidateVerified)
+        XCTAssertEqual(fixture.window.cachedFrame, fixture.targets[901])
+        XCTAssertNil(fixture.window.observedMinSize)
+        XCTAssertNil(fixture.engine.knownMinimumSizes[901])
+        XCTAssertEqual(fixture.trace.maximumTimeout, 0.25, accuracy: 0.001)
+        XCTAssertLessThan(fixture.trace.elapsed, 1.5)
+    }
+
+    func testTimeoutShapedPositionFailureRecoversOnlyAfterRollback() {
+        let fixture = timeoutRecoveryFixture(mode: .positionTimeout)
+
+        let outcome = fixture.engine.applyVerifiedLayout(
+            fixture.tree, in: fixture.usable, generation: fixture.generation,
+            originalFrames: fixture.originals
+        )
+
+        guard case .accepted = outcome else {
+            return XCTFail("expected relaxed retry to succeed, got \(outcome)")
+        }
+        XCTAssertEqual(fixture.trace.candidateApplications, 2)
+        XCTAssertEqual(fixture.trace.restorationApplications, 1)
+        XCTAssertEqual(fixture.trace.frames, fixture.targets)
+    }
+
+    func testFailedTimeoutRecoveryUsesOneRelaxedRollbackToExactOriginals() {
+        let fixture = timeoutRecoveryFixture(mode: .recoveryFails)
+
+        let outcome = fixture.engine.applyVerifiedLayout(
+            fixture.tree, in: fixture.usable, generation: fixture.generation,
+            originalFrames: fixture.originals
+        )
+
+        guard case let .rejectedRestored(reason, frames, _) = outcome else {
+            return XCTFail("expected failed recovery to restore, got \(outcome)")
+        }
+        XCTAssertEqual(reason, .writeFailed(901, .cannotComplete))
+        XCTAssertEqual(frames, fixture.originals)
+        XCTAssertEqual(fixture.trace.candidateApplications, 2)
+        XCTAssertEqual(fixture.trace.restorationApplications, 2)
+        XCTAssertLessThanOrEqual(fixture.trace.candidateApplications, 2)
+        XCTAssertNil(fixture.window.observedMinSize)
+    }
+
+    func testImmediateCannotCompleteDoesNotEnterTimeoutRecovery() {
+        let fixture = timeoutRecoveryFixture(mode: .immediateReadFailure)
+
+        let outcome = fixture.engine.applyVerifiedLayout(
+            fixture.tree, in: fixture.usable, generation: fixture.generation,
+            originalFrames: fixture.originals
+        )
+
+        guard case .rejectedRestored = outcome else {
+            return XCTFail("expected ordinary rejection, got \(outcome)")
+        }
+        XCTAssertEqual(fixture.trace.candidateApplications, 1)
+        XCTAssertEqual(fixture.trace.restorationApplications, 1)
+        XCTAssertEqual(fixture.trace.maximumTimeout, 0.1, accuracy: 0.001)
+    }
+
+    func testCleanupCannotCompleteDoesNotEnterTimeoutRecovery() {
+        let fixture = timeoutRecoveryFixture(mode: .cleanupFailure)
+
+        let outcome = fixture.engine.applyVerifiedLayout(
+            fixture.tree, in: fixture.usable, generation: fixture.generation,
+            originalFrames: fixture.originals
+        )
+
+        guard case .rejectedRestored = outcome else {
+            return XCTFail("expected cleanup rejection, got \(outcome)")
+        }
+        XCTAssertEqual(fixture.trace.candidateApplications, 1)
+        XCTAssertEqual(fixture.trace.restorationApplications, 1)
+    }
+
+    func testFailedFirstRollbackDoesNotEnterTimeoutRecovery() {
+        let fixture = timeoutRecoveryFixture(mode: .rollbackFails)
+
+        let outcome = fixture.engine.applyVerifiedLayout(
+            fixture.tree, in: fixture.usable, generation: fixture.generation,
+            originalFrames: fixture.originals
+        )
+
+        guard case .degraded = outcome else {
+            return XCTFail("expected degraded rollback, got \(outcome)")
+        }
+        XCTAssertEqual(fixture.trace.candidateApplications, 1)
+        XCTAssertEqual(fixture.trace.restorationApplications, 1)
+    }
+
+    func testSupersededTimeoutRecoveryDoesNotAttemptAnotherRollback() {
+        let fixture = timeoutRecoveryFixture(mode: .readTimeout)
+        fixture.trace.onSecondCandidate = { _ = fixture.engine.beginLayoutGeneration() }
+
+        let outcome = fixture.engine.applyVerifiedLayout(
+            fixture.tree, in: fixture.usable, generation: fixture.generation,
+            originalFrames: fixture.originals
+        )
+
+        guard case let .degraded(reason, restoration, attempted, _, _) = outcome else {
+            return XCTFail("expected superseded recovery, got \(outcome)")
+        }
+        XCTAssertEqual(reason, .superseded)
+        XCTAssertNil(restoration)
+        XCTAssertFalse(attempted)
+        XCTAssertEqual(fixture.trace.candidateApplications, 2)
+        XCTAssertEqual(fixture.trace.restorationApplications, 1)
+    }
+
     func testCellQuantizedWindowTilesWithoutRestoringSiblings() {
         let first = makeWindow(id: 501)
         let second = makeWindow(id: 502)
@@ -634,6 +757,141 @@ private func degradedReasons(
         return (nil, nil, false)
     }
     return (candidateReason, restorationReason, attempted)
+}
+
+private struct TimeoutRecoveryFixture {
+    let window: HyprWindow
+    let tree: BSPTree
+    let engine: TilingEngine
+    let trace: TimeoutRecoveryTrace
+    let usable: CGRect
+    let originals: [CGWindowID: CGRect]
+    let targets: [CGWindowID: CGRect]
+    let generation: UInt64
+}
+
+private func timeoutRecoveryFixture(
+    mode: TimeoutRecoveryTrace.Mode
+) -> TimeoutRecoveryFixture {
+    let window = makeWindow(id: 901)
+    let tree = BSPTree()
+    XCTAssertTrue(tree.insert(window, maxDepth: 2))
+    let usable = CGRect(x: -1080, y: -96, width: 1080, height: 1890)
+    let originals: [CGWindowID: CGRect] = [
+        901: CGRect(x: -648, y: -88, width: 640, height: 933)
+    ]
+    let targets = Dictionary(uniqueKeysWithValues: tree.layout(
+        in: usable, gap: TilingConfig.defaultGap, padding: TilingConfig.defaultOuterPadding
+    ).map { ($0.0.windowID, $0.1) })
+    let trace = TimeoutRecoveryTrace(frames: originals, original: originals[901]!,
+                                     target: targets[901]!, mode: mode)
+    let engine = TilingEngine(
+        displayManager: DisplayManager(),
+        frameSizingIOFactory: { _, generation in trace.io(generation: generation) }
+    )
+    let generation = engine.beginLayoutGeneration()
+    return TimeoutRecoveryFixture(window: window, tree: tree, engine: engine, trace: trace,
+                                  usable: usable, originals: originals, targets: targets,
+                                  generation: generation)
+}
+
+private final class TimeoutRecoveryTrace {
+    enum Mode: Equatable {
+        case readTimeout
+        case positionTimeout
+        case recoveryFails
+        case immediateReadFailure
+        case cleanupFailure
+        case rollbackFails
+    }
+
+    var frames: [CGWindowID: CGRect]
+    var candidateApplications = 0
+    var restorationApplications = 0
+    var maximumTimeout: TimeInterval = 0
+    var elapsed: TimeInterval { now }
+    var onSecondCandidate: (() -> Void)?
+    private var now: TimeInterval = 0
+    private let original: CGRect
+    private let target: CGRect
+    private let mode: Mode
+    private var initialReadFailed = false
+
+    init(frames: [CGWindowID: CGRect], original: CGRect, target: CGRect, mode: Mode) {
+        self.frames = frames
+        self.original = original
+        self.target = target
+        self.mode = mode
+    }
+
+    func io(generation: @escaping () -> UInt64) -> FrameSizingIO {
+        FrameSizingIO(
+            setMessagingTimeout: { [self] _, timeout in
+                maximumTimeout = max(maximumTimeout, timeout)
+                return .success
+            },
+            writeSize: { [self] id, size, timeout in
+                maximumTimeout = max(maximumTimeout, timeout)
+                var frame = frames[id] ?? .zero
+                frame.size = size
+                frames[id] = frame
+                return .success
+            },
+            writePosition: { [self] id, position, timeout in
+                maximumTimeout = max(maximumTimeout, timeout)
+                if position == target.origin {
+                    candidateApplications += 1
+                    if candidateApplications == 2 { onSecondCandidate?() }
+                    if mode == .positionTimeout && candidateApplications == 1
+                        || mode == .recoveryFails && candidateApplications == 2 {
+                        now += timeout * 0.95
+                        return .cannotComplete
+                    }
+                } else if position == original.origin {
+                    restorationApplications += 1
+                    if mode == .rollbackFails && restorationApplications == 1 {
+                        return .notImplemented
+                    }
+                }
+                var frame = frames[id] ?? .zero
+                frame.origin = position
+                frames[id] = frame
+                return .success
+            },
+            readPosition: { [self] id, timeout in
+                maximumTimeout = max(maximumTimeout, timeout)
+                if mode == .readTimeout, frames[id]?.origin == target.origin {
+                    let latency: TimeInterval = 0.15
+                    now += min(timeout, latency)
+                    return timeout < latency
+                        ? (.cannotComplete, nil) : (.success, frames[id]?.origin)
+                }
+                if !initialReadFailed, candidateApplications == 1,
+                   restorationApplications == 0,
+                   mode == .recoveryFails || mode == .immediateReadFailure
+                        || mode == .rollbackFails {
+                    initialReadFailed = true
+                    if mode != .immediateReadFailure { now += timeout * 0.95 }
+                    return (.cannotComplete, nil)
+                }
+                return (.success, frames[id]?.origin)
+            },
+            readSize: { [self] id, timeout in
+                maximumTimeout = max(maximumTimeout, timeout)
+                return (.success, frames[id]?.size)
+            },
+            now: { [self] in now },
+            sleep: { [self] interval in now += interval },
+            currentGeneration: generation,
+            endFrameWrite: { [self] token, _, _ in
+                if mode == .cleanupFailure, candidateApplications == 1,
+                   restorationApplications == 0 {
+                    return .failed(.cannotComplete)
+                }
+                return .restored
+            }
+        )
+    }
 }
 
 private final class SizingTrace {

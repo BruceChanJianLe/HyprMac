@@ -696,6 +696,17 @@ class TilingEngine {
         ioFactory: frameSizingIOFactory
     )
 
+    private lazy var timeoutRecoveryPoller: FrameReadbackPoller = {
+        var configuration = FrameSizingConfiguration()
+        configuration.deadline = 0.75
+        configuration.perCallTimeout = 0.25
+        return FrameReadbackPoller(
+            configuration: configuration,
+            generation: { [weak self] in self?.layoutGeneration ?? UInt64.max },
+            ioFactory: frameSizingIOFactory
+        )
+    }()
+
     /// `applyVerifiedLayout` plus the unverified-geometry bookkeeping for
     /// the key that owns the tree. Every production path goes through
     /// this; the plain call stays for tests that hand it a loose tree.
@@ -979,6 +990,49 @@ class TilingEngine {
         progress.restoration = restored.progress
         progress.restorationOverlaps = restored.overlaps
         if case .accepted = restored.verdict {
+            if terminal.progress.phase == .candidate,
+               terminal.progress.timeoutShapedCannotComplete,
+               Self.isDirectCannotComplete(reason),
+               layoutGeneration == generation {
+                hyprLog(.notice, .tiling, "verified layout AX timeout recovery: reason=\(reason) ids="
+                        + "[" + windows.map { String($0.windowID) }.joined(separator: ", ") + "]")
+                let retry = timeoutRecoveryPoller.applyLayout(
+                    firstLayouts, usableFrame: rect, gap: gapSize, generation: generation
+                )
+                if case .accepted = retry.verdict {
+                    hyprLog(.notice, .tiling, "verified layout AX timeout recovery accepted")
+                    return .accepted(actualFrames: retry.actualFrames,
+                                     progress: FrameSizingProgressReport(candidate: retry.progress))
+                }
+
+                var retryProgress = FrameSizingProgressReport(candidate: retry.progress)
+                let retryReason = retry.verdict.failure ?? .attemptsExhausted
+                hyprLog(.notice, .tiling,
+                        "verified layout AX timeout recovery refused: reason=\(retryReason)")
+                guard layoutGeneration == generation else {
+                    return .degraded(candidateReason: .superseded,
+                                     restorationReason: nil,
+                                     restorationAttempted: false,
+                                     actualFrames: retry.actualFrames,
+                                     progress: retryProgress)
+                }
+                let retryRestoration = timeoutRecoveryPoller.applyRestoration(
+                    originals, usableFrame: restorationFrame, gap: gapSize,
+                    generation: generation
+                )
+                retryProgress.restoration = retryRestoration.progress
+                retryProgress.restorationOverlaps = retryRestoration.overlaps
+                if case .accepted = retryRestoration.verdict {
+                    return .rejectedRestored(reason: retryReason,
+                                             actualFrames: retryRestoration.actualFrames,
+                                             progress: retryProgress)
+                }
+                return .degraded(candidateReason: retryReason,
+                                 restorationReason: retryRestoration.verdict.failure,
+                                 restorationAttempted: true,
+                                 actualFrames: retryRestoration.actualFrames,
+                                 progress: retryProgress)
+            }
             return .rejectedRestored(reason: reason, actualFrames: restored.actualFrames,
                                      progress: progress)
         }
@@ -987,6 +1041,13 @@ class TilingEngine {
                          restorationAttempted: true,
                          actualFrames: restored.actualFrames,
                          progress: progress)
+    }
+
+    private static func isDirectCannotComplete(_ failure: FrameSizingFailure) -> Bool {
+        switch failure {
+        case .writeFailed(_, .cannotComplete), .readFailed(_, .cannotComplete): true
+        default: false
+        }
     }
 
     /// Rebuild a private batch after its first write taught stricter minima.

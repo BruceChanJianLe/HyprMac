@@ -132,6 +132,9 @@ struct FrameSizingAttempt {
         var targetIDs: [CGWindowID] = []
         var possiblyWritten: Set<CGWindowID> = []
         var writesCompleted: Set<CGWindowID> = []
+        /// A setter or frame read returned `cannotComplete` after consuming
+        /// nearly all of its configured messaging timeout.
+        var timeoutShapedCannotComplete = false
         /// every target produced a readable frame
         var readbackComplete = false
         /// every target reached the configured stable sample count
@@ -323,7 +326,7 @@ struct FrameSizingAttempt {
         var stableAnchors: [CGWindowID: CGRect] = [:]
         for attemptIndex in 0..<configuration.maximumAttempts {
             for target in targets {
-                if let result = read(target, actualFrames: &actualFrames,
+                if let result = read(target, actualFrames: &actualFrames, progress: &progress,
                                      checkpoint: interruption) {
                     timings.read = io.now() - readStarted
                     return out(result)
@@ -462,6 +465,7 @@ struct FrameSizingAttempt {
             progress.possiblyWritten.insert(target.windowID)
             let startedStep = io.now()
             let error = operation()
+            noteTimeoutShape(error, started: startedStep, progress: &progress)
             steps.append("\(label):\(error.rawValue)/\(Self.ms(io.now() - startedStep))")
             let primary: Result
             if let failure = checkpoint() {
@@ -487,11 +491,14 @@ struct FrameSizingAttempt {
     }
 
     private func read(_ target: Target, actualFrames: inout [CGWindowID: CGRect],
+                      progress: inout Progress,
                       checkpoint: () -> FrameSizingFailure?) -> Result? {
         if let failure = prepareRead(target.windowID, checkpoint: checkpoint) {
             return Result(verdict: .unknown(failure), actualFrames: actualFrames)
         }
+        let positionStarted = io.now()
         let (positionError, position) = io.readPosition(target.windowID, configuration.perCallTimeout)
+        noteTimeoutShape(positionError, started: positionStarted, progress: &progress)
         if let failure = checkpoint() {
             return Result(verdict: .unknown(failure), actualFrames: actualFrames)
         }
@@ -503,7 +510,9 @@ struct FrameSizingAttempt {
         if let failure = prepareRead(target.windowID, checkpoint: checkpoint) {
             return Result(verdict: .unknown(failure), actualFrames: actualFrames)
         }
+        let sizeStarted = io.now()
         let (sizeError, size) = io.readSize(target.windowID, configuration.perCallTimeout)
+        noteTimeoutShape(sizeError, started: sizeStarted, progress: &progress)
         if let failure = checkpoint() {
             return Result(verdict: .unknown(failure), actualFrames: actualFrames)
         }
@@ -518,6 +527,13 @@ struct FrameSizingAttempt {
         }
         actualFrames[target.windowID] = frame
         return nil
+    }
+
+    private func noteTimeoutShape(_ error: AXError, started: TimeInterval,
+                                  progress: inout Progress) {
+        guard error == .cannotComplete,
+              io.now() - started >= configuration.perCallTimeout * 0.9 else { return }
+        progress.timeoutShapedCannotComplete = true
     }
 
     private func end(_ token: AXFrameWriteBatch.Token, windowID: CGWindowID,
