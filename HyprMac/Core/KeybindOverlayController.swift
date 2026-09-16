@@ -60,7 +60,7 @@ class KeybindOverlayController {
         let hosting = KeybindOverlayHostingView(rootView: content)
         // force dark so dynamic accents resolve to their neon variants
         hosting.appearance = NSAppearance(named: .darkAqua)
-        // card is 830 + 6px shadow margin each side; size panel to fit
+        // card is 1000 + 6px shadow margin each side; size panel to fit
         let fitted = hosting.fittingSize
         let panelWidth = fitted.width
         let panelHeight = min(max(fitted.height, 1), maxHeight)
@@ -191,12 +191,12 @@ private struct KeybindOverlayView: View {
     @ObservedObject private var config = UserConfig.shared
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 18) {
             header
             columns
         }
-        .padding(EdgeInsets(top: 16, leading: 18, bottom: 16, trailing: 18))
-        .frame(width: 830, alignment: .topLeading)
+        .padding(EdgeInsets(top: 18, leading: 20, bottom: 18, trailing: 20))
+        .frame(width: 1000, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Color(nsColor: NSColor(calibratedWhite: 24.0 / 255.0, alpha: 0.96)))
@@ -217,7 +217,7 @@ private struct KeybindOverlayView: View {
             HStack(alignment: .center) {
                 HStack(spacing: 9) {
                     Text("Keybinds")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(Color.hudPrimary)
                     HStack(spacing: 3) {
                         KeyChip("HYPR")
@@ -227,7 +227,7 @@ private struct KeybindOverlayView: View {
                 Spacer()
                 Button(action: showTutorial) {
                     Text("Tutorial")
-                        .font(.system(size: 10.5, weight: .medium))
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(Color.hyprCyan)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
@@ -236,11 +236,11 @@ private struct KeybindOverlayView: View {
                 }
                 .buttonStyle(.plain)
                 Text(hintText)
-                    .font(.system(size: 10, design: filter.text.isEmpty ? .default : .monospaced))
+                    .font(.system(size: 12, design: filter.text.isEmpty ? .default : .monospaced))
                     .foregroundStyle(filter.text.isEmpty ? Color.hudFaint : Color.hyprCyan)
             }
             Text("HYPR = \(config.hyprKey.displayName)  ·  N = workspace number (1–9)")
-                .font(.system(size: 9.5))
+                .font(.system(size: 12))
                 .foregroundStyle(Color.hudFaint)
         }
     }
@@ -260,15 +260,15 @@ private struct KeybindOverlayView: View {
     }
 
     private func column(_ sections: [OverlaySection]) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             ForEach(sections) { section in
                 VStack(alignment: .leading, spacing: 0) {
                     Text(section.title)
-                        .font(.system(size: 9.5, weight: .semibold))
+                        .font(.system(size: 12, weight: .semibold))
                         .tracking(0.8)
                         .textCase(.uppercase)
                         .foregroundStyle(Color.hyprCyan)
-                        .padding(.bottom, 6)
+                        .padding(.bottom, 8)
                     ForEach(section.rows) { row in
                         rowView(row)
                     }
@@ -279,23 +279,24 @@ private struct KeybindOverlayView: View {
     }
 
     private func rowView(_ row: OverlayRow) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
             HStack(spacing: 4) {
                 Text(row.description)
-                    .font(.system(size: 11.5))
+                    .font(.system(size: 14))
                     .foregroundStyle(Color.hudPrimary.opacity(0.85))
                 if row.isFloating {
                     Text("◇")
-                        .font(.system(size: 9))
+                        .font(.system(size: 11))
                         .foregroundStyle(Color.hyprMagenta)
                 }
             }
-            Spacer(minLength: 8)
+            Spacer(minLength: 10)
             Text(row.chord)
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .foregroundStyle(Color.hudPrimary.opacity(0.6))
+                .font(.system(size: 13, weight: .medium, design: .monospaced))
+                .foregroundStyle(Color.hudPrimary.opacity(0.8))
+                .fixedSize(horizontal: true, vertical: false)
         }
-        .padding(.vertical, 5)
+        .padding(.vertical, 6)
     }
 
     // MARK: sections
@@ -525,5 +526,5 @@ private struct KeybindOverlayView: View {
 private extension Color {
     // #ececf1 — the mockup's near-white HUD text
     static let hudPrimary = Color(red: 0xEC / 255.0, green: 0xEC / 255.0, blue: 0xF1 / 255.0)
-    static let hudFaint   = Color(red: 0xEC / 255.0, green: 0xEC / 255.0, blue: 0xF1 / 255.0).opacity(0.35)
+    static let hudFaint   = Color(red: 0xEC / 255.0, green: 0xEC / 255.0, blue: 0xF1 / 255.0).opacity(0.65)
 }
