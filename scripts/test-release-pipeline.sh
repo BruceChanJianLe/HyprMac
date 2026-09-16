@@ -6,6 +6,10 @@ SCRIPT="$(cd "$(dirname "$0")" && pwd)/release.sh"
 grep -q '^set -Eeuo pipefail$' "$SCRIPT"
 grep -q 'ERROR: Sparkle generate_appcast missing' "$SCRIPT"
 grep -q 'git -C "$TEMP_TAP" push origin HEAD:main' "$SCRIPT"
+if grep -Eq 'read .*Keychain password' "$SCRIPT"; then
+    echo "release pipeline still requires an interactive secret prompt" >&2
+    exit 1
+fi
 if grep -Eq 'git .*push.*\|\| true|xcodebuild .*\|.*\|\| true' "$SCRIPT"; then
     echo "release failures can still be swallowed" >&2
     exit 1

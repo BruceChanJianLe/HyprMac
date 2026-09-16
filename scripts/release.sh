@@ -79,17 +79,18 @@ echo "       $SUMMARY"
 
 echo "[4/8] Building, signing, packaging, and notarizing"
 mkdir -p "$DIST_DIR"
-echo "       Unlocking keychain"
-if [[ -n "${KEYCHAIN_PASSWORD:-}" ]]; then
-    KC_PASS="$KEYCHAIN_PASSWORD"
-else
-    read -r -s -p "       Keychain password: " KC_PASS; echo
-fi
 KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
-security unlock-keychain -p "$KC_PASS" "$KEYCHAIN"
-security set-key-partition-list -S apple-tool:,apple:,codesign:,productbuild:,timestamp: \
-    -s -k "$KC_PASS" "$KEYCHAIN" >/dev/null
-unset KC_PASS
+if [[ -n "${KEYCHAIN_PASSWORD:-}" ]]; then
+    echo "       Unlocking keychain"
+    KC_PASS="$KEYCHAIN_PASSWORD"
+    security unlock-keychain -p "$KC_PASS" "$KEYCHAIN"
+    security set-key-partition-list -S apple-tool:,apple:,codesign:,productbuild:,timestamp: \
+        -s -k "$KC_PASS" "$KEYCHAIN" >/dev/null
+    unset KC_PASS
+else
+    echo "       Using existing unlocked keychain authorization"
+    security show-keychain-info "$KEYCHAIN" >/dev/null
+fi
 
 BUILD_OUT=$(mktemp)
 if ! xcodebuild \
