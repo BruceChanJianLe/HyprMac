@@ -60,7 +60,7 @@ class KeybindOverlayController {
         let hosting = KeybindOverlayHostingView(rootView: content)
         // force dark so dynamic accents resolve to their neon variants
         hosting.appearance = NSAppearance(named: .darkAqua)
-        // card is 560 + 6px shadow margin each side; size panel to fit
+        // card is 830 + 6px shadow margin each side; size panel to fit
         let fitted = hosting.fittingSize
         let panelWidth = fitted.width
         let panelHeight = min(max(fitted.height, 1), maxHeight)
@@ -196,7 +196,7 @@ private struct KeybindOverlayView: View {
             columns
         }
         .padding(EdgeInsets(top: 16, leading: 18, bottom: 16, trailing: 18))
-        .frame(width: 560, alignment: .topLeading)
+        .frame(width: 830, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Color(nsColor: NSColor(calibratedWhite: 24.0 / 255.0, alpha: 0.96)))
@@ -249,11 +249,12 @@ private struct KeybindOverlayView: View {
         filter.text.isEmpty ? "type to filter · esc to close" : "filter: \(filter.text)…"
     }
 
-    // MARK: two-column grid
+    // MARK: three-column grid
 
     private var columns: some View {
         HStack(alignment: .top, spacing: 14) {
             column(leftSections)
+            column(centerSections)
             column(rightSections)
         }
     }
@@ -299,22 +300,22 @@ private struct KeybindOverlayView: View {
 
     // MARK: sections
 
-    // left = Focus & Navigation, Workspaces
+    // left = Focus & Navigation, then Apps + System
     private var leftSections: [OverlaySection] {
-        [section(for: .focusNav), section(for: .workspaces)].compactMap { $0 }
-    }
-
-    // right = Window Management, then Apps + System merged as "APPS & SYSTEM"
-    private var rightSections: [OverlaySection] {
-        var result: [OverlaySection] = []
-        if let wm = section(for: .windowManagement) { result.append(wm) }
-        let appsRows = rows(for: .apps)
-        let systemRows = rows(for: .system)
-        let merged = appsRows + systemRows
+        var result = [section(for: .focusNav)].compactMap { $0 }
+        let merged = rows(for: .apps) + rows(for: .system)
         if !merged.isEmpty {
             result.append(OverlaySection(title: "Apps & System", rows: merged))
         }
         return result
+    }
+
+    private var centerSections: [OverlaySection] {
+        [section(for: .windowManagement)].compactMap { $0 }
+    }
+
+    private var rightSections: [OverlaySection] {
+        [section(for: .workspaces)].compactMap { $0 }
     }
 
     private func section(for category: KeybindCategory) -> OverlaySection? {
