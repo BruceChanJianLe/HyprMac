@@ -75,6 +75,7 @@ class FocusBorder {
     private var restoreShakenWindow: (() -> Void)?
     var onShakeRestore: () -> Void = {}
     var onErrorFeedbackFinished: () -> Void = {}
+    var onErrorFeedbackFinishedToken: (Int) -> Void = { _ in }
     private var errorFeedback = FocusBorderFeedbackLifecycle()
     private var errorFeedbackWindowID: CGWindowID?
     var isErrorFeedbackActive: Bool { errorFeedback.isActive }
@@ -435,8 +436,10 @@ class FocusBorder {
     ///   unchanged after a rejection or restoration.
     /// - Parameter message: short reason shown as a pill centered in the
     ///   flashed window — e.g. "Not enough room to swap".
-    func flashError(around rect: CGRect, windowID: CGWindowID, window _: HyprWindow? = nil, message: String? = nil) {
-        guard Self.errorFeedbackCanRender(isEnabled: isEnabled) else { return }
+    @discardableResult
+    func flashError(around rect: CGRect, windowID: CGWindowID, window _: HyprWindow? = nil,
+                    message: String? = nil) -> Int? {
+        guard Self.errorFeedbackCanRender(isEnabled: isEnabled) else { return nil }
         mainThreadOnly()
         renderGeneration += 1
         let generation = renderGeneration
@@ -518,11 +521,20 @@ class FocusBorder {
                     self.errorFeedbackWindowID = nil
                     hyprLog(.notice, .border, "error feedback end: wid=\(finishedID)")
                     self.hide()
+                    self.onErrorFeedbackFinishedToken(generation)
                     self.onErrorFeedbackFinished()
                 }
             }
         }
         timer.resume()
+        return generation
+    }
+
+    @discardableResult
+    func cancelErrorFeedback(token: Int) -> Bool {
+        guard errorFeedback.isActive, renderGeneration == token else { return false }
+        hide()
+        return true
     }
 
     // MARK: - occlusion masking

@@ -63,6 +63,10 @@ class WindowManager {
 
     // verified tiled drag capture and completion.
     private var tiledDragHandler: TiledDragHandler!
+    private var tiledDragFeedback = TiledDragFeedbackReconciler()
+    private var pendingTiledDragCompletion: TiledDragCompletion?
+    private var activeTiledDragFeedback: (key: TiledDragFeedbackKey,
+                                           layoutGeneration: UInt64, borderToken: Int)?
 
     // Action → service routing. dispatch(_:) replaces the handleAction switch.
     private var actionDispatcher: ActionDispatcher!
@@ -359,10 +363,25 @@ class WindowManager {
         }
 
         wireAdmissionRecovery()
+        admissionRecovery.terminalOutcome = { [weak self] workspace, screen, result in
+            self?.reconcileTiledDragRecovery(workspace: workspace, screen: screen,
+                                             result: result)
+        }
 
         self.tiledDragHandler = makeTiledDragHandler()
+        focusBorder.onErrorFeedbackFinishedToken = { [weak self] token in
+            guard let self else { return }
+            if let active = self.activeTiledDragFeedback, active.borderToken == token {
+                self.tiledDragFeedback.feedbackFinished(generation: active.layoutGeneration)
+                self.activeTiledDragFeedback = nil
+                if !self.tiledDragFeedback.hasPendingFeedback {
+                    self.pendingTiledDragCompletion = nil
+                }
+            }
+        }
         focusBorder.onErrorFeedbackFinished = { [weak self] in
-            guard let self, self.isRunning, self.config.showFocusBorder,
+            guard let self else { return }
+            guard self.isRunning, self.config.showFocusBorder,
                   let focused = self.currentFocusedWindow() else { return }
             self.updateFocusBorder(for: focused)
         }
@@ -395,7 +414,9 @@ class WindowManager {
         actionDispatcher.updatePositionCache = { [weak self] in self?.updatePositionCache() }
         actionDispatcher.screenUnderCursor = { [weak self] in self?.screenUnderCursor() ?? NSScreen.main! }
         actionDispatcher.applyForgottenIDCleanup = { [weak self] id in self?.applyForgottenIDExternalCleanup(id) }
-        actionDispatcher.animatedRetile = { [weak self] windows in self?.animatedRetile(windows: windows) }
+        actionDispatcher.animatedRetile = { [weak self] windows in
+            self?.animatedRetile(windows: windows) ?? []
+        }
         actionDispatcher.refocusUnderCursor = { [weak self] in self?.mouseTracker.refocusUnderCursor() }
         actionDispatcher.isMenuTracking = { [weak self] in self?.mouseTracker.menuTracking ?? false }
         actionDispatcher.toggleScratchpad = { [weak self] in self?.scratchpad.toggle() }
@@ -696,6 +717,9 @@ class WindowManager {
         dumpStateSignalSource?.cancel()
         dumpStateSignalSource = nil
         tiledDragHandler.cancel()
+        tiledDragFeedback.cancel()
+        pendingTiledDragCompletion = nil
+        activeTiledDragFeedback = nil
         _ = tilingEngine.beginLayoutGeneration()
         restoreAllWindows()
         axNotifications.detachAll()
@@ -1608,7 +1632,8 @@ class WindowManager {
     /// - Parameter windows: Pre-fetched window list. When `nil`, AX is
     ///   re-queried. Callers that already have a fresh list pass it to
     ///   avoid the round trip.
-    func tileAllVisibleSpaces(windows: [HyprWindow]? = nil) {
+    @discardableResult
+    func tileAllVisibleSpaces(windows: [HyprWindow]? = nil) -> [TilingEngine.AdmissionResult] {
         // mid-display-transition, screens carry new origins but trees haven't
         // migrated — tiling now creates fresh empty trees at the new keys and
         // batch-inserts everything in snapshot order, and that duplicate then
@@ -1617,7 +1642,7 @@ class WindowManager {
         if displayTransitionPending {
             retileSkippedDuringTransition = true
             hyprLog(.notice, .lifecycle, "retile deferred mid-display-transition")
-            return
+            return []
         }
         let allWindows = windows ?? accessibility.getAllWindows()
         tilingEngine.primeMinimumSizes(allWindows)
@@ -1629,6 +1654,7 @@ class WindowManager {
         }
 
         // for each enabled monitor, tile the windows that belong to its active workspace
+        var results: [TilingEngine.AdmissionResult] = []
         for screen in displayManager.screens {
             if workspaceManager.isMonitorDisabled(screen) { continue }
             let workspace = workspaceManager.workspaceForScreen(screen)
@@ -1645,13 +1671,14 @@ class WindowManager {
             // a workspace being shown is where an explicit move to a hidden
             // destination finally gets its one attempt. the marker is spent
             // on this pass whatever it says.
-            admissionPass.run(workspaceWindows, onWorkspace: workspace, screen: screen)
+            results.append(admissionPass.run(workspaceWindows, onWorkspace: workspace, screen: screen))
         }
 
         updatePositionCache(windows: allWindows)
         // a workspace that just became visible is new evidence about any
         // newcomer parked on it
         offerRecoveryEvidence()
+        return results
     }
 
     /// Retile with a slide animation between old and new tile rects.
@@ -1659,14 +1686,16 @@ class WindowManager {
     /// Run `prepare`, retile every visible workspace, run `completion`.
     /// Animations were stripped — this is now just a sequenced retile.
     /// Name kept so existing call sites compile unchanged.
+    @discardableResult
     private func animatedRetile(
         windows: [HyprWindow]? = nil,
         prepare: (() -> Void)? = nil,
         completion: (() -> Void)? = nil
-    ) {
+    ) -> [TilingEngine.AdmissionResult] {
         prepare?()
-        tileAllVisibleSpaces(windows: windows)
+        let results = tileAllVisibleSpaces(windows: windows)
         completion?()
+        return results
     }
 
     /// Spread every tiling-eligible window across workspaces so no single
@@ -2239,7 +2268,7 @@ class WindowManager {
             excludedBundleIDs: Set(config.excludedBundleIDs),
             focusedWindowID: focusController.lastFocusedID
         )
-        actionDispatcher.applyChanges(changes, allWindows: allWindows)
+        let retileResults = actionDispatcher.applyChanges(changes, allWindows: allWindows)
         // a poll is the real event that says a window came back, became
         // readable, or went away — the only thing that can unblock a
         // recovery waiting on evidence
@@ -2249,6 +2278,7 @@ class WindowManager {
         // question for a poll that changed nothing.
         if !changes.needsRetile { applyTiledDrift(allWindows) }
         repairParkedWindows(allWindows)
+        reconcileTiledDragFeedback(with: retileResults, allWindows: allWindows)
         // a guarded cycle diffed nothing, so it can't have seen the close —
         // don't spend a recheck attempt on it, and don't let the slower
         // destroy re-poll coalesce away the prompt one.
@@ -2683,6 +2713,31 @@ private extension WindowManager {
 
     private func completeTiledDrag(_ completion: TiledDragCompletion) {
         let affected = completion.snapshot.context.memberIDs
+        if tiledDragFeedback.hasPendingFeedback {
+            switch completion.outcome {
+            case .degraded:
+                // beginDegraded reports the earlier failure before replacing it.
+                break
+            case .committed, .rejectedRestored:
+                let key = TiledDragFeedbackKey(
+                    workspace: completion.snapshot.context.workspace,
+                    displayID: completion.snapshot.context.physicalDisplayID)
+                let actions: [TiledDragDeferredFeedbackAction]
+                if tiledDragFeedback.isPending(for: key) {
+                    actions = tiledDragFeedback.reconcile(.accepted(
+                        key: key, generation: tilingEngine.currentLayoutGeneration,
+                        publishedIDs: affected, expectedIDs: affected))
+                } else {
+                    actions = tiledDragFeedback.reconcile(.noResult)
+                }
+                applyTiledDragFeedbackActions(actions, completion: pendingTiledDragCompletion)
+                if !tiledDragFeedback.hasPendingFeedback {
+                    pendingTiledDragCompletion = nil
+                }
+            case .ignored, .superseded:
+                break
+            }
+        }
         hyprLog(.debug, .tiling, "tiled drag result: dragged=\(completion.snapshot.draggedID) "
                 + "members=\(affected.sorted()) outcome=\(Self.outcomeName(completion.outcome))")
         switch completion.outcome {
@@ -2735,8 +2790,15 @@ private extension WindowManager {
             focusBorder.flashError(around: frame, windowID: completion.snapshot.draggedID, window: nil,
                                    message: "Arrangement rejected; previous positions restored")
         case .degraded:
-            NSSound.beep()
-            reportTiledDragFailure(completion)
+            let key = TiledDragFeedbackKey(
+                workspace: completion.snapshot.context.workspace,
+                displayID: completion.snapshot.context.physicalDisplayID)
+            applyTiledDragFeedbackActions(tiledDragFeedback.beginDegraded(
+                key: key, generation: tilingEngine.currentLayoutGeneration,
+                affectedIDs: affected), completion: pendingTiledDragCompletion)
+            pendingTiledDragCompletion = completion
+            hyprLog(.notice, .tiling, "tiled drag degraded feedback deferred until reconciliation")
+            pollingScheduler.schedule()
         case nil:
             break
         }
@@ -2760,11 +2822,87 @@ private extension WindowManager {
                                windowID: 0, window: nil, message: "Could not verify window positions")
     }
 
-    private func reportTiledDragFailure(_ completion: TiledDragCompletion) {
+    private func reportTiledDragFailure(_ completion: TiledDragCompletion) -> Int? {
         let frame = completion.snapshot.originalFrames[completion.snapshot.draggedID]
             ?? completion.snapshot.context.usableFrame
-        focusBorder.flashError(around: frame, windowID: completion.snapshot.draggedID,
-                               window: nil, message: "Could not restore the tiled layout")
+        return focusBorder.flashError(around: frame, windowID: completion.snapshot.draggedID,
+                                      window: nil, message: "Could not restore the tiled layout")
+    }
+
+    private func reconcileTiledDragFeedback(with results: [TilingEngine.AdmissionResult],
+                                            allWindows: [HyprWindow]) {
+        guard tiledDragFeedback.hasPendingFeedback else { return }
+        let events = results.map { result -> TiledDragFeedbackReconciliation in
+            let key = TiledDragFeedbackKey(
+                workspace: result.workspace,
+                displayID: tiledDragDisplayID(result.screen))
+            if result.failure == nil, result.strandedIDs.isEmpty {
+                let assigned = workspaceManager.windowIDs(onWorkspace: result.workspace)
+                let expected = Set(allWindows.filter {
+                    assigned.contains($0.windowID) && !isFloating($0.windowID)
+                }.map(\.windowID))
+                return .accepted(key: key, generation: result.generation,
+                                 publishedIDs: result.publishedIDs, expectedIDs: expected)
+            }
+            return .failed(key: key, generation: result.generation,
+                           requiredIDs: result.publishedIDs.union(result.strandedIDs),
+                           recoveryPending: result.strandedIDs.contains {
+                               admissionRecovery.phase(of: $0) == .awaitingRetry
+                           })
+        }
+        var activeRetry = false
+        if let key = tiledDragFeedback.pendingKey,
+           let screen = displayManager.screens.first(where: {
+               tiledDragDisplayID($0) == key.displayID
+           }) {
+            activeRetry = admissionRecovery.hasActiveRetry(workspace: key.workspace, screen: screen)
+        }
+        let actions = tiledDragFeedback.reconcileNewest(events, activeRetry: activeRetry)
+        if !actions.isEmpty {
+            applyTiledDragFeedbackActions(actions, completion: pendingTiledDragCompletion)
+            pendingTiledDragCompletion = nil
+        }
+    }
+
+    private func reconcileTiledDragRecovery(workspace: Int, screen: NSScreen,
+                                            result: TilingEngine.AdmissionResult?) {
+        guard tiledDragFeedback.hasPendingFeedback else { return }
+        let key = TiledDragFeedbackKey(workspace: workspace,
+                                       displayID: tiledDragDisplayID(screen))
+        let event: TiledDragFeedbackReconciliation
+        if let result, result.failure == nil, result.strandedIDs.isEmpty {
+            let expected = Set(accessibility.getAllWindows().filter {
+                workspaceManager.workspaceFor($0.windowID) == workspace && !isFloating($0.windowID)
+            }.map(\.windowID))
+            event = .accepted(key: key, generation: result.generation,
+                              publishedIDs: result.publishedIDs, expectedIDs: expected)
+        } else {
+            event = .terminalFailure(key: key)
+        }
+        let actions = tiledDragFeedback.reconcile(event)
+        guard !actions.isEmpty else { return }
+        applyTiledDragFeedbackActions(actions, completion: pendingTiledDragCompletion)
+        pendingTiledDragCompletion = nil
+    }
+
+    private func applyTiledDragFeedbackActions(_ actions: [TiledDragDeferredFeedbackAction],
+                                               completion: TiledDragCompletion?) {
+        for action in actions {
+            switch action {
+            case let .showDegraded(key, generation):
+                guard let completion else { continue }
+                NSSound.beep()
+                if let token = reportTiledDragFailure(completion) {
+                    activeTiledDragFeedback = (key, generation, token)
+                }
+            case let .cancelDegraded(key):
+                hyprLog(.notice, .tiling, "tiled drag degraded feedback cancelled: verified reconciliation")
+                if let active = activeTiledDragFeedback, active.key == key,
+                   focusBorder.cancelErrorFeedback(token: active.borderToken) {
+                    activeTiledDragFeedback = nil
+                }
+            }
+        }
     }
 }
 
@@ -2852,7 +2990,8 @@ private extension WindowManager {
             self.updatePositionCache(windows: allWindows)
             return AdmissionRecovery.AttemptResult(
                 placed: result.publishedIDs.intersection(bypass.keys),
-                failure: result.failure)
+                failure: result.failure,
+                admission: result)
         }
         admissionRecovery.floatInPlace = { [weak self] window, reason in
             guard let self else { return }

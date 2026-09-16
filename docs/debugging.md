@@ -624,6 +624,71 @@ now adjust their private ratios for known minimum sizes before AX writes,
 then pass through the existing readback and restoration checks. This does
 not publish unverified frames or change admission recovery.
 
+### Tab detach followed by a false restoration warning
+
+A September 15, 2026 capture separates two Safari events. Window `64757`
+was admitted with complete, stable readback at 18:58:11.138 CDT. It did not
+produce the restoration failure. A later tab detach produced this sequence:
+
+- 18:58:21.710 and .735: AX window-created notifications arrived during the drag.
+- 18:58:22.240: drag `61918` ended degraded. Its release-time frame read failed;
+  restoring the captured three-window layout failed on `51138` when the
+  Enhanced UI read returned `-25204`. No restoration writes completed.
+- 18:58:22.723: error feedback began for `61918`.
+- 18:58:22.780: the deferred discovery poll ran.
+- 18:58:22.852: discovery's ordinary admission transaction, generation `3457`,
+  verified all four windows (`51138`, `61918`, `64724`, and newcomer `64765`)
+  with complete, stable readback.
+- 18:58:24.350: the error feedback ended, about 1.5 seconds after recovery.
+
+This was successor-transaction recovery, not a logged admission retry. The
+release path in `TiledDragTransaction.dropRelease` calls restoration when
+its classification read fails. Failed restoration returns `.degraded`.
+`WindowManager.completeTiledDrag` originally treated that local result as
+final and immediately emitted the restoration warning. `PollingScheduler`
+keeps discovery suppressed until drag completion, so the queued discovery
+could only establish the successful full-operation outcome afterward.
+The focus border's bounded error interval then preserved the stale warning.
+
+Degraded drag feedback now waits for the existing post-drag discovery poll.
+The poll passes its actual admission results to feedback reconciliation; only
+a newer result for the same workspace and physical display can resolve it.
+Cancellation requires accepted, complete membership, including newcomers a
+failed successor admission stranded. A successful retile of only the old
+incumbents cannot conceal floating fallback. The existing bounded admission
+retry may finish the operation; unreadable or held recovery reports failure
+without waiting indefinitely.
+
+Failure diagnostics and cache invalidation remain immediate. A persistent
+failure emits once. If a later transaction verifies the complete operation
+while its warning is visible, cancellation uses that flash's render token.
+It cannot hide a newer unrelated error. No app identity, title, or added
+timing grace period participates in the decision.
+
+Verification on the isolated branch based on `46c2496`:
+
+- The exact release-read failure, restoration-write failure, and accepted
+  four-window successor sequence fails on the unmodified baseline solely
+  because the warning survives (`build/investigation/exact-baseline-red.log`).
+- The fixed-screen regression passes for Safari and TextEdit newcomers.
+  Focused feedback, drag, admission recovery, and border tests: 120 tests,
+  zero failures (`build/sizing/isolated-tests/safari-feedback-final.log`).
+- `scripts/test-isolated.sh --debug-variant`: 884 tests, 23 existing skips,
+  zero failures (`build/investigation/verified-suite.log`).
+- The dedicated Debug scheme builds unsigned for arm64 and x86_64
+  (`build/investigation/verified-debug-build.log`).
+- Independent source review and `git diff --check` pass. The tests exercise
+  real sizing transactions plus feedback and border components; they do not
+  replace live verification of the complete macOS notification path.
+
+Live acceptance for this fix remains separate from isolated tests. With an
+approved debug build, detach a Safari tab to the desktop and also create a
+window in another app. Verify every resulting tile, check that no restoration
+warning survives a verified successor layout, and correlate the drag,
+discovery, admission, and feedback logs. Also check a genuinely unrecovered
+layout failure still produces feedback. This investigation only read existing
+laptop logs; it did not deploy, launch, restart, or move any live window.
+
 ### "Why didn't a swap take effect?"
 
 ```

@@ -231,6 +231,7 @@ class TilingEngine {
     /// not inherit the other's reach. Set for one retry only.
     private var minimaBypass: [CGWindowID: UInt64]?
     private var layoutGeneration: UInt64 = 0
+    var currentLayoutGeneration: UInt64 { layoutGeneration }
     private let frameSizingIOFactory: ([CGWindowID: HyprWindow], @escaping () -> UInt64) -> FrameSizingIO
     private let tiledDragDisplayID: (NSScreen) -> CGDirectDisplayID
 

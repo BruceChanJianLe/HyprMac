@@ -322,6 +322,46 @@ final class TilingEngineTiledDragTests: XCTestCase {
                                                   screen: fixture.screen) === oldTree)
     }
 
+    func testDegradedReleaseThenVerifiedSuccessorLayoutProducesNoErrorFeedback() throws {
+        for bundleID in ["com.apple.Safari", "com.apple.TextEdit"] {
+            let fixture = try makeFixture(screen: DragTestScreen())
+            let snapshot = try capture(fixture)
+            fixture.trace.frames[1]?.origin.x += 2
+            fixture.trace.nextReadError = .cannotComplete
+            fixture.trace.remainingWriteFailures = 1
+
+            let release = fixture.engine.dropTiledDrag(
+                snapshot, mode: .insert(targetID: 2, edge: .left),
+                currentLocation: { (1, fixture.screen, []) })
+            guard case let .degraded(candidate, restoration, _, _) = release else {
+                return XCTFail("expected degraded release")
+            }
+            XCTAssertEqual(candidate, .sizing(.readFailed(1, .cannotComplete)))
+            XCTAssertEqual(restoration, .writeFailed(1, .cannotComplete))
+
+            var reconciler = TiledDragFeedbackReconciler()
+            let key = TiledDragFeedbackKey(workspace: 1,
+                                           displayID: snapshot.context.physicalDisplayID)
+            var feedback: [TiledDragDeferredFeedbackAction] = []
+            feedback += reconciler.beginDegraded(
+                key: key, generation: fixture.engine.currentLayoutGeneration,
+                affectedIDs: snapshot.context.memberIDs)
+            let successor = makeWindow(id: 4)
+            successor.bundleID = bundleID
+            fixture.trace.frames[4] = fixture.engine.displayManager.cgRect(for: fixture.screen)
+            let recovered = fixture.engine.tileWindows(
+                [makeWindow(id: 1), makeWindow(id: 2), makeWindow(id: 3), successor],
+                onWorkspace: 1, screen: fixture.screen)
+
+            XCTAssertTrue(recovered.published, bundleID)
+            XCTAssertEqual(recovered.publishedIDs, [1, 2, 3, 4], bundleID)
+            feedback += reconciler.reconcile(.accepted(
+                key: key, generation: recovered.generation,
+                publishedIDs: recovered.publishedIDs, expectedIDs: [1, 2, 3, 4]))
+            XCTAssertEqual(feedback, [.cancelDegraded(key: key)], bundleID)
+        }
+    }
+
     func testGenerationChangeDuringRestorationMapsEngineOutcomeToSuperseded() throws {
         let fixture = try makeFixture()
         let snapshot = try capture(fixture)
@@ -360,9 +400,10 @@ final class TilingEngineTiledDragTests: XCTestCase {
     }
 
     private func makeFixture(
-        selectedDisplayID: (() -> CGDirectDisplayID)? = nil
+        selectedDisplayID: (() -> CGDirectDisplayID)? = nil,
+        screen suppliedScreen: NSScreen? = nil
     ) throws -> Fixture {
-        let screen = NSScreen.main ?? NSScreen.screens.first ?? DragTestScreen()
+        let screen = suppliedScreen ?? NSScreen.main ?? NSScreen.screens.first ?? DragTestScreen()
         let trace = DragSizingTrace()
         let fixtureDisplayID = (screen.deviceDescription[
             NSDeviceDescriptionKey("NSScreenNumber")

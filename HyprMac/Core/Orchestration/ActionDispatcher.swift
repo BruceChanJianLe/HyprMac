@@ -76,7 +76,7 @@ final class ActionDispatcher {
     var screenUnderCursor: () -> NSScreen = { NSScreen.main! }
     // additional closures used by applyChanges (Phase 4 step 3b)
     var applyForgottenIDCleanup: (CGWindowID) -> Void = { _ in }
-    var animatedRetile: ([HyprWindow]) -> Void = { _ in }
+    var animatedRetile: ([HyprWindow]) -> [TilingEngine.AdmissionResult] = { _ in [] }
     var refocusUnderCursor: () -> Void = {}
     var isMenuTracking: () -> Bool = { false }
     var toggleScratchpad: () -> Void = {}
@@ -126,7 +126,8 @@ final class ActionDispatcher {
     /// - Parameter allWindows: the same window snapshot
     ///   `WindowDiscoveryService` consumed; passed through so
     ///   `animatedRetile` and workspace assignment do not re-query AX.
-    func applyChanges(_ changes: WindowChanges, allWindows: [HyprWindow]) {
+    func applyChanges(_ changes: WindowChanges, allWindows: [HyprWindow])
+        -> [TilingEngine.AdmissionResult] {
         // CGWindowIDs get recycled. an id discovery calls new is a different
         // window from the one that held it, so it must not inherit that
         // window's verified admission — an inherited incumbency costs it its
@@ -163,6 +164,7 @@ final class ActionDispatcher {
             workspaceManager.moveWindow(drift.windowID, toWorkspace: drift.toWorkspace)
         }
 
+        var retileResults: [TilingEngine.AdmissionResult] = []
         if changes.needsRetile {
             // one line per visual re-layout naming its cause — the timeline
             // anchor for diagnosing retile churn (flap investigation).
@@ -174,7 +176,7 @@ final class ActionDispatcher {
             ].compactMap { $0 }.joined(separator: " ")
             hyprLog(.notice, .discovery, "discovery retile: \(causes)")
             // animate surrounding windows sliding to fill gaps / make room.
-            animatedRetile(allWindows)
+            retileResults = animatedRetile(allWindows)
         }
 
         // if the FFM-tracked window disappeared, refocus to whatever tiled window
@@ -192,6 +194,7 @@ final class ActionDispatcher {
         if !stateCache.floatingWindowIDs.isEmpty {
             floatingController.raiseBehind()
         }
+        return retileResults
     }
 
     /// Route a single `Action` to the service that handles it. Called

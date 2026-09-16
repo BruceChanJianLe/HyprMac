@@ -7,6 +7,20 @@ import Cocoa
 // invariants and the no-op-on-same-id contract.
 
 final class FocusStateControllerTests: XCTestCase {
+    func testErrorFeedbackTokenCannotCancelNewerUnrelatedFeedback() throws {
+        let border = FocusBorder()
+        let frame = CGRect(x: 20, y: 20, width: 300, height: 200)
+        let tiledDragToken = try XCTUnwrap(border.flashError(
+            around: frame, windowID: 41, message: "Could not restore the tiled layout"))
+        let unrelatedToken = try XCTUnwrap(border.flashError(
+            around: frame, windowID: 42, message: "Not enough room"))
+
+        XCTAssertFalse(border.cancelErrorFeedback(token: tiledDragToken))
+        XCTAssertTrue(border.isErrorFeedbackActive)
+        XCTAssertTrue(border.cancelErrorFeedback(token: unrelatedToken))
+        XCTAssertFalse(border.isErrorFeedbackActive)
+    }
+
     private func makeController() -> FocusStateController {
         FocusStateController(focusBorder: FocusBorder())
     }

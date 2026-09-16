@@ -169,6 +169,127 @@ struct TiledDragFeedbackPolicy {
     }
 }
 
+struct TiledDragFeedbackKey: Equatable {
+    let workspace: Int
+    let displayID: CGDirectDisplayID
+}
+
+enum TiledDragFeedbackReconciliation {
+    case accepted(key: TiledDragFeedbackKey, generation: UInt64,
+                  publishedIDs: Set<CGWindowID>, expectedIDs: Set<CGWindowID>)
+    case failed(key: TiledDragFeedbackKey, generation: UInt64,
+                requiredIDs: Set<CGWindowID>, recoveryPending: Bool)
+    case terminalFailure(key: TiledDragFeedbackKey)
+    case noResult
+}
+
+enum TiledDragDeferredFeedbackAction: Equatable {
+    case showDegraded(key: TiledDragFeedbackKey, generation: UInt64)
+    case cancelDegraded(key: TiledDragFeedbackKey)
+}
+
+struct TiledDragFeedbackReconciler {
+    private struct Pending {
+        let key: TiledDragFeedbackKey
+        var generation: UInt64
+        var affectedIDs: Set<CGWindowID>
+        var shownGeneration: UInt64?
+    }
+
+    private var pending: Pending?
+    var hasPendingFeedback: Bool { pending != nil }
+    func isPending(for key: TiledDragFeedbackKey) -> Bool { pending?.key == key }
+    var pendingKey: TiledDragFeedbackKey? { pending?.key }
+    var shownGeneration: UInt64? { pending?.shownGeneration }
+
+    mutating func beginDegraded(key: TiledDragFeedbackKey, generation: UInt64,
+                                affectedIDs: Set<CGWindowID>) -> [TiledDragDeferredFeedbackAction] {
+        if let pending, pending.key == key, generation <= pending.generation {
+            return []
+        }
+        let actions: [TiledDragDeferredFeedbackAction]
+        if let pending, pending.key != key, pending.shownGeneration == nil {
+            actions = [.showDegraded(key: pending.key, generation: pending.generation)]
+        } else {
+            actions = []
+        }
+        pending = Pending(key: key, generation: generation,
+                          affectedIDs: affectedIDs, shownGeneration: nil)
+        return actions
+    }
+
+    mutating func reconcile(_ event: TiledDragFeedbackReconciliation)
+        -> [TiledDragDeferredFeedbackAction] {
+        guard let pending else { return [] }
+        let key: TiledDragFeedbackKey
+        let generation: UInt64
+        switch event {
+        case let .accepted(eventKey, eventGeneration, _, _),
+             let .failed(eventKey, eventGeneration, _, _):
+            key = eventKey
+            generation = eventGeneration
+        case let .terminalFailure(eventKey):
+            guard eventKey == pending.key else { return [] }
+            return showOnce()
+        case .noResult:
+            return showOnce()
+        }
+        guard key == pending.key, generation > pending.generation else { return [] }
+
+        switch event {
+        case let .accepted(_, _, publishedIDs, expectedIDs):
+            if publishedIDs == expectedIDs,
+               publishedIDs.isSuperset(of: pending.affectedIDs) {
+                self.pending = nil
+                return [.cancelDegraded(key: pending.key)]
+            }
+            self.pending?.generation = generation
+            return showOnce()
+        case let .failed(_, _, requiredIDs, recoveryPending):
+            self.pending?.affectedIDs.formUnion(requiredIDs)
+            guard !recoveryPending else {
+                self.pending?.generation = generation
+                return []
+            }
+            self.pending?.generation = generation
+            return showOnce()
+        case .terminalFailure, .noResult:
+            return []
+        }
+    }
+
+    mutating func reconcileNewest(_ events: [TiledDragFeedbackReconciliation],
+                                  activeRetry: Bool) -> [TiledDragDeferredFeedbackAction] {
+        guard let pending else { return [] }
+        let matching = events.compactMap { event -> (UInt64, TiledDragFeedbackReconciliation)? in
+            switch event {
+            case let .accepted(key, generation, _, _), let .failed(key, generation, _, _):
+                return key == pending.key ? (generation, event) : nil
+            case .terminalFailure, .noResult:
+                return nil
+            }
+        }
+        if let newest = matching.max(by: { $0.0 < $1.0 })?.1 {
+            return reconcile(newest)
+        }
+        return activeRetry ? [] : reconcile(.noResult)
+    }
+
+    mutating func cancel() {
+        pending = nil
+    }
+
+    mutating func feedbackFinished(generation: UInt64) {
+        if pending?.shownGeneration == generation { pending = nil }
+    }
+
+    private mutating func showOnce() -> [TiledDragDeferredFeedbackAction] {
+        guard let pending, pending.shownGeneration == nil else { return [] }
+        self.pending?.shownGeneration = pending.generation
+        return [.showDegraded(key: pending.key, generation: pending.generation)]
+    }
+}
+
 final class TiledDragSessionCoordinator {
     typealias Capture = (CGPoint) -> TiledDragCaptureResult
     typealias Apply = (TiledDragSnapshot, TiledDragMode?) -> TiledDragDropOutcome

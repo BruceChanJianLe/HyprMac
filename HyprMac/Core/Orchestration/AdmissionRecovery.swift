@@ -90,6 +90,7 @@ final class AdmissionRecovery {
         var placed: Set<CGWindowID> = []
         /// why the attempt was refused, for the fallback log line.
         var failure: FrameSizingFailure?
+        var admission: TilingEngine.AdmissionResult? = nil
     }
 
     private struct Record {
@@ -143,6 +144,8 @@ final class AdmissionRecovery {
     /// Ask the engine to drop the key's unverified mark. It refuses when a
     /// rollback on that key did not verify, so the answer is its to give.
     var clearUnverified: (Int, NSScreen) -> Void = { _, _ in }
+    var terminalOutcome: (_ workspace: Int, _ screen: NSScreen,
+                          _ result: TilingEngine.AdmissionResult?) -> Void = { _, _, _ in }
 
     // MARK: - state
 
@@ -156,6 +159,11 @@ final class AdmissionRecovery {
     var pendingWindowIDs: Set<CGWindowID> { Set(records.keys) }
 
     func phase(of windowID: CGWindowID) -> Phase? { records[windowID]?.phase }
+    func hasActiveRetry(workspace: Int, screen: NSScreen) -> Bool {
+        records.values.contains {
+            $0.workspace == workspace && $0.screen == screen && $0.phase == .awaitingRetry
+        }
+    }
 
     // MARK: - admission reporting
 
@@ -290,6 +298,9 @@ final class AdmissionRecovery {
                     floated[workspace] = entry.screen
                 }
             }
+            if entry.bypass.keys.allSatisfy({ records[$0] == nil }), floated[workspace] == nil {
+                terminalOutcome(workspace, entry.screen, result.admission)
+            }
         }
 
         for (workspace, screen) in floated.sorted(by: { $0.key < $1.key }) {
@@ -308,7 +319,10 @@ final class AdmissionRecovery {
     /// either a verified tile or a recovery member.
     private func retileWhatIsLeft(_ workspace: Int, _ screen: NSScreen) {
         let held = retileAfterFallback(workspace, screen).filter { records[$0] == nil }
-        guard !held.isEmpty else { return }
+        guard !held.isEmpty else {
+            terminalOutcome(workspace, screen, nil)
+            return
+        }
         for id in held {
             records[id] = Record(workspace: workspace, screen: screen,
                                  sinceGeneration: 0, firstFailure: nil,
@@ -316,6 +330,7 @@ final class AdmissionRecovery {
         }
         hyprLog(.notice, .tiling, "admission recovery held: ids=\(Self.list(held))"
                 + " ws\(workspace) — in no tree, not floated")
+        terminalOutcome(workspace, screen, nil)
     }
 
     private enum Readiness {
@@ -345,6 +360,9 @@ final class AdmissionRecovery {
         guard records[id]?.phase != .awaitingEvidence else { return }
         records[id]?.phase = .awaitingEvidence
         hyprLog(.notice, .tiling, "admission recovery pending: \(id) not judgeable yet — waiting for evidence")
+        if let record = records[id] {
+            terminalOutcome(record.workspace, record.screen, nil)
+        }
     }
 
     /// Second failure. A readable visible newcomer is left floating exactly

@@ -2,6 +2,177 @@ import XCTest
 @testable import HyprMac
 
 final class DragSwapHandlerInsertionTests: XCTestCase {
+    func testDeferredDegradedFeedbackRequiresFreshCompleteSameKeyRecovery() {
+        let key = TiledDragFeedbackKey(workspace: 2, displayID: 7)
+        let other = TiledDragFeedbackKey(workspace: 3, displayID: 7)
+        var feedback = TiledDragFeedbackReconciler()
+        XCTAssertEqual(feedback.beginDegraded(key: key, generation: 40,
+                                              affectedIDs: [11, 12, 13]), [])
+
+        XCTAssertEqual(feedback.reconcile(.accepted(
+            key: other, generation: 41, publishedIDs: [11, 12, 13, 14],
+            expectedIDs: [11, 12, 13, 14])), [])
+        XCTAssertEqual(feedback.reconcile(.accepted(
+            key: key, generation: 40, publishedIDs: [11, 12, 13, 14],
+            expectedIDs: [11, 12, 13, 14])), [])
+        XCTAssertEqual(feedback.reconcile(.failed(
+            key: key, generation: 41, requiredIDs: [11, 12, 13, 14], recoveryPending: true)), [])
+        XCTAssertTrue(feedback.hasPendingFeedback)
+
+        XCTAssertEqual(feedback.reconcile(.accepted(
+            key: key, generation: 42, publishedIDs: [11, 12, 13],
+            expectedIDs: [11, 12, 13, 14])), [.showDegraded(key: key, generation: 42)])
+        XCTAssertTrue(feedback.hasPendingFeedback)
+        feedback.feedbackFinished(generation: 42)
+        XCTAssertFalse(feedback.hasPendingFeedback)
+    }
+
+    func testDeferredFeedbackCancelsVerifiedRecoveryAndReportsEveryTerminalPathOnce() {
+        let key = TiledDragFeedbackKey(workspace: 2, displayID: 7)
+        var feedback = TiledDragFeedbackReconciler()
+        _ = feedback.beginDegraded(key: key, generation: 40, affectedIDs: [11, 12, 13])
+        XCTAssertEqual(feedback.reconcile(.accepted(
+            key: key, generation: 41, publishedIDs: [11, 12, 13, 14],
+            expectedIDs: [11, 12, 13, 14])), [.cancelDegraded(key: key)])
+
+        _ = feedback.beginDegraded(key: key, generation: 50, affectedIDs: [11])
+        XCTAssertEqual(feedback.reconcile(.failed(
+            key: key, generation: 51, requiredIDs: [11], recoveryPending: false)),
+            [.showDegraded(key: key, generation: 51)])
+        XCTAssertEqual(feedback.reconcile(.terminalFailure(key: key)), [])
+        feedback.feedbackFinished(generation: 51)
+
+        _ = feedback.beginDegraded(key: key, generation: 60, affectedIDs: [11])
+        XCTAssertEqual(feedback.reconcile(.terminalFailure(key: key)),
+                       [.showDegraded(key: key, generation: 60)])
+        feedback.feedbackFinished(generation: 60)
+        _ = feedback.beginDegraded(key: key, generation: 70, affectedIDs: [11])
+        XCTAssertEqual(feedback.reconcile(.noResult),
+                       [.showDegraded(key: key, generation: 70)])
+    }
+
+    func testSecondDegradedOutcomeCoalescesWithoutLosingFirstFailure() {
+        let key = TiledDragFeedbackKey(workspace: 2, displayID: 7)
+        var feedback = TiledDragFeedbackReconciler()
+        _ = feedback.beginDegraded(key: key, generation: 40, affectedIDs: [11])
+        XCTAssertEqual(feedback.beginDegraded(key: key, generation: 40,
+                                              affectedIDs: [11]), [])
+        XCTAssertEqual(feedback.beginDegraded(key: key, generation: 41,
+                                              affectedIDs: [11]), [])
+        XCTAssertTrue(feedback.hasPendingFeedback)
+        feedback.cancel()
+        XCTAssertFalse(feedback.hasPendingFeedback)
+    }
+
+    func testPostPollUsesNewestSameKeyOutcomeAndOnlyWaitsForActiveRetry() {
+        let key = TiledDragFeedbackKey(workspace: 2, displayID: 7)
+        let other = TiledDragFeedbackKey(workspace: 8, displayID: 9)
+        var feedback = TiledDragFeedbackReconciler()
+        _ = feedback.beginDegraded(key: key, generation: 10, affectedIDs: [11])
+
+        XCTAssertEqual(feedback.reconcileNewest([
+            .accepted(key: key, generation: 11, publishedIDs: [11], expectedIDs: [11]),
+            .failed(key: key, generation: 12, requiredIDs: [11], recoveryPending: true),
+            .accepted(key: other, generation: 99, publishedIDs: [11], expectedIDs: [11])
+        ], activeRetry: true), [])
+        XCTAssertTrue(feedback.hasPendingFeedback)
+
+        XCTAssertEqual(feedback.reconcileNewest([], activeRetry: true), [])
+        XCTAssertEqual(feedback.reconcileNewest([], activeRetry: false),
+                       [.showDegraded(key: key, generation: 12)])
+        XCTAssertEqual(feedback.reconcile(.accepted(
+            key: key, generation: 13, publishedIDs: [11], expectedIDs: [11])),
+            [.cancelDegraded(key: key)])
+        XCTAssertFalse(feedback.hasPendingFeedback)
+    }
+
+    func testRetrySuccessAndAnyAppsSameKeyCreationCanVerifyRecovery() {
+        let key = TiledDragFeedbackKey(workspace: 2, displayID: 7)
+        var feedback = TiledDragFeedbackReconciler()
+        _ = feedback.beginDegraded(key: key, generation: 10, affectedIDs: [11, 12])
+        XCTAssertEqual(feedback.reconcile(.failed(
+            key: key, generation: 11, requiredIDs: [11, 12, 99], recoveryPending: true)), [])
+
+        // The verifier is deliberately app-agnostic: a new member from any
+        // app is recovery when the whole key publishes exactly what is due.
+        XCTAssertEqual(feedback.reconcile(.accepted(
+            key: key, generation: 12, publishedIDs: [11, 12, 99],
+            expectedIDs: [11, 12, 99])), [.cancelDegraded(key: key)])
+    }
+
+    func testOlderFeedbackFinishCannotClearNewerDegradedOutcome() {
+        let key = TiledDragFeedbackKey(workspace: 2, displayID: 7)
+        var feedback = TiledDragFeedbackReconciler()
+        _ = feedback.beginDegraded(key: key, generation: 10, affectedIDs: [11])
+        XCTAssertEqual(feedback.reconcile(.noResult),
+                       [.showDegraded(key: key, generation: 10)])
+        XCTAssertEqual(feedback.beginDegraded(key: key, generation: 11,
+                                              affectedIDs: [11]), [])
+
+        feedback.feedbackFinished(generation: 10)
+
+        XCTAssertTrue(feedback.hasPendingFeedback)
+        XCTAssertEqual(feedback.reconcile(.terminalFailure(key: key)),
+                       [.showDegraded(key: key, generation: 11)])
+    }
+
+    func testShownFeedbackFinishSurvivesNewerRecoveryWatermark() {
+        let key = TiledDragFeedbackKey(workspace: 2, displayID: 7)
+        var feedback = TiledDragFeedbackReconciler()
+        _ = feedback.beginDegraded(key: key, generation: 10, affectedIDs: [11])
+        XCTAssertEqual(feedback.reconcile(.noResult),
+                       [.showDegraded(key: key, generation: 10)])
+        XCTAssertEqual(feedback.reconcile(.failed(
+            key: key, generation: 11, requiredIDs: [11], recoveryPending: true)), [])
+
+        feedback.feedbackFinished(generation: 10)
+
+        XCTAssertFalse(feedback.hasPendingFeedback)
+    }
+
+    func testDifferentKeyDegradedOutcomeCarriesOldFeedbackIdentity() {
+        let first = TiledDragFeedbackKey(workspace: 2, displayID: 7)
+        let second = TiledDragFeedbackKey(workspace: 3, displayID: 8)
+        var feedback = TiledDragFeedbackReconciler()
+        _ = feedback.beginDegraded(key: first, generation: 10, affectedIDs: [11])
+
+        XCTAssertEqual(feedback.beginDegraded(key: second, generation: 11,
+                                              affectedIDs: [21]),
+                       [.showDegraded(key: first, generation: 10)])
+        XCTAssertEqual(feedback.reconcile(.accepted(
+            key: second, generation: 12, publishedIDs: [21], expectedIDs: [21])),
+            [.cancelDegraded(key: second)])
+    }
+
+    func testFallbackWarningCannotBeCancelledByHealthyIncumbentSubset() {
+        let key = TiledDragFeedbackKey(workspace: 2, displayID: 7)
+        var feedback = TiledDragFeedbackReconciler()
+        _ = feedback.beginDegraded(key: key, generation: 10, affectedIDs: [1, 2, 3])
+        _ = feedback.reconcile(.failed(key: key, generation: 11,
+                                       requiredIDs: [1, 2, 3, 4], recoveryPending: true))
+        XCTAssertEqual(feedback.reconcile(.terminalFailure(key: key)),
+                       [.showDegraded(key: key, generation: 11)])
+
+        XCTAssertEqual(feedback.reconcile(.accepted(
+            key: key, generation: 12, publishedIDs: [1, 2, 3], expectedIDs: [1, 2, 3])), [])
+        XCTAssertTrue(feedback.hasPendingFeedback)
+    }
+
+    func testAwaitingEvidenceWarningCancelsAfterFullRequiredMembershipRecovers() {
+        let key = TiledDragFeedbackKey(workspace: 2, displayID: 7)
+        var feedback = TiledDragFeedbackReconciler()
+        _ = feedback.beginDegraded(key: key, generation: 10, affectedIDs: [1, 2, 3])
+        _ = feedback.reconcile(.failed(key: key, generation: 11,
+                                       requiredIDs: [1, 2, 3, 4], recoveryPending: true))
+        XCTAssertEqual(feedback.reconcile(.terminalFailure(key: key)),
+                       [.showDegraded(key: key, generation: 11)])
+
+        XCTAssertEqual(feedback.reconcile(.accepted(
+            key: key, generation: 12, publishedIDs: [1, 2, 3, 4],
+            expectedIDs: [1, 2, 3, 4])), [.cancelDegraded(key: key)])
+        XCTAssertFalse(feedback.hasPendingFeedback)
+    }
+
     func testFeedbackPolicyReportsEveryVerifiedRejectionExactlyOnce() {
         let frames: [CGWindowID: CGRect] = [
             1: CGRect(x: 10, y: 20, width: 300, height: 200)
