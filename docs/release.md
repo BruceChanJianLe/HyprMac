@@ -1,15 +1,17 @@
 # Release pipeline
 
-`scripts/release.sh` is the single entry point for shipping a new
-version. It bumps the version, runs the test suite, builds, signs,
-notarizes, packages a DMG, regenerates the Sparkle appcast, updates the
-Homebrew cask, pushes and tags the final release commit, uploads a GitHub
-Release, and pushes the Homebrew tap update.
+`scripts/release.sh` is the single entry point for a HyprMac release. It tests,
+builds, signs, notarizes, publishes, updates Sparkle, and updates Homebrew. The
+script stops on the first failed command; it does not offer a bypass for a
+failed test, signature, notarization, or Gatekeeper check.
 
-This document is the operator's guide. For per-release feature-list
-prep, see CLAUDE.md "Release Feature List".
+For per-release feature-list preparation, see the release feature-list
+instructions in the repository guidance.
 
 ## Usage
+
+Start from a clean `main` checkout at exactly `origin/main`, with no local or
+remote `v<version>` tag and no GitHub Release for that version.
 
 ```sh
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
@@ -17,218 +19,111 @@ export DEVELOPMENT_TEAM=WYY8494SWG
 ./scripts/release.sh <version> [release-notes-file]
 ```
 
-The `PATH` line exists because `xcodegen` and `gh` live in places
-the script's invocation environment may not see by default. Match
-this exact pattern from within Claude Code or another sandboxed
-shell. Set `KEYCHAIN_PASSWORD` in the environment to skip the
-interactive keychain prompt.
-
-The script commits and pushes automatically. Commit any other
-in-flight changes first, then run the release.
+If supplied, the release-notes file must exist and be nonempty. Set
+`KEYCHAIN_PASSWORD` when the login keychain needs unlocking. Otherwise the
+script requires the keychain to be unlocked already; it never prompts for a
+secret.
 
 ## Prerequisites
 
-Tools (all on `PATH`):
+- `xcodegen`, `xcodebuild`, `xcrun`, `hdiutil`, `codesign`, `spctl`, `lipo`,
+  `gh`, and `git` on `PATH`.
+- Apple team `WYY8494SWG` and the Developer ID Application identity in the
+  login keychain.
+- A `notarytool` keychain profile named `HyprMac`.
+- `gh` authenticated for `zacharytgray/HyprMac`.
+- Permission to push `main`, the final tag, and the Homebrew tap.
 
-- `xcodegen` — regenerates the Xcode project from `project.yml`.
-- `xcodebuild` — runs tests and the release build.
-- `xcrun notarytool` — submits the DMG to Apple Notary Service.
-- `xcrun stapler` — staples the notarization ticket to the DMG.
-- `hdiutil` — creates the DMG.
-- `gh` — GitHub CLI for the release upload.
-- `git` — commits and pushes.
+Commit all release content before starting. The pipeline intentionally refuses
+a dirty checkout and verifies `origin/main` again immediately before it makes
+the release commit.
 
-Credentials and config:
+## The eight steps
 
-- `DEVELOPMENT_TEAM` — Apple Developer Team ID (env var).
-- `KEYCHAIN_PASSWORD` — login keychain password (env var, optional —
-  prompted if missing). Used to unlock the keychain and pre-authorize
-  codesign access so signing does not pop up dozens of password
-  prompts.
-- `notarytool` keychain profile named `HyprMac` — stored credentials
-  for `xcrun notarytool submit`. Create once via
-  `xcrun notarytool store-credentials HyprMac` (you'll need an
-  app-specific password and your Apple ID).
-- A signing identity `Developer ID Application: Zachary Gray (WYY8494SWG)`
-  in the login keychain.
-- `gh` authenticated against `zacharytgray/HyprMac`.
-- Sparkle SPM package resolved (any prior Debug build does this).
+### 1. Bump the version
 
-## What it does, step by step
+The script sets `MARKETING_VERSION` in `project.yml` and increments
+`CURRENT_PROJECT_VERSION`.
 
-The script numbers each step in its own output (`[N/8]`). All eight:
+### 2. Generate the project and resolve Sparkle
 
-### [1/8] Bump version
+It regenerates the Xcode project, explicitly resolves packages into
+`build/SourcePackages`, and requires both `Sparkle.xcframework` and
+`generate_appcast`. Missing Sparkle artifacts are fatal.
 
-Edits `project.yml` in place. Updates `MARKETING_VERSION` to the
-supplied version and increments `CURRENT_PROJECT_VERSION` by one.
-Both are read back later by `Bundle.infoDictionary` for the
-"What's New" version-detection logic.
+### 3. Run isolated tests
 
-### [2/8] Regenerate Xcode project
+The release gate calls `scripts/test-isolated.sh` with the resolved
+`Sparkle.xcframework`. This builds a testable library instead of launching the
+window-manager app host, and runs under an isolated home, cache, and temporary
+directory. The script requires both a zero exit status and an XCTest summary
+with zero failures.
 
-Runs `xcodegen generate` so the version bump from step 1 reaches
-the `.pbxproj`.
+### 4. Build, sign, package, and notarize
 
-### [3/8] Run tests
+The Release build explicitly targets `arm64` and `x86_64`, uses the same
+resolved package directory, and must report both architectures through `lipo`.
+The pipeline re-signs Sparkle's nested code, signs the app last with the Release
+entitlements, and verifies the signature. It then creates the DMG, submits it
+to Apple, staples and validates the ticket, mounts the DMG read-only, and runs
+both `codesign` and Gatekeeper verification against the packaged app.
 
-`xcodebuild test` against the Debug configuration with a separate
-`derivedDataPath` (`build/test`) so test artifacts do not pollute
-the Release build directory used downstream. The test phase is the
-release gate — a non-zero exit, a build failure, or any failed
-test aborts the release here. Nothing signed, notarized, or
-uploaded yet.
+### 5. Generate and validate update metadata
 
-This is the single most important point in the script. Everything
-that follows is hard or impossible to undo: notarization receipts
-exist on Apple's side, GitHub Releases are visible to users
-immediately, the Homebrew cask propagates to anyone who runs
-`brew upgrade`. Test failure must abort before any of those steps.
+Sparkle generates a signed appcast entry for the DMG. The pipeline verifies
+the short version, build number, download URL, and EdDSA signature. It also
+updates the in-repository Homebrew cask with the DMG SHA-256 and verifies the
+new version and hash.
 
-### [4/8] Build, sign, package, notarize
+### 6. Commit, push `main`, and publish the final tag
 
-- Unlocks the login keychain (using `KEYCHAIN_PASSWORD` env var or
-  prompting). `security set-key-partition-list` grants codesign
-  access to the signing key for this session, avoiding the ~20
-  password prompts that would otherwise appear.
-- Runs the Release `xcodebuild` with hardened runtime, manual code
-  signing, and the Release entitlements file.
-- Re-signs every nested binary (Sparkle helper apps, XPC services,
-  frameworks) with the Developer ID + timestamp + hardened runtime.
-  This is necessary because Sparkle ships unsigned helpers; the
-  Apple notary rejects unsigned nested code.
-- Re-signs the main `.app` last with the Release entitlements.
-- Stages the `.app` plus an `Applications` symlink in a temp
-  directory and runs `hdiutil create` to produce the DMG.
-- Submits the DMG to `xcrun notarytool submit --wait` and staples
-  the ticket on success.
+After fetching `origin` again and confirming it has not moved, the script
+creates the first-person release commit, pushes that exact commit to `main`,
+creates the annotated tag on that final commit, and pushes the tag. The tag
+therefore contains the final project version, appcast, and cask metadata.
 
-If notarization fails the script prompts before continuing — an
-un-notarized DMG works on the developer's machine but Gatekeeper
-blocks it on every other machine. Continuing past this prompt is
-almost never the right call; abort and debug.
+### 7. Create the GitHub Release
 
-### [5/8] Upload to GitHub Release
+The script creates the release from the already-pushed tag with `--verify-tag`,
+uploads the notarized DMG, and uses either the supplied notes file or generated
+notes.
 
-`gh release create` uploads the DMG with `--generate-notes`, which
-auto-populates the release body from commits since the previous
-tag. Edit the body via `gh release edit` afterward if you want
-prose around the auto-list.
+### 8. Update the Homebrew tap
 
-### [6/8] Regenerate Sparkle appcast
+It clones `zacharytgray/homebrew-hyprmac` into a temporary directory, copies
+the validated cask, creates a first-person commit, and pushes that commit to
+the tap's `main` branch.
 
-Runs Sparkle's `generate_appcast` against `dist/`, which signs and
-appends a new entry for the current DMG and writes
-`dist/appcast.xml`. The script then copies the result to
-`docs/appcast.xml` so the GitHub Pages site (which serves the
-appcast Sparkle reads on update checks) picks it up at the next
-push.
+## Failure and recovery
 
-If the Sparkle binary is not at the expected path, the script logs
-a warning and skips this step. To resolve: run any Debug build to
-materialize the SPM package (`SourcePackages/artifacts/sparkle/`),
-then re-run the release.
+Do not blindly rerun the script after a failure. It has no resume mode, and a
+failure after step 1 leaves a deliberately dirty checkout. Inspect the exact
+state first.
 
-### [7/8] Update Homebrew cask
+- **Before the step 6 push:** no public repository state has changed. Preserve
+  useful logs or artifacts, then restore or replace the release checkout and
+  restart from a clean `main` at `origin/main`.
+- **After `main` was pushed but before the tag:** the release commit is public
+  but untagged. Inspect `main` and finish the missing operation deliberately;
+  do not rebuild different bytes under the same version.
+- **After the tag was pushed but before the GitHub Release:** verify that the
+  tag points to the release commit, then create the GitHub Release from that
+  existing tag and upload the exact notarized DMG.
+- **After the GitHub Release but before the tap push:** verify the published
+  DMG hash, then update the tap with the already-validated cask.
 
-Computes the DMG SHA-256, edits `Casks/hyprmac.rb` to reference
-the new version + sha, copies the result into the local
-`zacharytgray/homebrew-hyprmac` tap, and pushes. Falls back to a
-temp clone when the tap is not installed locally.
+Published tags and releases are immutable release history. Do not delete or
+replace them to make a rerun pass. If published artifacts are wrong, fix the
+cause and ship a new patch version.
 
-### [8/8] Commit and push
+Useful diagnostics include the tail printed from the test or build log and
+`xcrun notarytool log <submission-id> --keychain-profile HyprMac` for a failed
+notarization.
 
-`git add` of the touched files (`project.yml`,
-`HyprMac.xcodeproj/project.pbxproj`, `Casks/hyprmac.rb`,
-`docs/appcast.xml`, the script itself), commit as
-`Release v<version>`, push.
+## Manual acceptance
 
-## Recovering from a partial failure
-
-The script is `set -e`, so a non-zero exit at any step aborts. The
-recovery depends on where it stopped.
-
-### Tests failed (step 3)
-
-Nothing externally visible yet. Fix the failing tests, commit, and
-re-run the release script with the same version argument. Step 1
-re-bumps the version to the same value (a no-op
-`sed`), step 2 regenerates, step 3 re-runs the tests.
-
-### Build failed (step 4)
-
-Same recovery — nothing pushed externally. Fix the build error and
-re-run.
-
-### Notarization failed (step 4)
-
-The DMG exists at `dist/HyprMac-<version>.dmg` but is not
-stapled. Most causes: missing entitlements on a nested binary,
-hardened runtime missing on a helper, or a
-not-yet-trusted signing certificate. `xcrun notarytool log <submission-id>
---keychain-profile HyprMac` shows the full notary log. Fix and
-re-run.
-
-### GitHub Release upload failed (step 5)
-
-The DMG is signed and notarized but the release does not exist.
-Re-run `gh release create v<version> dist/HyprMac-<version>.dmg
---repo zacharytgray/HyprMac --title "HyprMac v<version>"
---generate-notes` manually, then re-run the script with the same
-version — earlier steps short-circuit and the script picks up at
-step 6.
-
-### Appcast regen failed (step 6)
-
-Run any Debug build first to materialize the Sparkle SPM artifact,
-then run `dist/HyprMac.app/Contents/Frameworks/Sparkle.framework/Versions/A/Resources/generate_appcast
-dist/` manually with the right
-`--download-url-prefix`. Copy the result to `docs/appcast.xml`,
-commit, push.
-
-### Homebrew tap update failed (step 7)
-
-Hand-update `Casks/hyprmac.rb` (version + sha), copy to
-`$(brew --repository zacharytgray/hyprmac)/Casks/hyprmac.rb`,
-commit and push that repo manually.
-
-### Already-released version
-
-If the GitHub Release already exists for the version you specified,
-`gh release create` fails. Either bump the patch version and re-run
-or delete the existing release first
-(`gh release delete v<version> --yes`).
-
-## What the test gate catches
-
-The Phase 8 test suite (196 tests) covers BSP tree mutation,
-layout computation, frame readback, suppression registry, window
-state cache, focus state controller, window discovery, polling
-scheduler, toggle-split fallthrough regression, keybind decoder
-tolerance, config migration, default keybinds, and dwindle layout
-preview. A real bug in any of these surfaces would catch here
-before release. Coverage of orchestration glue
-(`WindowManager`-driven flows) is via manual smoke test only — the
-test gate is necessary but not sufficient.
-
-Run `xcodebuild test` standalone before invoking `release.sh` if
-you want a faster signal — the in-script run is the safety net,
-not the iteration loop.
-
-## Manual smoke test (post-release)
-
-After the script completes, install the new DMG (or wait for
-Sparkle to detect it) and walk through:
-
-- Caps Lock chord triggers — focus, swap, workspace switch,
-  workspace move.
-- Drag-swap on a single monitor and across monitors (if
-  multi-display setup is available).
-- Float toggle (`Hypr+T`) and float cycle (`Hypr+F`).
-- App quit + reopen — windows return to their workspaces.
-- Welcome / What's-New panel appears on first launch of the new
-  version.
-
-If anything regressed, `gh release edit v<version> --draft` hides
-the release while you investigate; affected users on Sparkle
-auto-update will not see it until you flip it back to public.
+As a separate acceptance gate before running this publishing script, install a
+signed candidate built from the same commit on the target macOS version. For
+the 0.13 series, check normal drag insertion, Hypr-held drag swapping,
+directional focus and swap, workspace switching and moves, HYPR+T float
+toggling, app quit/reopen, and the post-update What's New panel.

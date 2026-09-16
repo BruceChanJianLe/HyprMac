@@ -11,6 +11,7 @@ DIST_DIR="$PROJECT_DIR/dist"
 APP_PATH="$BUILD_DIR/Build/Products/Release/$APP_NAME.app"
 REPO="zacharytgray/HyprMac"
 SPARKLE_BIN="$BUILD_DIR/SourcePackages/artifacts/sparkle/Sparkle/bin"
+SPARKLE_FRAMEWORK="$BUILD_DIR/SourcePackages/artifacts/sparkle/Sparkle/Sparkle.xcframework"
 NEW_VERSION="${1:?Usage: ./scripts/release.sh <version> [release-notes-file]}"
 RELEASE_NOTES_FILE="${2:-}"
 DMG_NAME="$APP_NAME-$NEW_VERSION.dmg"
@@ -54,17 +55,20 @@ sed -i '' "s/CURRENT_PROJECT_VERSION: \"$OLD_BUILD\"/CURRENT_PROJECT_VERSION: \"
 
 echo "[2/8] Regenerating Xcode project"
 xcodegen generate
+echo "       Resolving Sparkle for the isolated test and Release builds"
+xcodebuild -resolvePackageDependencies \
+    -project HyprMac.xcodeproj \
+    -scheme HyprMac \
+    -clonedSourcePackagesDirPath "$BUILD_DIR/SourcePackages"
+if [[ ! -d "$SPARKLE_FRAMEWORK" || ! -x "$SPARKLE_BIN/generate_appcast" ]]; then
+    echo "ERROR: resolved Sparkle artifacts are incomplete under $BUILD_DIR/SourcePackages." >&2
+    exit 1
+fi
 
 echo "[3/8] Running tests"
 TEST_OUT=$(mktemp)
 trap 'rm -f "${TEST_OUT:-}" "${BUILD_OUT:-}"' EXIT
-if ! xcodebuild test \
-    -project HyprMac.xcodeproj \
-    -scheme HyprMac \
-    -configuration Debug \
-    -derivedDataPath "$BUILD_DIR/test" \
-    CODE_SIGN_IDENTITY=- \
-    CODE_SIGNING_ALLOWED=NO >"$TEST_OUT" 2>&1; then
+if ! scripts/test-isolated.sh "$SPARKLE_FRAMEWORK" >"$TEST_OUT" 2>&1; then
     tail -80 "$TEST_OUT" >&2
     echo "ERROR: test build or test execution failed." >&2
     exit 1
@@ -98,9 +102,12 @@ if ! xcodebuild \
     -scheme HyprMac \
     -configuration Release \
     -derivedDataPath "$BUILD_DIR" \
+    -clonedSourcePackagesDirPath "$BUILD_DIR/SourcePackages" \
     DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
     CODE_SIGN_IDENTITY="Developer ID Application" \
     CODE_SIGN_STYLE=Manual \
+    ARCHS="arm64 x86_64" \
+    ONLY_ACTIVE_ARCH=NO \
     ENABLE_HARDENED_RUNTIME=YES \
     OTHER_CODE_SIGN_FLAGS="--timestamp --keychain $KEYCHAIN" \
     CODE_SIGN_ENTITLEMENTS="$PROJECT_DIR/HyprMac/HyprMac-Release.entitlements" \
@@ -110,6 +117,13 @@ if ! xcodebuild \
     exit 1
 fi
 test -d "$APP_PATH"
+APP_ARCHS=$(lipo -archs "$APP_PATH/Contents/MacOS/$APP_NAME")
+for required_arch in arm64 x86_64; do
+    if [[ " $APP_ARCHS " != *" $required_arch "* ]]; then
+        echo "ERROR: Release executable is missing $required_arch (found: $APP_ARCHS)." >&2
+        exit 1
+    fi
+done
 
 SIGN_ID="Developer ID Application: Zachary Gray (WYY8494SWG)"
 echo "       Re-signing nested code"
@@ -174,7 +188,7 @@ if [[ "$SOURCE_COMMIT" != "$(git rev-parse origin/main)" ]]; then
 fi
 git add project.yml HyprMac.xcodeproj/project.pbxproj Casks/hyprmac.rb docs/appcast.xml \
     scripts/release.sh scripts/test-release-pipeline.sh docs/release.md
-git commit -m "Release v$NEW_VERSION"
+git commit -m "I release HyprMac v$NEW_VERSION"
 RELEASE_COMMIT=$(git rev-parse HEAD)
 git push origin "$RELEASE_COMMIT:refs/heads/main"
 git tag -a "v$NEW_VERSION" -m "HyprMac v$NEW_VERSION" "$RELEASE_COMMIT"
@@ -195,7 +209,7 @@ TEMP_TAP=$(mktemp -d "${TMPDIR:-/tmp}/homebrew-hyprmac.XXXXXX")
 git clone --depth 1 "https://github.com/zacharytgray/homebrew-hyprmac.git" "$TEMP_TAP"
 cp Casks/hyprmac.rb "$TEMP_TAP/Casks/hyprmac.rb"
 git -C "$TEMP_TAP" add Casks/hyprmac.rb
-git -C "$TEMP_TAP" commit -m "Update HyprMac to v$NEW_VERSION"
+git -C "$TEMP_TAP" commit -m "I update HyprMac to v$NEW_VERSION"
 git -C "$TEMP_TAP" push origin HEAD:main
 rm -rf "$TEMP_TAP"
 
