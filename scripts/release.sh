@@ -138,7 +138,11 @@ rm -rf "$STAGING"
 xcrun notarytool submit "$DMG_PATH" --keychain-profile HyprMac --wait
 xcrun stapler staple "$DMG_PATH"
 xcrun stapler validate "$DMG_PATH"
-spctl -a -vv -t install "$DMG_PATH"
+VERIFY_MOUNT=$(mktemp -d "${TMPDIR:-/tmp}/hyprmac-release-verify.XXXXXX")
+hdiutil attach -readonly -nobrowse -mountpoint "$VERIFY_MOUNT" "$DMG_PATH"
+codesign --verify --deep --strict --verbose=2 "$VERIFY_MOUNT/$APP_NAME.app"
+spctl -a -vv -t exec "$VERIFY_MOUNT/$APP_NAME.app"
+hdiutil detach "$VERIFY_MOUNT"
 echo "       Signed, notarized, and stapled"
 
 echo "[5/8] Generating and validating Sparkle appcast and cask"
@@ -146,6 +150,7 @@ if [[ ! -x "$SPARKLE_BIN/generate_appcast" ]]; then
     echo "ERROR: Sparkle generate_appcast missing at $SPARKLE_BIN" >&2
     exit 1
 fi
+cp "$PROJECT_DIR/docs/appcast.xml" "$DIST_DIR/appcast.xml"
 "$SPARKLE_BIN/generate_appcast" "$DIST_DIR" \
     --download-url-prefix "https://github.com/$REPO/releases/download/v$NEW_VERSION/"
 test -s "$DIST_DIR/appcast.xml"
