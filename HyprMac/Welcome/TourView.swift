@@ -748,6 +748,10 @@ private struct WhatsNewPage: View {
                     ForEach(WhatsNewFeatures.current, id: \.title) { feature in
                         changelogRow(feature)
                     }
+                    Link("Explore HyprMac", destination: WelcomeContent.productURL)
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(Color.hyprCyan)
+                        .padding(.top, 6)
                 }
             }
         }

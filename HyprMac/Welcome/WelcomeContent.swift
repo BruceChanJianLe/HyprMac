@@ -27,26 +27,31 @@ enum WhatsNewFeatures {
     static let current: [WhatsNewFeature] = [
         WhatsNewFeature(
             icon: "rectangle.split.2x1",
-            title: "Splits Survive Tab Switches",
-            description: "Resize a split, switch native tabs in Ghostty or Chrome, and the split stays where you put it. Hiding an app with Cmd+H and bringing it back keeps the split too. Before, the hidden window left the layout and the returning one came back at 50/50.",
-            credit: "@joops"
+            title: "Hyprland-Style Tiling",
+            description: "Drag a tiled window to an edge of another tile to place it there and reshape your layout. Hold Hypr while dragging when you want to swap the two tiles instead."
         ),
         WhatsNewFeature(
-            icon: "rectangle.roundedtop",
-            title: "Window Corners Are Adjustable",
-            description: "Window corner radius now starts from a suggested value until you set one yourself. The Suggested button clears your override, and the red swap-rejection border keeps its width when the radius changes.",
-            credit: "@Amin-El-Sayed"
+            icon: "slider.horizontal.3",
+            title: "Settings, Rebuilt",
+            description: "The redesigned Settings app makes displays, workspaces, appearance, apps, and keybinds easier to understand and customize. Window corners now support a suggested radius or your own override."
+        ),
+        WhatsNewFeature(
+            icon: "keyboard",
+            title: "A Clearer HYPR+K Menu",
+            description: "The keybind reference is now a larger, more readable three-column guide, with navigation and apps on the left, window management in the center, and workspaces on the right. Toggle Float now defaults to HYPR+T."
         ),
         WhatsNewFeature(
             icon: "checkmark.shield",
-            title: "Config Survives Version Mismatches",
-            description: "A keybind that an older HyprMac build does not recognise is now skipped instead of resetting the whole config. This matters when config.json is synced over iCloud between Macs running different versions.",
+            title: "Safer Tiling and Recovery",
+            description: "Frame changes are verified before a layout is committed. HyprMac can recover portrait startup layouts by choosing a fitting split direction, and it makes one bounded retry after a timed-out Accessibility call, only after restoring the original frames.",
             tint: .magenta
         ),
     ]
 }
 
 enum WelcomeContent {
+    static let productURL = URL(string: "https://hyprmac.app/")!
+
     static var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
     }

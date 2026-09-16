@@ -3,6 +3,23 @@ import XCTest
 import Carbon
 
 final class WelcomeContentTests: XCTestCase {
+    func testWhatsNewDescribesThe013SeriesAndPatchFixes() {
+        let features = WhatsNewFeatures.current
+
+        XCTAssertEqual(features.map(\.title), [
+            "Hyprland-Style Tiling",
+            "Settings, Rebuilt",
+            "A Clearer HYPR+K Menu",
+            "Safer Tiling and Recovery"
+        ])
+        XCTAssertTrue(features[0].description.contains("Hold Hypr"))
+        XCTAssertTrue(features[0].description.contains("place it there"))
+        XCTAssertTrue(features[2].description.contains("HYPR+T"))
+        XCTAssertTrue(features[3].description.contains("bounded retry"))
+        XCTAssertFalse(features.map(\.title).contains("Splits Survive Tab Switches"))
+        XCTAssertEqual(WelcomeContent.productURL.absoluteString, "https://hyprmac.app/")
+    }
+
     func testTutorialRequestUsesInjectedRouteAfterClosingHelp() {
         let overlay = KeybindOverlayController()
         var requests = 0
