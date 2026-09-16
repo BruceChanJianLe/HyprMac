@@ -2,9 +2,9 @@
 
 `scripts/release.sh` is the single entry point for shipping a new
 version. It bumps the version, runs the test suite, builds, signs,
-notarizes, packages a DMG, uploads a GitHub Release, regenerates the
-Sparkle appcast, updates the Homebrew cask, and pushes the resulting
-commit.
+notarizes, packages a DMG, regenerates the Sparkle appcast, updates the
+Homebrew cask, pushes and tags the final release commit, uploads a GitHub
+Release, and pushes the Homebrew tap update.
 
 This document is the operator's guide. For per-release feature-list
 prep, see CLAUDE.md "Release Feature List".
@@ -14,7 +14,7 @@ prep, see CLAUDE.md "Release Feature List".
 ```sh
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 export DEVELOPMENT_TEAM=WYY8494SWG
-./scripts/release.sh <version>
+./scripts/release.sh <version> [release-notes-file]
 ```
 
 The `PATH` line exists because `xcodegen` and `gh` live in places
