@@ -93,8 +93,8 @@ final class FitAwareDisplayMigrationTests: XCTestCase {
         let engine = TilingEngine(displayManager: displayManager)
         let first = makeWindow(id: 971)
         let second = makeWindow(id: 972)
-        first.observedMinSize = CGSize(width: 1000, height: 0)
-        second.observedMinSize = CGSize(width: 1000, height: 0)
+        first.observedMinSize = CGSize(width: 1000, height: 500)
+        second.observedMinSize = CGSize(width: 1000, height: 500)
 
         engine.prepareTileLayout([first], onWorkspace: 1, screen: left)
         engine.prepareTileLayout([second], onWorkspace: 1, screen: right)

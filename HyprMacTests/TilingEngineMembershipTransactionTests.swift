@@ -573,16 +573,16 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         trace.frames[tenant.windowID] = rect
         trace.frames[newcomer.windowID] = rect
         XCTAssertTrue(engine.tileWindows([tenant], onWorkspace: 1, screen: screen).published)
-        // 980 + 620 + gap + padding is wider than the 1600 pt usable frame
-        trace.minSize[tenant.windowID] = CGSize(width: 620, height: 0)
-        trace.minSize[newcomer.windowID] = CGSize(width: 980, height: 0)
+        // the newcomer is wider than the whole usable frame
+        trace.minSize[tenant.windowID] = CGSize(width: 900, height: 600)
+        trace.minSize[newcomer.windowID] = CGSize(width: 1700, height: 600)
         var writes = 0
         trace.onWrite = { writes += 1 }
 
         let admission = engine.tileWindows([tenant, newcomer], onWorkspace: 1, screen: screen)
         XCTAssertEqual(admission.strandedIDs, [newcomer.windowID])
-        XCTAssertEqual(engine.knownMinimumSizes[newcomer.windowID]?.size.width, 980)
-        XCTAssertEqual(engine.knownMinimumSizes[tenant.windowID]?.size.width, 620)
+        XCTAssertEqual(engine.knownMinimumSizes[newcomer.windowID]?.size.width, 1700)
+        XCTAssertEqual(engine.knownMinimumSizes[tenant.windowID]?.size.width, 900)
         XCTAssertGreaterThan(writes, 0, "the admission is where the probing belongs")
         writes = 0
 
@@ -610,8 +610,8 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         let rect = engine.displayManager.cgRect(for: screen)
         for w in [tenant, first] { trace.frames[w.windowID] = rect }
         XCTAssertTrue(engine.tileWindows([tenant], onWorkspace: 1, screen: screen).published)
-        trace.minSize[tenant.windowID] = CGSize(width: 620, height: 0)
-        trace.minSize[first.windowID] = CGSize(width: 980, height: 0)
+        trace.minSize[tenant.windowID] = CGSize(width: 620, height: 600)
+        trace.minSize[first.windowID] = CGSize(width: 1700, height: 600)
 
         let admission = engine.tileWindows([tenant, first], onWorkspace: 1, screen: screen)
         XCTAssertEqual(admission.strandedIDs, [first.windowID])
@@ -620,7 +620,7 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         let second = makeWindow(id: 32850)
         second.bundleID = "com.microsoft.Outlook"
         trace.frames[second.windowID] = rect
-        trace.minSize[second.windowID] = CGSize(width: 980, height: 0)
+        trace.minSize[second.windowID] = CGSize(width: 1700, height: 600)
         trace.written = []
 
         let result = engine.tileWindows([tenant, second], onWorkspace: 1, screen: screen)
@@ -628,7 +628,7 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertEqual(result.refusedIDs, [second.windowID])
         XCTAssertFalse(trace.written.contains(second.windowID),
                        "the app already told us its floor through its other window")
-        XCTAssertEqual(engine.knownMinimumSizes[second.windowID]?.size.width, 980)
+        XCTAssertEqual(engine.knownMinimumSizes[second.windowID]?.size.width, 1700)
         XCTAssertEqual(engine.knownMinimumSizes[second.windowID]?.provenance, .appHint)
     }
 
@@ -649,8 +649,10 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         let rect = engine.displayManager.cgRect(for: screen)
         for w in [tenant, first] { trace.frames[w.windowID] = rect }
         engine.tileWindows([tenant], onWorkspace: 1, screen: screen)
-        if tenantFloor > 0 { trace.minSize[tenant.windowID] = CGSize(width: tenantFloor, height: 0) }
-        trace.minSize[first.windowID] = CGSize(width: floor, height: 0)
+        if tenantFloor > 0 {
+            trace.minSize[tenant.windowID] = CGSize(width: tenantFloor, height: 600)
+        }
+        trace.minSize[first.windowID] = CGSize(width: floor, height: 600)
         engine.tileWindows([tenant, first], onWorkspace: 1, screen: screen)
         XCTAssertEqual(engine.knownMinimumSizes[first.windowID]?.size.width, floor,
                        "the first window's refusal is what makes the hint")
@@ -674,9 +676,9 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
     }
 
     func testAnAppHintRefusesAWindowTheSlotIsTooSmallForWithoutWriting() {
-        let f = safariHint()
+        let f = safariHint(floor: 1700)
 
-        // ws1's half-slot is 788 pt, and the app has already said 900
+        // the app has already reported a floor wider than the whole screen
         let result = f.engine.tileWindows([f.tenant, f.second], onWorkspace: 1, screen: f.screen)
 
         XCTAssertEqual(result.refusedIDs, [f.second.windowID])
@@ -719,7 +721,7 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertTrue(engine.tileWindows([tenant], onWorkspace: 1, screen: screen).published)
         // a held window: assigned to the workspace, in no tree, and with a
         // floor no slot here can hold
-        held.observedMinSize = CGSize(width: 1500, height: 0)
+        held.observedMinSize = CGSize(width: 1700, height: 1100)
         held.minSizeProvenance = .observed
         engine.primeMinimumSizes([held])
 
