@@ -10,6 +10,7 @@ struct RuntimeConfigState: Equatable {
     let outerPadding: CGFloat
     let maxSplitsPerMonitor: [String: Int]
     let disabledMonitors: Set<String>
+    let overlayAppearance: OverlayAppearance
     let showFocusBorder: Bool
     let focusBorderColorHex: String?
     let floatingBorderColorHex: String?
@@ -29,6 +30,7 @@ struct RuntimeConfigState: Equatable {
         enabled: Bool, keybinds: [Keybind], hyprKey: HyprKey,
         gapSize: CGFloat, outerPadding: CGFloat,
         maxSplitsPerMonitor: [String: Int], disabledMonitors: Set<String>,
+        overlayAppearance: OverlayAppearance = UserConfigDefaults.overlayAppearance,
         showFocusBorder: Bool, focusBorderColorHex: String?, floatingBorderColorHex: String?,
         focusBracketStyle: FocusBracketStyle, focusBracketColorHex: String?,
         focusBracketRadius: CGFloat,
@@ -45,6 +47,7 @@ struct RuntimeConfigState: Equatable {
         self.outerPadding = outerPadding
         self.maxSplitsPerMonitor = maxSplitsPerMonitor
         self.disabledMonitors = disabledMonitors
+        self.overlayAppearance = overlayAppearance
         self.showFocusBorder = showFocusBorder
         self.focusBorderColorHex = focusBorderColorHex
         self.floatingBorderColorHex = floatingBorderColorHex
@@ -67,6 +70,7 @@ struct RuntimeConfigState: Equatable {
             gapSize: config.gapSize, outerPadding: config.outerPadding,
             maxSplitsPerMonitor: config.maxSplitsPerMonitor,
             disabledMonitors: config.disabledMonitors,
+            overlayAppearance: config.overlayAppearance,
             showFocusBorder: config.showFocusBorder,
             focusBorderColorHex: config.focusBorderColorHex,
             floatingBorderColorHex: config.floatingBorderColorHex,
@@ -93,6 +97,7 @@ struct ChromeConfigChanges: OptionSet, Equatable {
     static let fadeDuration = Self(rawValue: 1 << 3)
     static let windowCornerRadius = Self(rawValue: 1 << 4)
     static let bracketAppearance = Self(rawValue: 1 << 5)
+    static let overlayAppearance = Self(rawValue: 1 << 6)
 }
 
 enum FocusBracketAppearanceUpdate {
@@ -174,6 +179,9 @@ final class ConfigUpdateCoordinator {
         }
         if next.windowCornerRadius != previous.windowCornerRadius {
             chrome.insert(.windowCornerRadius)
+        }
+        if next.overlayAppearance != previous.overlayAppearance {
+            chrome.insert(.overlayAppearance)
         }
         if !chrome.isEmpty { onChrome(next, chrome) }
 

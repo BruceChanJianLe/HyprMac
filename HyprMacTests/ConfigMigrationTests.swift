@@ -38,6 +38,7 @@ final class ConfigMigrationTests: XCTestCase {
     func testCornerLengthIsOptionalAndRoundTripsIndependently() throws {
         let legacy = Data(#"{"keybinds":[],"gapSize":8,"outerPadding":8,"enabled":true,"focusBracketThickness":5}"#.utf8)
         let decoded = try JSONDecoder().decode(SavedConfig.self, from: legacy)
+        XCTAssertNil(decoded.overlayAppearance)
         XCTAssertNil(decoded.focusBracketLength)
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: legacy) as? [String: Any])
         object["focusBracketLength"] = 12

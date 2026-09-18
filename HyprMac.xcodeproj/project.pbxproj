@@ -39,6 +39,7 @@
 		1DEA79CA749DC72D381082D3 /* LayoutEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9927DB9594D281BB5179CA3 /* LayoutEngine.swift */; };
 		1E74EEB2E86AD54085FF68AC /* LogFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = E037AF7C84E48727003EE0D0 /* LogFile.swift */; };
 		1F3404F6BA0509E5F0CDC5BD /* SpaceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 913F7521CBE5FF04365D18D8 /* SpaceManager.swift */; };
+		21622AC2016B275601A830F2 /* WorkspaceOverviewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4409646A5AA8442EA2A0A34C /* WorkspaceOverviewController.swift */; };
 		249B0AE228874626C66745EF /* DimmingOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84FD66866CE44F180CAA03C7 /* DimmingOverlay.swift */; };
 		24D5736396329E669D0D7615 /* DirectionPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 301C7EDAAD234FC3DDCBAADC /* DirectionPicker.swift */; };
 		27A937379F4BEF149A4F626F /* DestroyRecheckTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 728568405C25B4DD6E5EDD9B /* DestroyRecheckTests.swift */; };
@@ -155,6 +156,7 @@
 		A0AD7D87944C0A2CEFD20ECD /* ConfigStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE062173D513A1A60A3E704D /* ConfigStore.swift */; };
 		A0F6BA7E0AAC4053F29F2EC7 /* ScratchpadController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4461955B9373BBC5DD00DB15 /* ScratchpadController.swift */; };
 		A103B6FAC1DFA16554F33D49 /* BSPTargetInsertionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 507967F2C119F4BD8E8201CF /* BSPTargetInsertionTests.swift */; };
+		A1945FBB6F6C5307CC809EA4 /* WorkspaceOverviewPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E6472ACE23C8EB1DC35E7F2 /* WorkspaceOverviewPresentationTests.swift */; };
 		A1B2F0FE1450A3CF34395297 /* DimmingOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84FD66866CE44F180CAA03C7 /* DimmingOverlay.swift */; };
 		A34F6208901205B1100F08AE /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB697B2619BEB7E2434E157E /* WelcomeView.swift */; };
 		A76080D3089550F74088990D /* HyprWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA85C3347F1D7A782EA9EA39 /* HyprWindow.swift */; };
@@ -214,6 +216,7 @@
 		E65C3CF253082AC6E46E772F /* Action.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B20DF87F29CD5B1164F1E80 /* Action.swift */; };
 		E6B34B59205F9ED0E806F291 /* CoordinateSpace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C0116BE6F796AC619B0BD6B /* CoordinateSpace.swift */; };
 		E75F4991C42DA20A1A207121 /* HyprMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A034E555A586C182E187021F /* HyprMacApp.swift */; };
+		E7E24ABBCC37A37498737EEF /* WorkspaceOverviewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4409646A5AA8442EA2A0A34C /* WorkspaceOverviewController.swift */; };
 		E8228FA6FF3AF82D8C05C728 /* ConfigUpdateCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFAD1F70A0E024E16719373F /* ConfigUpdateCoordinator.swift */; };
 		E8EB88F6C13061D33ECC0B59 /* HyprWindowAXReadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31EF3D85D0E0F9BCD33F6455 /* HyprWindowAXReadTests.swift */; };
 		E916A4BC377A1C882DB198AD /* AppLauncherEditorSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6D1C99A7D03B871E0141DF0 /* AppLauncherEditorSheet.swift */; };
@@ -297,6 +300,7 @@
 		3F7802C236774AA24452B3E1 /* FrameSizingTransactionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameSizingTransactionTests.swift; sourceTree = "<group>"; };
 		3FCF579F05A2DFBB28DF945A /* WorkspaceOrchestrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceOrchestrator.swift; sourceTree = "<group>"; };
 		43D8A7DDD1BB3D497B6F88EF /* HandleDisplayChangeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandleDisplayChangeTests.swift; sourceTree = "<group>"; };
+		4409646A5AA8442EA2A0A34C /* WorkspaceOverviewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceOverviewController.swift; sourceTree = "<group>"; };
 		4461955B9373BBC5DD00DB15 /* ScratchpadController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchpadController.swift; sourceTree = "<group>"; };
 		4D8F5AAFA837B55AEB2831E8 /* FrameSizingTransaction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameSizingTransaction.swift; sourceTree = "<group>"; };
 		4DC1746711F81E185BA81143 /* Log.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Log.swift; sourceTree = "<group>"; };
@@ -322,6 +326,7 @@
 		6988D3019CAFAAAE262E388E /* RuntimeVariantTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeVariantTests.swift; sourceTree = "<group>"; };
 		6B23E3313247FD77173D35DD /* DefaultKeybindsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultKeybindsTests.swift; sourceTree = "<group>"; };
 		6E4E656D3CA021B130775CC3 /* Keybind.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keybind.swift; sourceTree = "<group>"; };
+		6E6472ACE23C8EB1DC35E7F2 /* WorkspaceOverviewPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceOverviewPresentationTests.swift; sourceTree = "<group>"; };
 		6EDEEE13B637CED75A9FD8A9 /* TourView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TourView.swift; sourceTree = "<group>"; };
 		728568405C25B4DD6E5EDD9B /* DestroyRecheckTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestroyRecheckTests.swift; sourceTree = "<group>"; };
 		7681B5C6FAEC2BFB53A30743 /* KeybindDisplayHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeybindDisplayHelpers.swift; sourceTree = "<group>"; };
@@ -505,6 +510,7 @@
 				B6FC3298BBD003F3AD7DAC44 /* WindowCornerRadius.swift */,
 				2CFEA8374C63AC2FDFCAC4AE /* WindowManager.swift */,
 				8A0BF8AF7796AE4F9F114B7C /* WorkspaceManager.swift */,
+				4409646A5AA8442EA2A0A34C /* WorkspaceOverviewController.swift */,
 				46404E9F47AD026DEE8E5EB3 /* Discovery */,
 				FAA866CE85DA0926E2A5E5FC /* Input */,
 				069AB81CC5E4E1E85EC89AD2 /* Orchestration */,
@@ -663,6 +669,7 @@
 				857FCC6A226AFEECD7A199FC /* WindowDiscoveryServiceTests.swift */,
 				901F153AA3906FE161498E58 /* WindowStateCacheTests.swift */,
 				10CDCBC69C5DFDC3E907A02B /* WorkspaceOrchestratorMoveTests.swift */,
+				6E6472ACE23C8EB1DC35E7F2 /* WorkspaceOverviewPresentationTests.swift */,
 			);
 			path = HyprMacTests;
 			sourceTree = "<group>";
@@ -942,6 +949,7 @@
 				1276120B1D8BE4DEEDCF8EF3 /* WindowStateCache.swift in Sources */,
 				42778D615628483A357572DF /* WorkspaceManager.swift in Sources */,
 				446BF26414F6821D08738E80 /* WorkspaceOrchestrator.swift in Sources */,
+				21622AC2016B275601A830F2 /* WorkspaceOverviewController.swift in Sources */,
 				86B3C95B411DB51B9AFBE08D /* WorkspacePicker.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1039,6 +1047,7 @@
 				63156863AFDB39FBF469DFFE /* WindowStateCache.swift in Sources */,
 				F77406C0EB205AD6F1959A82 /* WorkspaceManager.swift in Sources */,
 				D01C12241132BDCD8C95E2D0 /* WorkspaceOrchestrator.swift in Sources */,
+				E7E24ABBCC37A37498737EEF /* WorkspaceOverviewController.swift in Sources */,
 				64B6C68A61E2447E016463DD /* WorkspacePicker.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1098,6 +1107,7 @@
 				00B50053F139D098B090709F /* WindowDiscoveryServiceTests.swift in Sources */,
 				EA8FC0F77CB146BAD8B35CBE /* WindowStateCacheTests.swift in Sources */,
 				7FB5DB945BA887353289ACB1 /* WorkspaceOrchestratorMoveTests.swift in Sources */,
+				A1945FBB6F6C5307CC809EA4 /* WorkspaceOverviewPresentationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

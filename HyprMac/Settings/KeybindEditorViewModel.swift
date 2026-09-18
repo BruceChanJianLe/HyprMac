@@ -30,6 +30,7 @@ final class KeybindEditorViewModel: ObservableObject {
         case toggleFloating         = "Toggle Floating"
         case toggleSplit            = "Toggle Split"
         case showKeybinds           = "Show Keybinds"
+        case showWorkspaceOverview  = "Show Workspace Overview"
         case launchApp              = "Launch App"
         case focusMenuBar           = "Focus Menu Bar"
         case focusFloating          = "Focus Floating"
@@ -60,6 +61,7 @@ final class KeybindEditorViewModel: ObservableObject {
         case .toggleFloating:                selectedAction = .toggleFloating
         case .toggleSplit:                   selectedAction = .toggleSplit
         case .showKeybinds:                  selectedAction = .showKeybinds
+        case .showWorkspaceOverview:         selectedAction = .showWorkspaceOverview
         case .launchApp(let b):              selectedAction = .launchApp;              bundleIDParam = b
         case .focusMenuBar:                  selectedAction = .focusMenuBar
         case .focusFloating:                 selectedAction = .focusFloating
@@ -87,6 +89,7 @@ final class KeybindEditorViewModel: ObservableObject {
         case .toggleFloating:         action = .toggleFloating
         case .toggleSplit:            action = .toggleSplit
         case .showKeybinds:           action = .showKeybinds
+        case .showWorkspaceOverview:  action = .showWorkspaceOverview
         case .launchApp:              action = .launchApp(bundleID: bundleIDParam)
         case .focusMenuBar:           action = .focusMenuBar
         case .focusFloating:          action = .focusFloating

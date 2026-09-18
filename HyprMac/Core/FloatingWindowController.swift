@@ -5,6 +5,19 @@
 
 import Cocoa
 
+enum FloatingAdmissionPolicy {
+    enum Reason: String {
+        case excludedApp = "excluded app"
+        case fixedSize = "window is not resizable"
+    }
+
+    static func reason(isExcluded: Bool, isSizeSettable: Bool?) -> Reason? {
+        if isExcluded { return .excludedApp }
+        if isSizeSettable == false { return .fixedSize }
+        return nil
+    }
+}
+
 struct FloatToTileRejectionMessage {
     static func text(for failure: TilingEngine.ForceInsertFailure) -> String {
         switch failure {
@@ -68,6 +81,7 @@ final class FloatingWindowController {
     }
     var restoreFocusWithoutRaise: (HyprWindow) -> Void = { $0.focusWithoutRaise() }
     var windowFrameForZOrder: (HyprWindow) -> CGRect? = { $0.frame }
+    var isWindowSizeSettable: (HyprWindow) -> Bool? = { $0.isSizeSettable }
     // red flash on a float→tile the tree or the screen refused.
     var rejectFloatToTile: ((HyprWindow, TilingEngine.ForceInsertFailure) -> Void)?
 
@@ -327,14 +341,21 @@ final class FloatingWindowController {
 
     /// `true` when `window` should auto-float on first discovery.
     ///
-    /// Single source for the "excluded bundle ID" check shared between
-    /// `snapshotAndTile` and `WindowDiscoveryService`. Disabled-monitor
-    /// auto-float is a separate decision with separate logic.
+    /// Excluded apps and windows that explicitly reject AX resize enter as
+    /// floaters. An unreadable resize capability is left to verified tiling
+    /// and its existing recovery. Disabled-monitor auto-float is separate.
     func shouldAutoFloat(_ window: HyprWindow, excludedBundleIDs: Set<String>) -> Bool {
-        guard let bundleID = NSRunningApplication(processIdentifier: window.ownerPID)?.bundleIdentifier else {
-            return false
-        }
-        return excludedBundleIDs.contains(bundleID)
+        autoFloatReason(window, excludedBundleIDs: excludedBundleIDs) != nil
+    }
+
+    func autoFloatReason(
+        _ window: HyprWindow, excludedBundleIDs: Set<String>
+    ) -> FloatingAdmissionPolicy.Reason? {
+        let bundleID = NSRunningApplication(processIdentifier: window.ownerPID)?.bundleIdentifier
+        return FloatingAdmissionPolicy.reason(
+            isExcluded: bundleID.map(excludedBundleIDs.contains) ?? false,
+            isSizeSettable: isWindowSizeSettable(window)
+        )
     }
 
     // MARK: - z-order helper (used by raiseBehind + cross-checks)

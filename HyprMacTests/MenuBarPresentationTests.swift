@@ -5,19 +5,19 @@ final class MenuBarPresentationTests: XCTestCase {
     func testWorkspaceGlyphsPreserveActiveOccupiedAndFloatingSemantics() {
         XCTAssertEqual(MenuBarPresentation.workspaceGlyphs(
             active: [1, 4], occupied: [1, 2, 3, 4], floating: [2, 4]),
-                       "● ◇ ○ ◆")
+                       "■ ◇ □ ◆")
     }
 
     func testWorkspaceGlyphsKeepEmptySlotsThroughLastRelevantWorkspace() {
         XCTAssertEqual(MenuBarPresentation.workspaceGlyphs(
-            active: [2], occupied: [4], floating: []), "· ● · ○")
+            active: [2], occupied: [4], floating: []), "· ■ · □")
         XCTAssertEqual(MenuBarPresentation.workspaceGlyphs(
             active: [], occupied: [], floating: []), "·")
     }
 
     func testWorkspaceGlyphsRepresentBothActiveMonitors() {
         XCTAssertEqual(MenuBarPresentation.workspaceGlyphs(
-            active: [2, 5], occupied: [], floating: [5]), "· ● · · ◆")
+            active: [2, 5], occupied: [], floating: [5]), "· ■ · · ◆")
     }
 
     func testTooltipNamesEachMonitorAndCurrentWorkspace() {
@@ -53,13 +53,23 @@ final class MenuBarPresentationTests: XCTestCase {
     func testCompactIndicatorUsesGlyphDataWithoutManagerEnabledState() {
         XCTAssertTrue(MenuBarPresentation.showsIndicator(
             indicatorEnabled: true, hasData: true,
-            labelText: "● · ◇", scratchpadCount: 0))
+            labelText: "■ · ◇", scratchpadCount: 0))
         XCTAssertFalse(MenuBarPresentation.showsIndicator(
             indicatorEnabled: false, hasData: true,
-            labelText: "●", scratchpadCount: 0))
+            labelText: "■", scratchpadCount: 0))
         XCTAssertFalse(MenuBarPresentation.showsIndicator(
             indicatorEnabled: true, hasData: false,
-            labelText: "●", scratchpadCount: 0))
+            labelText: "■", scratchpadCount: 0))
+    }
+
+    func testMonitorSnapshotCarriesActionableWorkspaceBadgeState() {
+        let badges = [
+            MenuBarWorkspaceBadge(id: 1, isActive: true, isOccupied: true, hasFloatingWindows: false),
+            MenuBarWorkspaceBadge(id: 4, isActive: false, isOccupied: true, hasFloatingWindows: true)
+        ]
+        let snapshot = MenuBarMonitorSnapshot(id: 0, name: "Studio", currentWorkspace: 1,
+                                              isPortrait: false, workspaces: badges)
+        XCTAssertEqual(snapshot.workspaces, badges)
     }
 
     private func monitor(_ id: Int, _ name: String, workspace: Int,

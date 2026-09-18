@@ -221,6 +221,7 @@ struct SavedConfig: Codable {
     let hyprKey: HyprKey?
     let excludedBundleIDs: [String]?
     let showMenuBarIndicator: Bool?
+    var overlayAppearance: OverlayAppearance? = nil
     let maxSplitsPerMonitor: [String: Int]?
     let disabledMonitors: [String]?
     let showFocusBorder: Bool?
@@ -256,7 +257,7 @@ extension SavedConfig {
 
     enum CodingKeys: String, CodingKey {
         case version, keybinds, gapSize, outerPadding, enabled
-        case focusFollowsMouse, hyprKey, excludedBundleIDs, showMenuBarIndicator
+        case focusFollowsMouse, hyprKey, excludedBundleIDs, showMenuBarIndicator, overlayAppearance
         case maxSplitsPerMonitor, disabledMonitors
         case showFocusBorder, focusBorderColorHex, floatingBorderColorHex
         case focusBracketStyle, focusBracketColorHex, focusBracketRadius, focusBracketThickness
@@ -297,6 +298,10 @@ extension SavedConfig {
         self.hyprKey = try c.decodeIfPresent(HyprKey.self, forKey: .hyprKey)
         self.excludedBundleIDs = try c.decodeIfPresent([String].self, forKey: .excludedBundleIDs)
         self.showMenuBarIndicator = try c.decodeIfPresent(Bool.self, forKey: .showMenuBarIndicator)
+        self.overlayAppearance = c.contains(.overlayAppearance)
+            ? ((try? c.decode(OverlayAppearance.self, forKey: .overlayAppearance))
+                ?? UserConfigDefaults.overlayAppearance)
+            : nil
         self.maxSplitsPerMonitor = try c.decodeIfPresent([String: Int].self, forKey: .maxSplitsPerMonitor)
         self.disabledMonitors = try c.decodeIfPresent([String].self, forKey: .disabledMonitors)
         self.showFocusBorder = try c.decodeIfPresent(Bool.self, forKey: .showFocusBorder)

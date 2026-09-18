@@ -73,6 +73,10 @@ extension Keybind {
         binds.append(Keybind(keyCode: UInt16(kVK_ANSI_K), modifiers: .hypr,
                              action: .showKeybinds))
 
+        // hypr + o: show workspace overview
+        binds.append(Keybind(keyCode: UInt16(kVK_ANSI_O), modifiers: .hypr,
+                             action: .showWorkspaceOverview))
+
         // hypr + p: pause or resume tiling
         binds.append(Keybind(keyCode: UInt16(kVK_ANSI_P), modifiers: .hypr,
                              action: .toggleTiling))

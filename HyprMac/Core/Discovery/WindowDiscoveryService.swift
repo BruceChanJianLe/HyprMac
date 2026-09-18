@@ -90,6 +90,7 @@ final class WindowDiscoveryService {
     /// can swap a deterministic lookup; production uses
     /// `NSRunningApplication`.
     private let bundleIDForPID: (pid_t) -> String?
+    private let isWindowSizeSettable: (HyprWindow) -> Bool?
 
     /// Consecutive cycles skipped by the mass-gone guard. Bounded so a
     /// genuine mass close is delayed, not deadlocked.
@@ -120,12 +121,14 @@ final class WindowDiscoveryService {
          accessibility: AccessibilityManager,
          displayManager: DisplayManager,
          workspaceManager: WorkspaceManager,
-         bundleIDForPID: @escaping (pid_t) -> String? = { NSRunningApplication(processIdentifier: $0)?.bundleIdentifier }) {
+         bundleIDForPID: @escaping (pid_t) -> String? = { NSRunningApplication(processIdentifier: $0)?.bundleIdentifier },
+         isWindowSizeSettable: @escaping (HyprWindow) -> Bool? = { $0.isSizeSettable }) {
         self.stateCache = stateCache
         self.accessibility = accessibility
         self.displayManager = displayManager
         self.workspaceManager = workspaceManager
         self.bundleIDForPID = bundleIDForPID
+        self.isWindowSizeSettable = isWindowSizeSettable
     }
 
     /// Production entry point: snapshot AX, capture running pids, and
@@ -209,11 +212,15 @@ final class WindowDiscoveryService {
             stateCache.knownWindowIDs.insert(w.windowID)
             stateCache.windowOwners[w.windowID] = w.ownerPID
 
-            // auto-float excluded apps
-            if let bundleID = bundleIDForPID(w.ownerPID), excludedBundleIDs.contains(bundleID) {
+            // auto-float excluded apps and explicitly fixed-size windows
+            let excluded = bundleIDForPID(w.ownerPID).map(excludedBundleIDs.contains) ?? false
+            if let reason = FloatingAdmissionPolicy.reason(
+                isExcluded: excluded,
+                isSizeSettable: isWindowSizeSettable(w)
+            ) {
                 stateCache.floatingWindowIDs.insert(w.windowID)
                 w.isFloating = true
-                hyprLog(.debug, .discovery, "auto-float excluded app: '\(w.title ?? "?")'")
+                hyprLog(.debug, .discovery, "auto-float \(reason.rawValue): '\(w.title ?? "?")'")
             }
 
             // auto-float on disabled monitors — surface so caller skips workspace assignment

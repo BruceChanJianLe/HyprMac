@@ -37,8 +37,16 @@ class KeybindOverlayController {
     func close() {
         mainThreadOnly()
         removeMonitor()
-        panel?.close()
+        guard let closing = panel else { return }
         panel = nil
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            closing.close()
+            return
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.10
+            closing.animator().alphaValue = 0
+        } completionHandler: { closing.close() }
     }
 
     func openTutorial() {
@@ -53,14 +61,12 @@ class KeybindOverlayController {
 
         let maxHeight = screen.visibleFrame.height * 0.75
 
-        let content = KeybindOverlayView(keybinds: keybinds) { [weak self] in
+        let content = KeybindOverlayView(keybinds: keybinds, cardWidth: min(1000, screen.visibleFrame.width - 160)) { [weak self] in
             self?.openTutorial()
         }
             .environmentObject(filter)
         let hosting = KeybindOverlayHostingView(rootView: content)
-        // force dark so dynamic accents resolve to their neon variants
-        hosting.appearance = NSAppearance(named: .darkAqua)
-        // card is 1000 + 6px shadow margin each side; size panel to fit
+        // leave transparent space around the card for the shadow to dissipate
         let fitted = hosting.fittingSize
         let panelWidth = fitted.width
         let panelHeight = min(max(fitted.height, 1), maxHeight)
@@ -77,14 +83,21 @@ class KeybindOverlayController {
         p.isFloatingPanel = true
         p.level = Constants.interfaceWindowLevel
         p.hidesOnDeactivate = false
-        p.appearance = NSAppearance(named: .darkAqua)
 
         hosting.frame = NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight)
         hosting.autoresizingMask = [.width, .height]
         p.contentView = hosting
 
+        let animate = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        p.alphaValue = animate ? 0 : 1
         p.makeKeyAndOrderFront(nil)
         self.panel = p
+        if animate {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.12
+                p.animator().alphaValue = 1
+            }
+        }
 
         installMonitor()
     }
@@ -128,7 +141,8 @@ class KeybindOverlayController {
 }
 
 // a nonactivating HUD should respond to the first click
-private final class KeybindOverlayHostingView<Content: View>: NSHostingView<Content> {
+private final class KeybindOverlayHostingView<Content: View>: OverlayHostingView<Content> {
+    override var isOpaque: Bool { false }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
@@ -185,7 +199,10 @@ enum KeybindOverlayGrouping {
 // MARK: - overlay SwiftUI view
 
 private struct KeybindOverlayView: View {
+    @Environment(\.colorScheme) private var colorScheme
+    private var palette: OverlayPalette { OverlayPalette(scheme: colorScheme) }
     let keybinds: [Keybind]
+    let cardWidth: CGFloat
     let showTutorial: () -> Void
     @EnvironmentObject var filter: FilterModel
     @ObservedObject private var config = UserConfig.shared
@@ -196,18 +213,18 @@ private struct KeybindOverlayView: View {
             columns
         }
         .padding(EdgeInsets(top: 18, leading: 20, bottom: 18, trailing: 20))
-        .frame(width: 1000, alignment: .topLeading)
+        .frame(width: cardWidth, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(nsColor: NSColor(calibratedWhite: 24.0 / 255.0, alpha: 0.96)))
+                .fill(palette.background)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
+                .strokeBorder(palette.separator, lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.55), radius: 35, x: 0, y: 30)
-        .padding(6)  // room for the shadow inside the clear panel
-        .environment(\.colorScheme, .dark)  // HUD is dark in both appearances
+        .compositingGroup()
+        .shadow(color: palette.shadow, radius: 18, x: 0, y: 8)
+        .padding(64)
     }
 
     // MARK: header
@@ -521,10 +538,9 @@ private struct KeybindOverlayView: View {
     }
 }
 
-// MARK: - HUD text colors (fixed, appearance-independent)
+// MARK: - HUD text colors
 
 private extension Color {
-    // #ececf1 — the mockup's near-white HUD text
-    static let hudPrimary = Color(red: 0xEC / 255.0, green: 0xEC / 255.0, blue: 0xF1 / 255.0)
-    static let hudFaint   = Color(red: 0xEC / 255.0, green: 0xEC / 255.0, blue: 0xF1 / 255.0).opacity(0.65)
+    static let hudPrimary = Color.primary
+    static let hudFaint = Color.secondary
 }

@@ -130,6 +130,18 @@ class HyprWindow: Equatable, Hashable {
         return nil
     }
 
+    /// Whether the owning app allows Accessibility clients to resize this
+    /// window. `nil` means AX could not answer, so callers must avoid
+    /// classifying a temporarily unresponsive app as permanently floating.
+    var isSizeSettable: Bool? {
+        var settable = DarwinBoolean(false)
+        let result = AXUIElementIsAttributeSettable(
+            element, kAXSizeAttribute as CFString, &settable
+        )
+        guard result == .success else { return nil }
+        return settable.boolValue
+    }
+
     private static let heuristicMinimumSizes: [String: CGSize] = [
         "com.apple.Safari": CGSize(width: 420, height: 300),
         "com.google.Chrome": CGSize(width: 500, height: 340),

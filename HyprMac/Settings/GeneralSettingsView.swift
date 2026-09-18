@@ -149,6 +149,16 @@ struct GeneralSettingsView: View {
                     .labelsHidden()
             }
 
+            HyprRow("Overlay appearance", icon: "circle.lefthalf.filled") {
+                Picker("", selection: $config.overlayAppearance) {
+                    ForEach(OverlayAppearance.allCases) { appearance in
+                        Text(appearance.displayName).tag(appearance)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 120)
+            }
+
             if config.isICloudDriveAvailable {
                 HyprRow("Sync settings via iCloud", icon: "icloud") {
                     Toggle("", isOn: $config.iCloudSyncEnabled)

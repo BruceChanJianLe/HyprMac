@@ -109,9 +109,17 @@ final class DefaultKeybindsTests: XCTestCase {
         XCTAssertEqual(bind.modifiers, .hypr)
     }
 
+    func testWorkspaceOverviewUsesHyprO() throws {
+        let bind = try XCTUnwrap(Keybind.defaults.first { $0.action == .showWorkspaceOverview })
+        XCTAssertEqual(bind.keyCode, UInt16(kVK_ANSI_O))
+        XCTAssertEqual(bind.modifiers, .hypr)
+        XCTAssertEqual(bind.actionDescription, "Show Workspace Overview")
+    }
+
     func testPauseResumeRemainsAvailableWhileTilingIsDisabled() {
         XCTAssertTrue(HotkeyManager.actionIsAvailable(.toggleTiling, tilingEnabled: false))
         XCTAssertTrue(HotkeyManager.actionIsAvailable(.showKeybinds, tilingEnabled: false))
+        XCTAssertTrue(HotkeyManager.actionIsAvailable(.showWorkspaceOverview, tilingEnabled: false))
         XCTAssertFalse(HotkeyManager.actionIsAvailable(.closeWindow, tilingEnabled: false))
         XCTAssertTrue(HotkeyManager.actionIsAvailable(.showKeybinds, tilingEnabled: true))
     }
