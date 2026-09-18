@@ -54,6 +54,8 @@ extension Keybind {
             return "rectangle.split.2x1"
         case .showKeybinds:
             return "keyboard"
+        case .showWorkspaceOverview:
+            return "rectangle.grid.3x2"
         case .launchApp:
             return "app"
         case .focusMenuBar:
@@ -95,6 +97,7 @@ extension Keybind {
         case .toggleFloating:               return "Toggle Floating"
         case .toggleSplit:                  return "Toggle Split Direction"
         case .showKeybinds:                 return "Show Keybind Overlay"
+        case .showWorkspaceOverview:        return "Show Workspace Overview"
         case .launchApp(let b):             return "Launch \(appDisplayName(for: b))"
         case .focusMenuBar:                 return "Focus Menu Bar"
         case .focusFloating:                return "Cycle Floating Windows"

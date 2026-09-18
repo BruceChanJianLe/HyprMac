@@ -29,6 +29,8 @@ macOS doesn't ship with a tiling window manager. Third-party options either requ
 | 🖥 **Multi-Monitor** | Per-monitor workspace assignment with directional cross-monitor navigation |
 | ⌨️ **Fully Configurable** | Edit the Hypr key, keybinds, app launchers, gaps, and padding in-app or via JSON |
 | 📋 **Keybind Overlay** | `Hypr+K` shows all active shortcuts at a glance |
+| 🗺 **Workspace Overview** | `Hypr+O` shows workspace layouts, app search, and scratchpad apps; type 1–9 to switch |
+| ◐ **Overlay Appearance** | Follow macOS light/dark mode or choose an override in Settings → General |
 
 ---
 
@@ -94,6 +96,7 @@ The physical Hypr key is configurable in Settings → General. Options include C
 | `⇪ + ⇥` / `⇪ + ⇧ + ⇥` | Cycle occupied workspaces on current monitor |
 | `⇪ + W` | Close window |
 | `⇪ + K` | Show keybind overlay |
+| `⇪ + O` | Show workspace overview |
 | `⇪ + ↵` | Launch/focus Terminal |
 | `⇪ + \`` | Warp cursor to menu bar |
 

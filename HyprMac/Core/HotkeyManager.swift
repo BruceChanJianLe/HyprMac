@@ -76,6 +76,7 @@ class HotkeyManager {
 
     static func actionIsAvailable(_ action: Action, tilingEnabled: Bool) -> Bool {
         tilingEnabled || action == .toggleTiling || action == .showKeybinds
+            || action == .showWorkspaceOverview
     }
 
     static func shouldDispatchAction(

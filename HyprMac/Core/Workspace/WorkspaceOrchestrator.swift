@@ -40,6 +40,7 @@ final class WorkspaceOrchestrator {
     /// no desktop to read them off.
     var allWindows: () -> [HyprWindow] = { [] }
     var animatedRetile: (_ prepare: (() -> Void)?, _ completion: (() -> Void)?) -> Void = { _, _ in }
+    var onDidSwitch: (_ workspace: Int, _ screen: NSScreen) -> Void = { _, _ in }
 
     init(workspaceManager: WorkspaceManager,
          tilingEngine: TilingEngine,
@@ -80,7 +81,7 @@ final class WorkspaceOrchestrator {
     /// Suppresses `activation-switch` and `mouse-focus` for the duration
     /// (and a tail) of the switch — `best.focus()` queues asynchronous
     /// notifications that would otherwise re-bounce focus.
-    func switchWorkspace(_ number: Int) {
+    func switchWorkspace(_ number: Int, preferredWindowID: CGWindowID? = nil) {
         // hold polls off for the duration of the transition. Tahoe AX
         // writes lag, so a poll mid-transition reads stale frames and
         // drift detection can falsely reassign windows.
@@ -96,7 +97,8 @@ final class WorkspaceOrchestrator {
         if result.alreadyVisible {
             // workspace is showing on result.screen — just focus it
             let visibleWindows = allWindows.filter { result.toShow.contains($0.windowID) }
-            if let best = visibleWindows.first(where: { !stateCache.floatingWindowIDs.contains($0.windowID) })
+            if let best = visibleWindows.first(where: { $0.windowID == preferredWindowID })
+                ?? visibleWindows.first(where: { !stateCache.floatingWindowIDs.contains($0.windowID) })
                 ?? visibleWindows.first {
                 best.focus()
                 cursorManager.warpToCenter(of: best)
@@ -107,6 +109,8 @@ final class WorkspaceOrchestrator {
                 CGWarpMouseCursorPosition(CGPoint(x: rect.midX, y: rect.midY))
                 focusBorder.hide(); dimmingOverlay.hideAll()
             }
+            NotificationCenter.default.post(name: .hyprMacWorkspaceChanged, object: nil)
+            onDidSwitch(number, result.screen)
             return
         }
 
@@ -129,8 +133,9 @@ final class WorkspaceOrchestrator {
         // focus best tiled window on the new workspace; if none, fall back to
         // any floating window before giving up. only warp+hide if truly empty.
         let newWorkspaceWindows = allWindows.filter { result.toShow.contains($0.windowID) }
+        let preferred = newWorkspaceWindows.first { $0.windowID == preferredWindowID }
         let tiled = newWorkspaceWindows.first { !stateCache.floatingWindowIDs.contains($0.windowID) }
-        if let best = tiled ?? newWorkspaceWindows.first {
+        if let best = preferred ?? tiled ?? newWorkspaceWindows.first {
             best.focus()
             cursorManager.warpToCenter(of: best)
             focusController.recordFocus(best.windowID, reason: "switchWorkspace-after-show")
@@ -142,6 +147,7 @@ final class WorkspaceOrchestrator {
         }
 
         NotificationCenter.default.post(name: .hyprMacWorkspaceChanged, object: nil)
+        onDidSwitch(number, result.screen)
     }
 
     // MARK: - move focused window to workspace

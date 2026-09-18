@@ -30,6 +30,7 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
         padding: CGFloat = 8,
         splits: [String: Int] = [:],
         disabled: Set<String> = [],
+        overlayAppearance: OverlayAppearance = .system,
         showBorder: Bool = true,
         focusColor: String? = nil,
         floatingColor: String? = nil,
@@ -47,6 +48,7 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
             enabled: true, keybinds: [], hyprKey: .capsLock,
             gapSize: gap, outerPadding: padding,
             maxSplitsPerMonitor: splits, disabledMonitors: disabled,
+            overlayAppearance: overlayAppearance,
             showFocusBorder: showBorder, focusBorderColorHex: focusColor,
             floatingBorderColorHex: floatingColor,
             focusBracketStyle: bracketStyle, focusBracketColorHex: bracketColor,
@@ -91,6 +93,7 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
             state(intensity: 0.4),
             state(fade: 0.5),
             state(radius: 18),
+            state(overlayAppearance: .light),
         ]
 
         for variant in variants {
@@ -434,6 +437,7 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
         let legacy = Data(#"{"keybinds":[],"gapSize":23,"outerPadding":11,"enabled":false,"focusBracketThickness":4.5}"#.utf8)
         try legacy.write(to: ConfigStore.configPath)
         let config = UserConfig()
+        XCTAssertEqual(config.overlayAppearance, .system)
         XCTAssertEqual(config.resolvedFocusBracketThickness, 4.5)
         XCTAssertEqual(config.resolvedFocusBracketLength, 21)
         config.focusBracketThicknessOverride = 6
@@ -453,6 +457,26 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
         config.reloadFromDisk()
         XCTAssertEqual(config.resolvedFocusBracketLength, 15)
         XCTAssertEqual(config.resolvedFocusBracketThickness, 4)
+    }
+
+    func testOverlayAppearancePersistsAndReloads() throws {
+        try requireIsolatedHome()
+        let configBefore = try? Data(contentsOf: ConfigStore.configPath)
+        let monitorBefore = try? Data(contentsOf: ConfigStore.monitorConfigPath)
+        defer {
+            restore(configBefore, to: ConfigStore.configPath)
+            restore(monitorBefore, to: ConfigStore.monitorConfigPath)
+        }
+
+        let config = UserConfig()
+        config.overlayAppearance = .dark
+        let saved = try JSONDecoder().decode(
+            SavedConfig.self, from: Data(contentsOf: ConfigStore.configPath))
+        XCTAssertEqual(saved.overlayAppearance, .dark)
+
+        config.overlayAppearance = .light
+        config.reloadFromDisk()
+        XCTAssertEqual(config.overlayAppearance, .light)
     }
 
     func testFloatMigrationOnStartupReloadAndSave() throws {

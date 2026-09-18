@@ -24,12 +24,26 @@ final class StubAccessibility: AccessibilityManager {
 
 final class WindowDiscoveryServiceTests: XCTestCase {
 
+    func testFloatingAdmissionPolicyIsSharedAndConservative() {
+        XCTAssertEqual(
+            FloatingAdmissionPolicy.reason(isExcluded: true, isSizeSettable: nil),
+            .excludedApp
+        )
+        XCTAssertEqual(
+            FloatingAdmissionPolicy.reason(isExcluded: false, isSizeSettable: false),
+            .fixedSize
+        )
+        XCTAssertNil(FloatingAdmissionPolicy.reason(isExcluded: false, isSizeSettable: true))
+        XCTAssertNil(FloatingAdmissionPolicy.reason(isExcluded: false, isSizeSettable: nil))
+    }
+
     // MARK: - fixtures
 
     private func makeService(
         cache: WindowStateCache = WindowStateCache(),
         accessibility: AccessibilityManager = AccessibilityManager(),
-        bundleIDForPID: @escaping (pid_t) -> String? = { _ in nil }
+        bundleIDForPID: @escaping (pid_t) -> String? = { _ in nil },
+        isWindowSizeSettable: @escaping (HyprWindow) -> Bool? = { _ in true }
     ) -> (WindowDiscoveryService, WindowStateCache, WorkspaceManager) {
         let display = DisplayManager()
         let workspaces = WorkspaceManager(displayManager: display)
@@ -39,7 +53,8 @@ final class WindowDiscoveryServiceTests: XCTestCase {
             accessibility: access,
             displayManager: display,
             workspaceManager: workspaces,
-            bundleIDForPID: bundleIDForPID
+            bundleIDForPID: bundleIDForPID,
+            isWindowSizeSettable: isWindowSizeSettable
         )
         return (svc, cache, workspaces)
     }
@@ -123,6 +138,43 @@ final class WindowDiscoveryServiceTests: XCTestCase {
         XCTAssertFalse(cache.floatingWindowIDs.contains(1))
         XCTAssertFalse(w.isFloating)
         XCTAssertEqual(changes.newWindows.count, 1)
+    }
+
+    func testNonResizableWindowAutoFloatsWithoutAnAppException() {
+        let (svc, cache, _) = makeService(
+            bundleIDForPID: { _ in "com.example.Utility" },
+            isWindowSizeSettable: { _ in false }
+        )
+
+        let w = makeWindow(id: 2, pid: 100)
+        let changes = compute(svc, snapshot: [w])
+
+        XCTAssertEqual(changes.newWindows.map(\.windowID), [2])
+        XCTAssertTrue(cache.floatingWindowIDs.contains(2))
+        XCTAssertTrue(w.isFloating)
+    }
+
+    func testUnknownResizeCapabilityDoesNotAutoFloat() {
+        let (svc, cache, _) = makeService(isWindowSizeSettable: { _ in nil })
+
+        let w = makeWindow(id: 3, pid: 101)
+        _ = compute(svc, snapshot: [w])
+
+        XCTAssertFalse(cache.floatingWindowIDs.contains(3))
+        XCTAssertFalse(w.isFloating)
+    }
+
+    func testExcludedAppStillAutoFloatsWhenResizeCapabilityIsUnknown() {
+        let (svc, cache, _) = makeService(
+            bundleIDForPID: { _ in "com.example.Excluded" },
+            isWindowSizeSettable: { _ in nil }
+        )
+
+        let w = makeWindow(id: 4, pid: 102)
+        _ = compute(svc, snapshot: [w], excluded: ["com.example.Excluded"])
+
+        XCTAssertTrue(cache.floatingWindowIDs.contains(4))
+        XCTAssertTrue(w.isFloating)
     }
 
     // MARK: - gone (alive pid → hidden)

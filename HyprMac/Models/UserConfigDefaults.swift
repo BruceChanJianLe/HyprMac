@@ -10,6 +10,22 @@ enum FocusBracketStyle: String, Codable {
     case off
 }
 
+enum OverlayAppearance: String, Codable, CaseIterable, Identifiable {
+    case system
+    case light
+    case dark
+
+    var id: Self { self }
+
+    var displayName: String {
+        switch self {
+        case .system: return "System"
+        case .light: return "Light"
+        case .dark: return "Dark"
+        }
+    }
+}
+
 /// Scalar defaults for `UserConfig`.
 ///
 /// Keybinds and excluded bundle ids live in their type-specific
@@ -24,6 +40,7 @@ enum UserConfigDefaults {
     static let mouseHoverPollHz: Int = 120
     static let hyprKey: HyprKey = .capsLock
     static let showMenuBarIndicator: Bool = true
+    static let overlayAppearance: OverlayAppearance = .system
     static let showFocusBorder: Bool = false
     static let focusBracketStyle: FocusBracketStyle = .rounded
     static let focusBracketColor: NSColor = .black

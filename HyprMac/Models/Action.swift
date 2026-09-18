@@ -30,6 +30,7 @@ enum Action: Equatable {
     case toggleFloating
     case toggleSplit
     case showKeybinds
+    case showWorkspaceOverview
     case launchApp(bundleID: String)
     case focusMenuBar
     case focusFloating
@@ -77,6 +78,7 @@ extension Action: Codable {
         case toggleFloating
         case toggleSplit
         case showKeybinds
+        case showWorkspaceOverview
         case launchApp
         case focusMenuBar
         case focusFloating
@@ -139,6 +141,7 @@ extension Action: Codable {
         case .toggleFloating: self = .toggleFloating
         case .toggleSplit:    self = .toggleSplit
         case .showKeybinds:   self = .showKeybinds
+        case .showWorkspaceOverview: self = .showWorkspaceOverview
         case .focusMenuBar:   self = .focusMenuBar
         case .focusFloating:  self = .focusFloating
         case .closeWindow:    self = .closeWindow
@@ -192,6 +195,8 @@ extension Action: Codable {
             _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .toggleSplit)
         case .showKeybinds:
             _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .showKeybinds)
+        case .showWorkspaceOverview:
+            _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .showWorkspaceOverview)
         case .focusMenuBar:
             _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .focusMenuBar)
         case .focusFloating:

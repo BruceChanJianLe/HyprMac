@@ -217,6 +217,8 @@ final class ActionDispatcher {
             toggleSplit()
         case .showKeybinds:
             keybindOverlay.toggle(keybinds: config.keybinds)
+        case .showWorkspaceOverview:
+            break // handled by WindowManager, which owns the snapshot
         case .launchApp(let bundleID):
             appLauncher.launchOrFocus(bundleID: bundleID)
         case .focusMenuBar:
@@ -255,6 +257,7 @@ final class ActionDispatcher {
         case .toggleFloating:      return "toggleFloating"
         case .toggleSplit:         return "toggleSplit"
         case .showKeybinds:        return "showKeybinds"
+        case .showWorkspaceOverview: return "showWorkspaceOverview"
         case .launchApp:           return "launchApp"
         case .focusMenuBar:        return "focusMenuBar"
         case .focusFloating:       return "focusFloating"
