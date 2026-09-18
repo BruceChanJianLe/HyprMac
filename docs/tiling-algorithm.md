@@ -391,7 +391,7 @@ workspace retain that destination's home assignment while parked. A visible
 destination is tiled on its home monitor in the discovery pass. Startup and
 Retile All first fill each monitor's visible workspace in stable screen,
 focus, and frame order. Only the excess probes later workspace numbers across
-monitor homes, wrapping after workspace 9. This count limit does not guarantee
+monitor homes, wrapping after workspace 10. This count limit does not guarantee
 that every application's dimensions will fit.
 Hidden assigned nonfloating windows reserve capacity in admission and startup
 packing. Discovery events wait until the initial snapshot completes.

@@ -90,6 +90,13 @@ class DisplayManager {
         )
     }
 
+    /// Full physical display bounds in Core Graphics coordinates.
+    func cgFullRect(for screen: NSScreen) -> CGRect {
+        let frame = screen.frame
+        return CGRect(x: frame.minX, y: primaryScreenHeight - frame.maxY,
+                      width: frame.width, height: frame.height)
+    }
+
     /// Resolve which screen contains `cgPoint` (top-left origin).
     /// Falls back to the nearest screen by Manhattan distance to its
     /// edge when no screen actually contains the point — handles

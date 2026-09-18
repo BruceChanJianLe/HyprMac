@@ -404,19 +404,20 @@ final class RetileAllPlannerTests: XCTestCase {
         XCTAssertEqual(probed, [5])
     }
 
-    func testNineWorkspaceCapacityAndOverflow() {
+    func testTenWorkspaceCapacityAndOverflow() {
         let ids = (1...20).map(CGWindowID.init)
         let result = RetileAllPlanner.pack(
             windowIDs: ids,
-            workspaceCount: 9,
+            workspaceCount: Constants.workspaceCount,
             capacityForWorkspace: { $0.isMultiple(of: 2) ? 1 : 2 }
         )
 
-        XCTAssertEqual(result.assignments.keys.sorted(), Array(1...9))
+        XCTAssertEqual(result.assignments.keys.sorted(), Array(Constants.workspaceRange))
         XCTAssertEqual(result.assignments[1], [1, 2])
         XCTAssertEqual(result.assignments[2], [3])
         XCTAssertEqual(result.assignments[9], [13, 14])
-        XCTAssertEqual(result.overflow, [15, 16, 17, 18, 19, 20])
+        XCTAssertEqual(result.assignments[10], [15])
+        XCTAssertEqual(result.overflow, [16, 17, 18, 19, 20])
     }
 
     func testDisabledMonitorWindowRemainsFloating() {

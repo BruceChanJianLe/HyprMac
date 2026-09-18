@@ -85,7 +85,7 @@ class HotkeyManager {
         isRepeat: Bool
     ) -> Bool {
         actionIsAvailable(action, tilingEnabled: tilingEnabled)
-            && !(action == .toggleTiling && isRepeat)
+            && !((action == .toggleTiling || action == .moveToNextEmptyWorkspace) && isRepeat)
     }
 
     /// Switch the physical key acting as the Hypr modifier. Resets any

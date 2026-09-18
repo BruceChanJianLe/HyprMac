@@ -62,6 +62,8 @@ extension Keybind {
             return "menubar.rectangle"
         case .focusFloating:
             return "macwindow.on.rectangle"
+        case .moveToNextEmptyWorkspace:
+            return "rectangle.stack.badge.plus"
         case .closeWindow:
             return "xmark.circle"
         case .cycleWorkspace:
@@ -101,6 +103,7 @@ extension Keybind {
         case .launchApp(let b):             return "Launch \(appDisplayName(for: b))"
         case .focusMenuBar:                 return "Focus Menu Bar"
         case .focusFloating:                return "Cycle Floating Windows"
+        case .moveToNextEmptyWorkspace:     return "Move to dedicated workspace"
         case .closeWindow:                  return "Close Window"
         case .cycleWorkspace(let d):        return d > 0 ? "Next Workspace" : "Previous Workspace"
         case .toggleScratchpad:             return "Toggle Scratchpad"

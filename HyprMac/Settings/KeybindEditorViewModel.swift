@@ -34,6 +34,7 @@ final class KeybindEditorViewModel: ObservableObject {
         case launchApp              = "Launch App"
         case focusMenuBar           = "Focus Menu Bar"
         case focusFloating          = "Focus Floating"
+        case moveToNextEmptyWorkspace = "Move to dedicated workspace"
         case closeWindow            = "Close Window"
         case cycleWorkspace         = "Cycle Workspace"
         case toggleScratchpad       = "Toggle Scratchpad"
@@ -65,6 +66,7 @@ final class KeybindEditorViewModel: ObservableObject {
         case .launchApp(let b):              selectedAction = .launchApp;              bundleIDParam = b
         case .focusMenuBar:                  selectedAction = .focusMenuBar
         case .focusFloating:                 selectedAction = .focusFloating
+        case .moveToNextEmptyWorkspace:      selectedAction = .moveToNextEmptyWorkspace
         case .closeWindow:                   selectedAction = .closeWindow
         case .cycleWorkspace(let d):         selectedAction = .cycleWorkspace;         workspaceParam = d
         case .toggleScratchpad:              selectedAction = .toggleScratchpad
@@ -93,6 +95,7 @@ final class KeybindEditorViewModel: ObservableObject {
         case .launchApp:              action = .launchApp(bundleID: bundleIDParam)
         case .focusMenuBar:           action = .focusMenuBar
         case .focusFloating:          action = .focusFloating
+        case .moveToNextEmptyWorkspace: action = .moveToNextEmptyWorkspace
         case .closeWindow:            action = .closeWindow
         case .cycleWorkspace:         action = .cycleWorkspace(workspaceParam)
         case .toggleScratchpad:       action = .toggleScratchpad

@@ -245,7 +245,8 @@ class UserConfig: ObservableObject {
     // would silently shadow (or be shadowed by) the user's, and neither is
     // discoverable. the user can bind the new action manually in Settings.
     static func mergeNewDefaults(saved: [Keybind]) -> [Keybind] {
-        let saved = ConfigMigration.migrateToggleFloating(saved: saved)
+        let toggleMigrated = ConfigMigration.migrateToggleFloating(saved: saved)
+        let saved = ConfigMigration.migrateFocusFloating(saved: toggleMigrated)
         let savedActions = Set(saved.map { "\($0.action)" })
         let takenChords = Set(saved.map { "\($0.modifiers.rawValue)-\($0.keyCode)" })
         var merged = saved

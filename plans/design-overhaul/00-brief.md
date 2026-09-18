@@ -4,7 +4,7 @@
 
 HyprMac is a **keyboard-driven tiling window manager for macOS**, inspired by
 Hyprland. It runs as a menu-bar-only accessory app (no Dock icon, no main window). It
-automatically tiles your windows into a BSP "dwindle" layout, gives you 9 virtual
+automatically tiles your windows into a BSP "dwindle" layout, gives you 10 virtual
 workspaces per monitor, and puts every window operation — focus, swap, float, move,
 resize — one chord away on the keyboard.
 

@@ -2,7 +2,7 @@
 
 ## Result
 
-`Retile All` now enumerates eligible windows from all nine tracked workspaces.
+`Retile All` now enumerates eligible windows from all ten tracked workspaces.
 It keeps each monitor's ordered windows on that monitor's visible workspace
 while capacity remains, then sends only excess windows through later workspace
 numbers across monitor homes. Each workspace uses its home monitor's configured
@@ -15,7 +15,7 @@ disabled monitors stay out of redistribution.
 The menu item posts `.hyprMacRetileAll`. `WindowManager.retileAllRequested`
 hides the scratchpad and calls `snapshotAndTile`. That method takes one AX
 snapshot, classifies it, redistributes eligible IDs, and tiles visible
-workspaces. `WorkspaceManager` owns all nine assignment sets and computes each
+workspaces. `WorkspaceManager` owns all ten assignment sets and computes each
 workspace's static home from enabled monitors. `TilingEngine.maxDepth` supplies
 the per-home-monitor packing capacity. `SpaceManager` is not involved in this
 virtual-workspace command; it manages native macOS Space enumeration and SPI

@@ -58,7 +58,7 @@ structural, not tactical:
 
 ## Substrate (verified against code by the panel judges)
 
-- **ws 0 as the pseudo-workspace.** `assignWindow` has no 1-9 guard
+- **ws 0 as the pseudo-workspace.** `assignWindow` has no regular-workspace range guard
   (WorkspaceManager.swift:165); `homeScreenForWorkspace` returns nil for 0, so
   ws 0 falls out of every switch/home/anchor path automatically. Members also
   stay in `floatingWindowIDs`.
@@ -135,7 +135,7 @@ made the same call.
 
 1. Default scrim intensity while shown (panel suggested ~0.45 vs the normal
    dim's 0.2) — and should scrim be on at all, or a config toggle?
-2. Should Hypr+F (floater cycle) keep existing semantics for ordinary
+2. Should the floater cycle (formerly Hypr+F; now Hypr+Shift+T) keep existing semantics for ordinary
    per-workspace floaters, with scratchpad members excluded while hidden
    (panel's recommendation), or fold all floating into the scratchpad?
 3. Auto-show on Cmd-Tab to a scratchpad app (pitfall 1's feature version):

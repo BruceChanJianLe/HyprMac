@@ -3,6 +3,43 @@ import XCTest
 @testable import HyprMac
 
 final class TilingEngineVerifiedLayoutTests: XCTestCase {
+    func testParkedOriginalUsesPositionSettleBeforePortraitSizing() {
+        let window = makeWindow(id: 899)
+        let tree = BSPTree()
+        XCTAssertTrue(tree.insert(window, maxDepth: 2))
+        let usable = CGRect(x: -1080, y: -96, width: 1080, height: 1890)
+        let parked = CGRect(x: 3439, y: 1347, width: 1064, height: 900)
+        let target = tree.layout(in: usable, gap: TilingConfig.defaultGap,
+                                 padding: TilingConfig.defaultOuterPadding)[0].1
+        var frame = parked
+        var destinationReady = false
+        var writes: [String] = []
+        var now: TimeInterval = 0
+        let engine = TilingEngine(displayManager: DisplayManager(), frameSizingIOFactory: { _, generation in
+            FrameSizingIO(
+                setMessagingTimeout: { _, _ in .success },
+                writeSize: { _, size, _ in
+                    writes.append("size")
+                    frame.size = CGSize(width: size.width,
+                                        height: destinationReady ? size.height : min(size.height, 1528))
+                    return .success
+                },
+                writePosition: { _, position, _ in writes.append("position"); frame.origin = position; return .success },
+                readPosition: { _, _ in (.success, frame.origin) },
+                readSize: { _, _ in (.success, frame.size) },
+                now: { now }, sleep: { now += $0; destinationReady = true },
+                currentGeneration: generation)
+        })
+        let generation = engine.beginLayoutGeneration()
+
+        let outcome = engine.applyVerifiedLayout(tree, in: usable, generation: generation,
+                                                 originalFrames: [899: parked])
+
+        guard case .accepted = outcome else { return XCTFail("expected reveal to accept, got \(outcome)") }
+        XCTAssertEqual(frame, target)
+        XCTAssertEqual(writes, ["position", "size", "size"])
+    }
+
     func testTimeoutShapedReadFailureRecoversExactLayoutAfterVerifiedRollback() {
         let fixture = timeoutRecoveryFixture(mode: .readTimeout)
 
@@ -605,10 +642,21 @@ final class TilingEngineVerifiedLayoutTests: XCTestCase {
     }
 
     func testHiddenOriginalsAreNotRestoredAfterKnownPositionRefusal() {
-        assertHiddenOriginalsAreNotRestored(
-            mode: .positionRefusal,
-            expectedReason: .geometryMismatch(401)
+        let fixture = hiddenOriginalFixture(mode: .positionRefusal)
+
+        let outcome = fixture.engine.applyVerifiedLayout(
+            fixture.tree, in: fixture.usable, generation: fixture.generation
         )
+        let reasons = degradedReasons(outcome)
+
+        XCTAssertEqual(reasons.candidate, .attemptsExhausted)
+        XCTAssertEqual(reasons.restoration, .outsideUsableFrame(401))
+        XCTAssertFalse(reasons.attempted, "the hidden original must not be restored")
+        XCTAssertEqual(fixture.trace.sizeWriteCount, 0,
+                       "a refused destination position must stop before resizing")
+        XCTAssertTrue(fixture.trace.hiddenPositionWrites.isEmpty)
+        XCTAssertEqual(fixture.trace.frames[402], fixture.trace.originalFrame(for: 402),
+                       "later parked windows must remain untouched after the first refusal")
     }
 
     func testHiddenOriginalsCanCompleteVerifiedReveal() {
@@ -1110,7 +1158,7 @@ private final class HiddenOriginalTrace {
     var frames: [CGWindowID: CGRect]
     var hiddenPositionWrites: [(CGWindowID, CGPoint)] = []
     private var now: TimeInterval = 0
-    private var sizeWrites = 0
+    private(set) var sizeWriteCount = 0
     private var failedRead = false
     private let hiddenFrames: [CGWindowID: CGRect]
     private let mode: Mode
@@ -1121,15 +1169,17 @@ private final class HiddenOriginalTrace {
         self.mode = mode
     }
 
+    func originalFrame(for windowID: CGWindowID) -> CGRect? { hiddenFrames[windowID] }
+
     func io(generation: @escaping () -> UInt64) -> FrameSizingIO {
         FrameSizingIO(
             setMessagingTimeout: { _, _ in .success },
             writeSize: { [self] id, size, _ in
-                sizeWrites += 1
+                sizeWriteCount += 1
                 var frame = frames[id] ?? .zero
                 frame.size = size
                 frames[id] = frame
-                if mode == .deadline, sizeWrites == 4 { now = 1 }
+                if mode == .deadline, sizeWriteCount == 4 { now = 1 }
                 return .success
             },
             writePosition: { [self] id, position, _ in
@@ -1144,7 +1194,7 @@ private final class HiddenOriginalTrace {
                 return .success
             },
             readPosition: { [self] id, _ in
-                if mode == .unknownRead, sizeWrites >= 4, !failedRead {
+                if mode == .unknownRead, sizeWriteCount >= 4, !failedRead {
                     failedRead = true
                     return (.cannotComplete, nil)
                 }

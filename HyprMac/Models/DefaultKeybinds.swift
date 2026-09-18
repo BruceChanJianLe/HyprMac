@@ -32,7 +32,7 @@ extension Keybind {
         binds.append(Keybind(keyCode: UInt16(kVK_DownArrow), modifiers: [.hypr, .shift],
                              action: .swapDirection(.down)))
 
-        // hypr + 1-9: switch workspace N / hypr + shift + 1-9: move window to workspace N
+        // hypr + 1-9,0: switch workspace N / shifted: move window to workspace N
         let numKeys: [UInt16] = [
             UInt16(kVK_ANSI_1), UInt16(kVK_ANSI_2), UInt16(kVK_ANSI_3),
             UInt16(kVK_ANSI_4), UInt16(kVK_ANSI_5), UInt16(kVK_ANSI_6),
@@ -44,6 +44,10 @@ extension Keybind {
             binds.append(Keybind(keyCode: key, modifiers: [.hypr, .shift],
                                  action: .moveToWorkspace(i + 1)))
         }
+        binds.append(Keybind(keyCode: UInt16(kVK_ANSI_0), modifiers: .hypr,
+                             action: .switchWorkspace(10)))
+        binds.append(Keybind(keyCode: UInt16(kVK_ANSI_0), modifiers: [.hypr, .shift],
+                             action: .moveToWorkspace(10)))
 
         // hypr + ctrl + left/right: move focused window to adjacent monitor
         binds.append(Keybind(keyCode: UInt16(kVK_LeftArrow), modifiers: [.hypr, .control],
@@ -81,8 +85,12 @@ extension Keybind {
         binds.append(Keybind(keyCode: UInt16(kVK_ANSI_P), modifiers: .hypr,
                              action: .toggleTiling))
 
-        // hypr + f: focus/raise floating windows
+        // hypr + f: move focused window to the next empty workspace
         binds.append(Keybind(keyCode: UInt16(kVK_ANSI_F), modifiers: .hypr,
+                             action: .moveToNextEmptyWorkspace))
+
+        // hypr + shift + t: focus/raise floating windows
+        binds.append(Keybind(keyCode: UInt16(kVK_ANSI_T), modifiers: [.hypr, .shift],
                              action: .focusFloating))
 
         // hypr + s: toggle scratchpad layer

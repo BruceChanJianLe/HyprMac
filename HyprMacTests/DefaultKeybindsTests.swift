@@ -21,10 +21,11 @@ final class DefaultKeybindsTests: XCTestCase {
         XCTAssertEqual(Keybind.defaults.filter { $0.id == bind.id }, [bind])
     }
 
-    func testFloatDispatchRequiresHyprWithoutShift() {
+    func testShiftSelectsFloatingCycleInsteadOfToggle() {
         let manager = HotkeyManager()
         manager.updateKeybinds(Keybind.defaults)
-        let dispatched = expectation(description: "float dispatched once")
+        let dispatched = expectation(description: "floating shortcuts dispatched")
+        dispatched.expectedFulfillmentCount = 2
         var actions: [Action] = []
         manager.onAction = { actions.append($0); dispatched.fulfill() }
         let hypr = CGEvent(keyboardEventSource: nil,
@@ -32,12 +33,52 @@ final class DefaultKeybindsTests: XCTestCase {
         XCTAssertNil(manager.handleEvent(.keyDown, hypr))
         let shifted = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(kVK_ANSI_T), keyDown: true)!
         shifted.flags = .maskShift
-        XCTAssertNotNil(manager.handleEvent(.keyDown, shifted))
+        XCTAssertNil(manager.handleEvent(.keyDown, shifted))
         let plain = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(kVK_ANSI_T), keyDown: true)!
         plain.flags = []
         XCTAssertNil(manager.handleEvent(.keyDown, plain))
         wait(for: [dispatched], timeout: 1)
-        XCTAssertEqual(actions, [.toggleFloating])
+        XCTAssertEqual(actions, [.focusFloating, .toggleFloating])
+    }
+
+    func testEmptyWorkspaceAndFloatingFocusDefaults() throws {
+        let empty = try XCTUnwrap(Keybind.defaults.first {
+            $0.action == .moveToNextEmptyWorkspace
+        })
+        XCTAssertEqual(empty.keyCode, UInt16(kVK_ANSI_F))
+        XCTAssertEqual(empty.modifiers, .hypr)
+        XCTAssertEqual(empty.displayString, "HYPR+F")
+        XCTAssertEqual(empty.actionDescription, "Move to dedicated workspace")
+        XCTAssertEqual(KeybindCategory.from(empty.action), .workspaces)
+        XCTAssertFalse(empty.touchesFloatingLayer)
+
+        let floating = try XCTUnwrap(Keybind.defaults.first { $0.action == .focusFloating })
+        XCTAssertEqual(floating.keyCode, UInt16(kVK_ANSI_T))
+        XCTAssertEqual(floating.modifiers, [.hypr, .shift])
+        XCTAssertEqual(floating.displayString, "HYPR+⇧+T")
+    }
+
+    func testEmptyWorkspaceAndFloatingFocusDispatchOnDistinctChords() {
+        let manager = HotkeyManager()
+        manager.updateKeybinds(Keybind.defaults)
+        let dispatched = expectation(description: "both repurposed chords dispatch")
+        dispatched.expectedFulfillmentCount = 2
+        var actions: [Action] = []
+        manager.onAction = { actions.append($0); dispatched.fulfill() }
+
+        let hypr = CGEvent(keyboardEventSource: nil,
+                           virtualKey: CGKeyCode(HyprKey.capsLock.keyCode), keyDown: true)!
+        XCTAssertNil(manager.handleEvent(.keyDown, hypr))
+        let empty = CGEvent(keyboardEventSource: nil,
+                            virtualKey: CGKeyCode(kVK_ANSI_F), keyDown: true)!
+        XCTAssertNil(manager.handleEvent(.keyDown, empty))
+        let floating = CGEvent(keyboardEventSource: nil,
+                               virtualKey: CGKeyCode(kVK_ANSI_T), keyDown: true)!
+        floating.flags = .maskShift
+        XCTAssertNil(manager.handleEvent(.keyDown, floating))
+
+        wait(for: [dispatched], timeout: 1)
+        XCTAssertEqual(actions, [.moveToNextEmptyWorkspace, .focusFloating])
     }
 
     func testBadgeFormatterPreservesModifierOrder() {
@@ -71,7 +112,7 @@ final class DefaultKeybindsTests: XCTestCase {
     }
 
     func testDefaultsCoverEachWorkspaceNumber() {
-        // Hypr+1..9 → switchWorkspace(N), Hypr+Shift+1..9 → moveToWorkspace(N).
+        // Hypr+1..0 → switchWorkspace(1...10), shifted → moveToWorkspace(1...10).
         var switchN: Set<Int> = []
         var moveN: Set<Int> = []
         for kb in Keybind.defaults {
@@ -81,8 +122,16 @@ final class DefaultKeybindsTests: XCTestCase {
             default: break
             }
         }
-        XCTAssertEqual(switchN, Set(1...9))
-        XCTAssertEqual(moveN, Set(1...9))
+        XCTAssertEqual(switchN, Set(1...10))
+        XCTAssertEqual(moveN, Set(1...10))
+        XCTAssertTrue(Keybind.defaults.contains {
+            $0.keyCode == UInt16(kVK_ANSI_0) && $0.modifiers == .hypr
+                && $0.action == .switchWorkspace(10)
+        })
+        XCTAssertTrue(Keybind.defaults.contains {
+            $0.keyCode == UInt16(kVK_ANSI_0) && $0.modifiers == [.hypr, .shift]
+                && $0.action == .moveToWorkspace(10)
+        })
     }
 
     func testDefaultsContainAllDirectionsForFocusAndSwap() {
@@ -131,6 +180,12 @@ final class DefaultKeybindsTests: XCTestCase {
             .toggleTiling, tilingEnabled: true, isRepeat: true))
         XCTAssertTrue(HotkeyManager.shouldDispatchAction(
             .showKeybinds, tilingEnabled: false, isRepeat: true))
+        XCTAssertTrue(HotkeyManager.shouldDispatchAction(
+            .moveToNextEmptyWorkspace, tilingEnabled: true, isRepeat: false))
+        XCTAssertFalse(HotkeyManager.shouldDispatchAction(
+            .moveToNextEmptyWorkspace, tilingEnabled: true, isRepeat: true))
+        XCTAssertFalse(HotkeyManager.shouldDispatchAction(
+            .moveToNextEmptyWorkspace, tilingEnabled: false, isRepeat: false))
     }
 
     func testPausedEventPathPassesOrdinaryChordAndDispatchesPauseAndHelp() {
@@ -165,6 +220,9 @@ final class DefaultKeybindsTests: XCTestCase {
         let close = CGEvent(
             keyboardEventSource: nil, virtualKey: CGKeyCode(kVK_ANSI_W), keyDown: true)!
         XCTAssertNotNil(manager.handleEvent(.keyDown, close))
+        let emptyWorkspace = CGEvent(
+            keyboardEventSource: nil, virtualKey: CGKeyCode(kVK_ANSI_F), keyDown: true)!
+        XCTAssertNotNil(manager.handleEvent(.keyDown, emptyWorkspace))
 
         wait(for: [dispatched], timeout: 1)
         XCTAssertEqual(actions, [.toggleTiling, .showKeybinds])

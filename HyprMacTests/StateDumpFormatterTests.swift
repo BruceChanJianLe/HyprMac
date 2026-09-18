@@ -48,6 +48,19 @@ final class StateDumpFormatterTests: XCTestCase {
         XCTAssertEqual(lines.filter { $0.hasPrefix("ws") }.count, 3)
     }
 
+    func testWorkspaceTenIsSeparateFromScratchpad() {
+        let formatter = StateDumpFormatter(
+            screens: [.init(name: "Display", visibleWorkspace: 10)],
+            homeScreenNames: [10: "Display"], visibleWorkspaces: [10],
+            assignments: [100: 10, 99: 0], hidden: [], reserved: [], floating: [100],
+            trees: [:], scratchpad: [99], knownCount: 2
+        )
+        XCTAssertTrue(formatter.lines().contains(
+            "ws10 home=Display visible=true assigned=[100] hidden=[] reserved=[] floating=[100] tree(Display)=[]"))
+        XCTAssertTrue(formatter.lines().contains("scratchpad=[99]"))
+        XCTAssertFalse(formatter.lines().contains { $0.hasPrefix("ws0 ") })
+    }
+
     func testEmptyStateStillReportsScratchpadAndTotals() {
         let empty = StateDumpFormatter(
             screens: [], homeScreenNames: [:], visibleWorkspaces: [],

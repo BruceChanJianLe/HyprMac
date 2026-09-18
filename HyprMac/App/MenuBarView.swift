@@ -93,7 +93,11 @@ struct MenuBarView: View {
                 Text(monitor.name).font(.hyprBody).lineLimit(1).truncationMode(.middle)
                 Spacer()
             }.foregroundStyle(Color.hyprTextSecondary)
-            HStack(spacing: 6) {
+            LazyVGrid(
+                columns: Array(repeating: GridItem(.fixed(25), spacing: 6), count: 5),
+                alignment: .leading,
+                spacing: 6
+            ) {
                 ForEach(monitor.workspaces) { workspace in
                     Button {
                         guard config.enabled else { return }
@@ -106,7 +110,6 @@ struct MenuBarView: View {
                             .overlay(RoundedRectangle(cornerRadius: 4).stroke(workspace.hasFloatingWindows ? Color.hyprMagenta : Color.clear, lineWidth: 1.5))
                     }.buttonStyle(.plain).disabled(!config.enabled).help("Switch to workspace \(workspace.id)")
                 }
-                Spacer()
             }
         }
         .padding(.horizontal, HyprSpacing.md)
@@ -267,6 +270,12 @@ struct MenuBarWorkspaceBadge: Equatable, Identifiable {
 }
 
 enum MenuBarPresentation {
+    static func workspaceBadgeRows(_ badges: [MenuBarWorkspaceBadge]) -> [[MenuBarWorkspaceBadge]] {
+        stride(from: 0, to: badges.count, by: 5).map { start in
+            Array(badges[start..<min(start + 5, badges.count)])
+        }
+    }
+
     static func workspaceGlyphs(active: Set<Int>, occupied: Set<Int>,
                                 floating: Set<Int>) -> String {
         let lastWorkspace = max(active.max() ?? 1, occupied.max() ?? 1)

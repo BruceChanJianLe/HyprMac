@@ -33,7 +33,12 @@ final class WorkspaceOrchestrator {
 
     var screenUnderCursor: () -> NSScreen = { NSScreen.main! }
     var currentFocusedWindow: () -> HyprWindow? = { nil }
+    var actualFocusedWindow: () -> HyprWindow? = { nil }
+    var focusTransferredWindow: (HyprWindow) -> Void = { $0.focusWithoutRaise() }
+    var warpToWindow: (HyprWindow) -> Void = { _ in }
+    var transferRejected: ((HyprWindow, String) -> Void)?
     var updateFocusBorder: (HyprWindow) -> Void = { _ in }
+    var updatePositionCache: () -> Void = { }
     var tileAllVisibleSpaces: () -> Void = { }
     /// Every window AX can see right now. A seam because the explicit
     /// revalidation attempt needs the destination's tenants, and a test has
@@ -41,6 +46,8 @@ final class WorkspaceOrchestrator {
     var allWindows: () -> [HyprWindow] = { [] }
     var animatedRetile: (_ prepare: (() -> Void)?, _ completion: (() -> Void)?) -> Void = { _, _ in }
     var onDidSwitch: (_ workspace: Int, _ screen: NSScreen) -> Void = { _, _ in }
+    var excludedBundleIDs: () -> Set<String> = { [] }
+    var isScratchpadWindow: (CGWindowID) -> Bool = { _ in false }
 
     init(workspaceManager: WorkspaceManager,
          tilingEngine: TilingEngine,
@@ -65,9 +72,209 @@ final class WorkspaceOrchestrator {
         self.dimmingOverlay = dimmingOverlay
         self.suppressions = suppressions
         self.allWindows = { [weak accessibility] in accessibility?.getAllWindows() ?? [] }
+        self.actualFocusedWindow = { [weak accessibility] in
+            accessibility?.getActualFocusedStandardWindow()
+        }
+        self.warpToWindow = { [weak cursorManager] in cursorManager?.warpToCenter(of: $0) }
     }
 
     // MARK: - switch
+
+    /// Move the actual AX-focused standard window to the next empty workspace
+    /// owned by its physical display, switch there, and leave it as the sole
+    /// tile. Destination geometry and source parking are verified before any
+    /// workspace ownership changes.
+    func moveToNextEmptyWorkspace() {
+        guard let focused = actualFocusedWindow(),
+              let cached = stateCache.cachedWindows[focused.windowID],
+              cached.ownerPID == focused.ownerPID,
+              CFEqual(cached.element, focused.element),
+              !stateCache.hiddenWindowIDs.contains(focused.windowID),
+              !isScratchpadWindow(focused.windowID),
+              let sourceWorkspace = workspaceManager.workspaceFor(focused.windowID),
+              sourceWorkspace != TilingEngine.scratchpadWorkspace,
+              workspaceManager.isWorkspaceVisible(sourceWorkspace),
+              let initialPhysicalScreen = displayManager.screen(for: focused),
+              !workspaceManager.isMonitorDisabled(initialPhysicalScreen),
+              focused.frame?.isSubstantiallyVisible(
+                on: displayManager.cgRect(for: initialPhysicalScreen), threshold: 0.5) == true,
+              let home = workspaceManager.homeScreenForWorkspace(sourceWorkspace),
+              workspaceManager.screenID(for: home) == workspaceManager.screenID(for: initialPhysicalScreen),
+              !focused.isFullscreen else {
+            NSSound.beep()
+            return
+        }
+        // The fresh AX object owns the authoritative element. Preserve the
+        // model flags discovery had already assigned to the cached instance.
+        focused.isFloating = stateCache.floatingWindowIDs.contains(focused.windowID)
+
+        let sourceIDs = workspaceManager.windowIDs(onWorkspace: sourceWorkspace)
+        // A dedicated workspace already containing only the focused window is
+        // the desired end state. Repeated Hypr+F is therefore a no-op, even if
+        // that sole window is currently floating.
+        guard sourceIDs.count > 1 else { return }
+        guard FloatingAdmissionPolicy.reason(
+            isExcluded: focused.bundleID.map(excludedBundleIDs().contains) ?? false,
+            isSizeSettable: focused.isSizeSettable
+        ) == nil else {
+            rejectTransfer(focused, message: "This window cannot be tiled")
+            return
+        }
+        guard let destination = workspaceManager.nextEmptyWorkspace(
+            after: sourceWorkspace, on: initialPhysicalScreen
+        ) else {
+            rejectTransfer(focused, message: "No empty workspace on this display")
+            return
+        }
+
+        let known = allWindows().reduce(into: [CGWindowID: HyprWindow]()) { $0[$1.windowID] = $1 }
+        var sourceWindows: [HyprWindow] = []
+        for id in sourceIDs where !stateCache.hiddenWindowIDs.contains(id) {
+            guard let window = id == focused.windowID ? focused : (known[id] ?? stateCache.cachedWindows[id]),
+                  window.frame != nil else {
+                rejectTransfer(focused, message: "Could not verify workspace windows")
+                return
+            }
+            sourceWindows.append(window)
+        }
+
+        let initialScreenID = workspaceManager.screenID(for: initialPhysicalScreen)
+        let signature = displayManager.refreshedFingerprint()
+        guard let physicalScreen = displayManager.screens.first(where: {
+            workspaceManager.screenID(for: $0) == initialScreenID
+        }), !workspaceManager.isMonitorDisabled(physicalScreen),
+        workspaceManager.homeScreenForWorkspace(sourceWorkspace).map({
+            workspaceManager.screenID(for: $0) == initialScreenID
+        }) == true,
+        workspaceManager.workspaceForScreen(physicalScreen) == sourceWorkspace,
+        focused.frame?.isSubstantiallyVisible(
+            on: displayManager.cgRect(for: physicalScreen), threshold: 0.5) == true else {
+            rejectTransfer(focused, message: "Displays changed before the move")
+            return
+        }
+        let wasFloating = stateCache.floatingWindowIDs.contains(focused.windowID)
+        suppressions.suppress("workspace-transition", for: 1.5)
+        suppressions.suppress("activation-switch", for: 0.5)
+        suppressions.suppress("mouse-focus", for: 0.15)
+        focused.isFloating = false
+        let preparedResult = tilingEngine.prepareSoleWindowTransfer(
+            focused, sourceWindows: sourceWindows, fromWorkspace: sourceWorkspace,
+            toWorkspace: destination, screen: physicalScreen,
+            restorationReach: displayManager.cgRect(for: physicalScreen))
+        let prepared: TilingEngine.PreparedSoleWindowTransfer
+        switch preparedResult {
+        case .refusedRestored:
+            focused.isFloating = wasFloating
+            rejectTransfer(focused, message: "Could not apply the workspace layout")
+            return
+        case .degraded:
+            focused.isFloating = wasFloating
+            rejectTransfer(focused, message: "Could not safely restore the window")
+            return
+        case .prepared(let value):
+            prepared = value
+        }
+
+        guard signature == displayManager.refreshedFingerprint() else {
+            tilingEngine.markWorkspaceGeometryUnverified(
+                sourceWorkspace, screen: physicalScreen, windowIDs: sourceIDs)
+            focused.isFloating = wasFloating
+            rejectTransfer(focused, message: "Displays changed during the move")
+            return
+        }
+        guard workspaceManager.windowIDs(onWorkspace: destination).isEmpty,
+              workspaceManager.homeScreenForWorkspace(destination).map({
+                  workspaceManager.screenID(for: $0) == workspaceManager.screenID(for: physicalScreen)
+              }) == true else {
+            if case .degraded = tilingEngine.restorePreparedSoleWindowTransfer(prepared) {
+                tilingEngine.markWorkspaceGeometryUnverified(
+                    sourceWorkspace, screen: physicalScreen, windowIDs: sourceIDs)
+            }
+            focused.isFloating = wasFloating
+            rejectTransfer(focused, message: "Displays changed during the move")
+            return
+        }
+
+        let park = workspaceManager.hidePosition()
+        let parked = sourceWindows.filter { $0.windowID != focused.windowID }
+        if case .degraded = tilingEngine.parkPreparedSourceWindows(
+            prepared, excluding: focused.windowID, at: park,
+            displayFrames: displayManager.screens.map { displayManager.cgFullRect(for: $0) }) {
+            let restoration = tilingEngine.restorePreparedSoleWindowTransfer(
+                prepared)
+            focused.isFloating = wasFloating
+            let message: String
+            switch restoration {
+            case .restored: message = "Could not hide the current workspace"
+            case .degraded:
+                tilingEngine.markWorkspaceGeometryUnverified(
+                    sourceWorkspace, screen: physicalScreen, windowIDs: sourceIDs)
+                message = "Could not safely restore the workspace"
+            }
+            rejectTransfer(focused, message: message)
+            return
+        }
+
+        guard signature == displayManager.refreshedFingerprint() else {
+            tilingEngine.markWorkspaceGeometryUnverified(
+                sourceWorkspace, screen: physicalScreen, windowIDs: sourceIDs)
+            focused.isFloating = wasFloating
+            rejectTransfer(focused, message: "Displays changed during the move")
+            return
+        }
+        guard workspaceManager.workspaceFor(focused.windowID) == sourceWorkspace,
+              workspaceManager.windowIDs(onWorkspace: sourceWorkspace) == sourceIDs,
+              workspaceManager.windowIDs(onWorkspace: destination).isEmpty,
+              workspaceManager.homeScreenForWorkspace(destination).map({
+                  workspaceManager.screenID(for: $0) == initialScreenID
+              }) == true,
+              tilingEngine.commitPreparedSoleWindowTransfer(prepared) else {
+            if case .degraded = tilingEngine.restorePreparedSoleWindowTransfer(prepared) {
+                tilingEngine.markWorkspaceGeometryUnverified(
+                    sourceWorkspace, screen: physicalScreen, windowIDs: sourceIDs)
+            }
+            focused.isFloating = wasFloating
+            rejectTransfer(focused, message: "The workspace move was superseded")
+            return
+        }
+
+        revalidation.cancel(focused.windowID, reason: "full workspace move")
+        for window in parked where stateCache.floatingWindowIDs.contains(window.windowID) {
+            if let original = tilingEngine.capturedFrame(for: window.windowID, in: prepared) {
+                workspaceManager.setSavedFloatingFrame(original, for: window.windowID)
+            }
+        }
+        tilingEngine.removeWindowMembershipOnly(focused, fromWorkspace: sourceWorkspace)
+        stateCache.floatingWindowIDs.remove(focused.windowID)
+        workspaceManager.clearSavedFloatingFrame(for: focused.windowID)
+        if wasFloating, let original = tilingEngine.capturedFrame(for: focused.windowID, in: prepared) {
+            stateCache.originalFrames[focused.windowID] = original
+        }
+        focused.isFloating = false
+        workspaceManager.moveWindow(focused.windowID, toWorkspace: destination)
+        _ = workspaceManager.switchWorkspace(destination, cursorScreen: physicalScreen)
+
+        focusTransferredWindow(focused)
+        warpToWindow(focused)
+        focusController.recordFocus(focused.windowID, reason: "moveToNextEmptyWorkspace")
+        stateCache.cachedWindows[focused.windowID] = focused
+        updatePositionCache()
+        updateFocusBorder(focused)
+        NotificationCenter.default.post(name: .hyprMacWorkspaceChanged, object: nil)
+        onDidSwitch(destination, physicalScreen)
+    }
+
+    private func rejectTransfer(_ window: HyprWindow, message: String) {
+        if let transferRejected {
+            transferRejected(window, message)
+            return
+        }
+        NSSound.beep()
+        if let frame = window.frame {
+            focusBorder.flashError(around: frame, windowID: window.windowID,
+                                   window: window, message: message)
+        }
+    }
 
     /// Switch to workspace `number` on the cursor's monitor.
     ///

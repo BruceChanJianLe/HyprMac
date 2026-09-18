@@ -111,7 +111,7 @@ struct KeybindsSettingsView: View {
         let collapsedIDs = Set((switchFamily ?? []).map(\.id) + (moveFamily ?? []).map(\.id))
         let exceptions = binds.filter { !collapsedIDs.contains($0.id) }
 
-        return HyprPanel("Workspaces", footer: "N = workspace number (1–9). Expand a group to edit individual bindings.") {
+        return HyprPanel("Workspaces", footer: "Keys 1–9 select workspaces 1–9; 0 selects workspace 10. Expand a group to edit individual bindings.") {
             if let switchFamily {
                 workspaceDisclosure(
                     id: "switch", title: "Switch to workspace N", binds: switchFamily)
@@ -262,7 +262,7 @@ struct KeybindsSettingsView: View {
                     .font(.hyprCaption)
                     .foregroundStyle(Color.hyprTextSecondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("Shortcuts call it HYPR. N means a workspace number from 1 to 9.")
+                Text("Shortcuts call it HYPR. Workspace 10 uses the 0 key.")
                     .font(.hyprCaption)
                     .foregroundStyle(Color.hyprTextTertiary)
             }

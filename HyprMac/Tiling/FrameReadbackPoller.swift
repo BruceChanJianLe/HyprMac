@@ -69,6 +69,16 @@ struct FrameReadbackPoller {
                     phase: .candidate)
     }
 
+    func applyWorkspaceReveal(_ layouts: [(HyprWindow, CGRect)], parkedWindowIDs: Set<CGWindowID>,
+                              usableFrame: CGRect, gap: CGFloat,
+                              generation requestedGeneration: UInt64) -> Result {
+        var revealConfiguration = configuration
+        revealConfiguration.positionSettleWindowIDs = parkedWindowIDs
+        return applyLayout(layouts, usableFrame: usableFrame, gap: gap,
+                           generation: requestedGeneration, configuration: revealConfiguration,
+                           phase: .candidate)
+    }
+
     func applyRestoration(_ layouts: [(HyprWindow, CGRect)], usableFrame: CGRect,
                           gap: CGFloat, generation requestedGeneration: UInt64) -> Result {
         var strictConfiguration = configuration

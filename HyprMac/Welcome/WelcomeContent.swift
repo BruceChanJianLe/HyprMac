@@ -27,8 +27,8 @@ enum WhatsNewFeatures {
     static let current: [WhatsNewFeature] = [
         WhatsNewFeature(
             icon: "rectangle.split.2x1",
-            title: "Hyprland-Style Tiling",
-            description: "Drag a tiled window to an edge of another tile to place it there and reshape your layout. Hold Hypr while dragging when you want to swap the two tiles instead."
+            title: "Ten Workspaces at a Glance",
+            description: "Workspace 10 now has its own 0-key shortcut, and the overview presents all ten workspaces in a clear 2×5 grid."
         ),
         WhatsNewFeature(
             icon: "slider.horizontal.3",
@@ -37,8 +37,8 @@ enum WhatsNewFeatures {
         ),
         WhatsNewFeature(
             icon: "keyboard",
-            title: "A Clearer HYPR+K Menu",
-            description: "The keybind reference is now a larger, more readable three-column guide, with navigation and apps on the left, window management in the center, and workspaces on the right. Toggle Float now defaults to HYPR+T."
+            title: "A Dedicated Workspace Shortcut",
+            description: "HYPR+F moves the focused window to the next empty workspace, so a new task can get a dedicated space immediately."
         ),
         WhatsNewFeature(
             icon: "checkmark.shield",

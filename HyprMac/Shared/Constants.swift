@@ -4,6 +4,9 @@
 import AppKit
 
 enum Constants {
+    static let workspaceCount = 10
+    static let workspaceRange = 1...workspaceCount
+
     // keep interactive windows above the floating border and dim panels
     static let interfaceWindowLevel = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
 }

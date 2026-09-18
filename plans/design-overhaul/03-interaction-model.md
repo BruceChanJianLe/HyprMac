@@ -22,12 +22,13 @@ chips.
 | `Hypr + ←/→/↑/↓` | Focus window in direction | Focus & Navigation |
 | `Hypr + Shift + ←/→/↑/↓` | Swap window in direction | Window Management |
 | `Hypr + J` | Toggle split direction (transpose) | Window Management |
-| `Hypr + Shift + T` | Toggle floating/tiling (eject scratchpad window) | Window Management |
-| `Hypr + F` | Focus / cycle floating windows | Focus & Navigation |
+| `Hypr + T` | Toggle floating/tiling | Window Management |
+| `Hypr + Shift + T` | Focus / cycle floating windows | Focus & Navigation |
+| `Hypr + F` | Move to dedicated workspace | Workspaces |
 | `Hypr + S` | Toggle scratchpad layer | Window Management |
 | `Hypr + Shift + S` | Send focused window to scratchpad | Window Management |
-| `Hypr + 1–9` | Switch to workspace N | Workspaces |
-| `Hypr + Shift + 1–9` | Move focused window to workspace N | Workspaces |
+| `Hypr + 1–9, 0` | Switch to workspace N | Workspaces |
+| `Hypr + Shift + 1–9, 0` | Move focused window to workspace N | Workspaces |
 | `Hypr + Ctrl + ←/→` | Move focused window to adjacent monitor | Workspaces |
 | `Hypr + Tab` / `Hypr + Shift + Tab` | Cycle occupied workspaces on current monitor | Workspaces |
 | `Hypr + W` | Close window | Window Management |

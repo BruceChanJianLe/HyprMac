@@ -72,6 +72,18 @@ final class MenuBarPresentationTests: XCTestCase {
         XCTAssertEqual(snapshot.workspaces, badges)
     }
 
+    func testWorkspaceBadgesWrapAfterFiveItems() {
+        let badges = Constants.workspaceRange.map {
+            MenuBarWorkspaceBadge(id: $0, isActive: false, isOccupied: false,
+                                  hasFloatingWindows: false)
+        }
+
+        XCTAssertEqual(MenuBarPresentation.workspaceBadgeRows(badges).map { $0.map(\.id) }, [
+            [1, 2, 3, 4, 5],
+            [6, 7, 8, 9, 10]
+        ])
+    }
+
     private func monitor(_ id: Int, _ name: String, workspace: Int,
                          portrait: Bool = false) -> MenuBarMonitorSnapshot {
         MenuBarMonitorSnapshot(id: id, name: name, currentWorkspace: workspace,

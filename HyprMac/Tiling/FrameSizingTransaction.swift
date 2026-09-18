@@ -81,6 +81,10 @@ struct FrameSizingConfiguration {
     var requiredStableSamples: Int = 2
     var minimumMismatchSettle: TimeInterval = 0.24
     var perCallTimeout: TimeInterval = 0.1
+    /// A parked window can still be constrained by its old display for a
+    /// short time after its position changes. Observe the target position
+    /// settle before asking that window to take the destination size.
+    var positionSettleWindowIDs: Set<CGWindowID> = []
     /// Restoration only. A rollback asks every window to go back where it
     /// was, so the question is per-window correspondence, not whether the
     /// result is a valid tiled arrangement. Originals that overlapped each
@@ -448,11 +452,18 @@ struct FrameSizingAttempt {
                        checkpoint: checkpoint)
         }
 
-        let writes: [(String, () -> AXError)] = [
-            ("size", { io.writeSize(target.windowID, target.frame.size, configuration.perCallTimeout) }),
-            ("position", { io.writePosition(target.windowID, target.frame.origin, configuration.perCallTimeout) }),
-            ("size2", { io.writeSize(target.windowID, target.frame.size, configuration.perCallTimeout) })
-        ]
+        let settlePositionBeforeSizing = configuration.positionSettleWindowIDs.contains(target.windowID)
+        let writes: [(String, () -> AXError)] = settlePositionBeforeSizing
+            ? [
+                ("position", { io.writePosition(target.windowID, target.frame.origin, configuration.perCallTimeout) }),
+                ("size", { io.writeSize(target.windowID, target.frame.size, configuration.perCallTimeout) }),
+                ("size2", { io.writeSize(target.windowID, target.frame.size, configuration.perCallTimeout) })
+            ]
+            : [
+                ("size", { io.writeSize(target.windowID, target.frame.size, configuration.perCallTimeout) }),
+                ("position", { io.writePosition(target.windowID, target.frame.origin, configuration.perCallTimeout) }),
+                ("size2", { io.writeSize(target.windowID, target.frame.size, configuration.perCallTimeout) })
+            ]
         for (label, operation) in writes {
             if let failure = prepare(target.windowID, checkpoint: checkpoint) {
                 traceSteps(false)
@@ -474,6 +485,72 @@ struct FrameSizingAttempt {
                 primary = Result(verdict: .rejected(.writeFailed(target.windowID, error)),
                                  actualFrames: actualFrames)
             } else {
+                if label == "position", settlePositionBeforeSizing {
+                    var anchor: CGPoint?
+                    var stableCount = 0
+                    var settled = false
+                    for attempt in 0..<configuration.maximumAttempts {
+                        if let failure = prepareRead(target.windowID, checkpoint: checkpoint) {
+                            traceSteps(false)
+                            return end(token, windowID: target.windowID,
+                                       preserving: Result(verdict: .unknown(failure),
+                                                          actualFrames: actualFrames),
+                                       checkpoint: checkpoint)
+                        }
+                        let readStarted = io.now()
+                        let (readError, position) = io.readPosition(target.windowID,
+                                                                    configuration.perCallTimeout)
+                        noteTimeoutShape(readError, started: readStarted, progress: &progress)
+                        if let failure = checkpoint() {
+                            traceSteps(false)
+                            return end(token, windowID: target.windowID,
+                                       preserving: Result(verdict: .unknown(failure),
+                                                          actualFrames: actualFrames),
+                                       checkpoint: checkpoint)
+                        }
+                        guard readError == .success, let position else {
+                            let failure: FrameSizingFailure = readError == .invalidUIElement
+                                ? .windowUnavailable(target.windowID)
+                                : .readFailed(target.windowID, readError)
+                            traceSteps(false)
+                            return end(token, windowID: target.windowID,
+                                       preserving: Result(verdict: .unknown(failure),
+                                                          actualFrames: actualFrames),
+                                       checkpoint: checkpoint)
+                        }
+                        guard position.x.isFinite, position.y.isFinite else {
+                            traceSteps(false)
+                            return end(token, windowID: target.windowID,
+                                       preserving: Result(verdict: .unknown(.invalidFrame(target.windowID)),
+                                                          actualFrames: actualFrames),
+                                       checkpoint: checkpoint)
+                        }
+                        let onTarget = abs(position.x - target.frame.minX) <= configuration.positionTolerance
+                            && abs(position.y - target.frame.minY) <= configuration.positionTolerance
+                        if onTarget, let prior = anchor,
+                           abs(position.x - prior.x) <= configuration.stableTolerance,
+                           abs(position.y - prior.y) <= configuration.stableTolerance {
+                            stableCount += 1
+                        } else {
+                            anchor = position
+                            stableCount = onTarget ? 1 : 0
+                        }
+                        if stableCount >= configuration.requiredStableSamples {
+                            settled = true
+                            break
+                        }
+                        if attempt + 1 < configuration.maximumAttempts {
+                            io.sleep(configuration.pollInterval)
+                        }
+                    }
+                    guard settled else {
+                        traceSteps(false)
+                        return end(token, windowID: target.windowID,
+                                   preserving: Result(verdict: .unknown(.attemptsExhausted),
+                                                      actualFrames: actualFrames),
+                                   checkpoint: checkpoint)
+                    }
+                }
                 continue
             }
             traceSteps(false)
