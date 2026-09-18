@@ -89,6 +89,14 @@ final class KeybindDecoderToleranceTests: XCTestCase {
         XCTAssertEqual(kb.action, .focusFloating)
     }
 
+    func testMoveToNextEmptyWorkspaceWireFormatDecodes() throws {
+        let json = #"{"action":{"moveToNextEmptyWorkspace":{}},"keyCode":3,"modifiers":1}"#
+        let kb = try JSONDecoder().decode(Keybind.self, from: Data(json.utf8))
+        XCTAssertEqual(kb.action, .moveToNextEmptyWorkspace)
+        XCTAssertEqual(kb.keyCode, 3)
+        XCTAssertEqual(kb.modifiers, .hypr)
+    }
+
     func testShowKeybindsWireFormatDecodes() throws {
         let json = #"{"action":{"showKeybinds":{}},"keyCode":40,"modifiers":1}"#
         let kb = try JSONDecoder().decode(Keybind.self, from: Data(json.utf8))
@@ -179,6 +187,13 @@ final class KeybindDecoderToleranceTests: XCTestCase {
         let s = String(data: try JSONEncoder().encode(kb), encoding: .utf8)!
         XCTAssertTrue(s.contains(#""toggleFloating":{}"#),
                       "expected toggleFloating:{} in encoded JSON: \(s)")
+    }
+
+    func testEncoderProducesMoveToNextEmptyWorkspaceKey() throws {
+        let kb = Keybind(keyCode: 3, modifiers: .hypr, action: .moveToNextEmptyWorkspace)
+        let s = String(data: try JSONEncoder().encode(kb), encoding: .utf8)!
+        XCTAssertTrue(s.contains(#""moveToNextEmptyWorkspace":{}"#),
+                      "expected moveToNextEmptyWorkspace:{} in encoded JSON: \(s)")
     }
 
     // MARK: - default keybinds round-trip

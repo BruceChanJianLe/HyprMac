@@ -340,7 +340,7 @@ recovery pending=[] unverified=[221]
 known=4 hidden=0 reserved=0 floating=1
 ```
 
-Screens first, then each workspace 1–9 that has at least one window
+Screens first, then each workspace 1–10 that has at least one window
 (empty workspaces are omitted), then the scratchpad, then learned
 minima, then recovery state, then cache totals. `tree(...)` is the leaf
 membership of that workspace's BSP tree on its home screen — compare it
@@ -562,7 +562,7 @@ passes about 200 ms apart. Each pass raised the floater, then restored
 `tiled` focus through `focusWithoutRaise`, which generated another Safari
 focused-window notification and poll. The logged suppression pair identifies
 `raiseBehind` as the writer; the old build did not log its individual raise
-IDs or AX raise return codes. Hypr+F recorded `42533 → 44870` at
+IDs or AX raise return codes. The former Hypr+F binding (now Hypr+Shift+T) recorded `42533 → 44870` at
 21:20:33.700 CDT, followed by a stale restore to `42533` at 21:20:33.763.
 A later tiled hover restarted the loop. These are stable window IDs, not
 page titles.
@@ -570,7 +570,7 @@ page titles.
 Automatic raising now leaves floating siblings of the focused tiled app
 alone. Safari can reorder sibling windows when main/key focus is restored,
 so repeatedly enforcing floater-on-top conflicts with the selected tile.
-Cross-app raising and explicit Hypr+F remain available. Hover can select a
+Cross-app raising and explicit Hypr+Shift+T remain available. Hover can select a
 visible topmost floater by its physical window ID. A delayed restore must
 still refer to the current, visible, known tiled focus target and must not
 run during menu tracking or scratchpad display.
@@ -583,7 +583,7 @@ nothing stay silent. Correlate these with `ffm-topmost-floating`, ordinary
 
 Live acceptance requires two overlapping Safari windows, one tiled and one
 floating after admission refusal. Hover each exposed window in turn, move
-to another app, then press Hypr+F. Check exact AX window identity and stable
+to another app, then press Hypr+Shift+T. Check exact AX window identity and stable
 z-order as well as the visible result; unit tests cannot establish macOS AX
 behavior. Keep existing logs before restarting the app.
 

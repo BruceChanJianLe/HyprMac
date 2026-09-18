@@ -83,7 +83,7 @@ New `Welcome/TourView.swift`; delete `OnboardingView.swift`, `WelcomeSlideView.s
      carries enough to identify focusDirection); Tour page observes. Follow the existing
      notification-name pattern (`.hyprMacWorkspaceChanged` etc. in MenuBarView.swift).
   2. Focus — cyan focus semantics (border, FFM, directional focus).
-  3. Workspaces — Hypr+1-9, glyph language.
+  3. Workspaces — Hypr+1-9 and Hypr+0 (workspace 10), glyph language.
   4. Finish — points at Hypr+K overlay.
 - What's-new page: changelog rows from `WhatsNewFeatures.current` (icon in tinted rounded
   square + title + one-liner, mockup 1l), single Continue.

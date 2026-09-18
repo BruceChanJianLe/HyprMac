@@ -29,6 +29,22 @@ struct WorkspaceSnapshot: Identifiable, Equatable {
 }
 
 enum WorkspaceOverviewPresentation {
+    static let columnCount = 5
+
+    /// Fresh windows always render. Known or cached unhidden windows survive
+    /// a transient AX omission until discovery classifies them. Hidden windows
+    /// render only while their tile is deliberately reserved (minimized,
+    /// app-hidden, another Space, or an unresolved AX outage). A hidden id
+    /// with no reservation has been verified closed and must not linger in UI.
+    static func displayedWindowIDs(assigned: Set<CGWindowID>,
+                                   current: Set<CGWindowID>,
+                                   knownOrCached: Set<CGWindowID>,
+                                   hidden: Set<CGWindowID>,
+                                   reservedHidden: Set<CGWindowID>) -> [CGWindowID] {
+        let awaitingDiscovery = knownOrCached.subtracting(hidden)
+        return assigned.intersection(current.union(reservedHidden).union(awaitingDiscovery)).sorted()
+    }
+
     static func windowMatches(_ window: WorkspaceWindowSnapshot, query: String) -> Bool {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return needle.isEmpty
@@ -64,19 +80,20 @@ enum WorkspaceOverviewPresentation {
         let blocked: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
         guard modifiers.intersection(blocked).isEmpty,
               let characters, characters.count == 1,
-              let workspace = Int(characters), (1...9).contains(workspace) else { return nil }
-        return workspace
+              let digit = Int(characters) else { return nil }
+        if digit == 0 { return Constants.workspaceCount }
+        return Constants.workspaceRange.contains(digit) ? digit : nil
     }
 
     static func overviewHeight(snapshots: [WorkspaceSnapshot], scratchpadCount: Int,
                                maximum: CGFloat) -> CGFloat {
-        let cardsPerRow = 3
+        let cardsPerRow = columnCount
         let rowHeights = stride(from: 0, to: snapshots.count, by: cardsPerRow).map { start in
             snapshots[start..<min(start + cardsPerRow, snapshots.count)]
                 .map { CGFloat(170 + $0.windows.count * 19) }.max() ?? 170
         }
         let grid = rowHeights.reduce(0, +) + CGFloat(max(0, rowHeights.count - 1) * 12)
-        let headerAndInsets: CGFloat = 55 + 16 + 44 + 128
+        let headerAndInsets: CGFloat = 55 + 16 + 44 + 48
         let scratchpad: CGFloat = scratchpadCount > 0 ? 62 : 0
         return min(maximum, max(320, grid + headerAndInsets + scratchpad))
     }
@@ -156,7 +173,7 @@ final class WorkspaceOverviewController {
 
     private func showOverview(_ snapshots: [WorkspaceSnapshot], scratchpad: [WorkspaceWindowSnapshot]) {
         guard let screen = NSScreen.main else { return }
-        let maxWidth = min(980, screen.visibleFrame.width - 48)
+        let maxWidth = min(1400, screen.visibleFrame.width - 48)
         let maxHeight = screen.visibleFrame.height - 48
         let view = WorkspaceOverviewView(
             snapshots: snapshots,
@@ -254,7 +271,7 @@ private struct WorkspaceSwitchHUD: View {
     }
 }
 
-private struct WorkspaceOverviewView: View {
+struct WorkspaceOverviewView: View {
     @ObservedObject private var config = UserConfig.shared
     @Environment(\.colorScheme) private var colorScheme
     private var palette: OverlayPalette { OverlayPalette(scheme: colorScheme) }
@@ -262,28 +279,35 @@ private struct WorkspaceOverviewView: View {
     let scratchpad: [WorkspaceWindowSnapshot]
     let selectWorkspace: (Int) -> Void
     let selectWindow: (Int, CGWindowID) -> Void
+    var onCardFramesChange: (([Int: CGRect]) -> Void)? = nil
     @State private var query = ""
     @FocusState private var searchFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("WORKSPACE OVERVIEW").font(.system(size: 17, weight: .semibold, design: .monospaced))
-                    Text(config.enabled ? "1–9 to switch · Type to search · Esc to close" : "Tiling paused · Resume tiling to switch workspaces").font(.system(size: 12)).foregroundStyle(.secondary)
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    title
+                    Spacer()
+                    search
                 }
-                Spacer()
-                TextField("Find workspace or app", text: $query)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 230)
-                    .focused($searchFocused)
+                VStack(alignment: .leading, spacing: 10) {
+                    title
+                    search.frame(maxWidth: .infinity)
+                }
             }
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 245), spacing: 12, alignment: .top)], spacing: 12) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 12, alignment: .top), count: WorkspaceOverviewPresentation.columnCount), spacing: 12) {
                     ForEach(WorkspaceOverviewPresentation.visibleWorkspaces(snapshots, query: query)) { workspace in
                         WorkspaceCard(workspace: workspace,
                                       selectWorkspace: selectWorkspace,
                                       selectWindow: selectWindow)
+                            .frame(maxWidth: .infinity)
+                            .background(GeometryReader { proxy in
+                                Color.clear.preference(
+                                    key: WorkspaceOverviewCardFramesKey.self,
+                                    value: [workspace.id: proxy.frame(in: .named("workspaceOverview"))])
+                            })
                     }
                 }
             }
@@ -294,8 +318,27 @@ private struct WorkspaceOverviewView: View {
         .background(RoundedRectangle(cornerRadius: 18).fill(palette.background))
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.hyprCyan.opacity(0.28)))
         .compositingGroup()
-        .shadow(color: palette.shadow, radius: 18, y: 8).padding(64)
+        .shadow(color: palette.shadow, radius: 18, y: 8).padding(24)
+        .coordinateSpace(name: "workspaceOverview")
+        .onPreferenceChange(WorkspaceOverviewCardFramesKey.self) { frames in
+            onCardFramesChange?(frames)
+        }
         .onAppear { DispatchQueue.main.async { searchFocused = true } }
+    }
+
+    private var title: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("WORKSPACE OVERVIEW").font(.system(size: 17, weight: .semibold, design: .monospaced))
+            Text(config.enabled ? "Keys 1–9, 0 to switch · Type to search · Esc to close" : "Tiling paused · Resume tiling to switch workspaces")
+                .font(.system(size: 12)).foregroundStyle(.secondary)
+        }
+    }
+
+    private var search: some View {
+        TextField("Find workspace or app", text: $query)
+            .textFieldStyle(.roundedBorder)
+            .frame(idealWidth: 230, maxWidth: 230)
+            .focused($searchFocused)
     }
 
     private var scratchpadFooter: some View {
@@ -320,6 +363,14 @@ private struct WorkspaceOverviewView: View {
 
     private var filteredScratchpad: [WorkspaceWindowSnapshot] {
         scratchpad.filter { WorkspaceOverviewPresentation.windowMatches($0, query: query) }
+    }
+}
+
+private struct WorkspaceOverviewCardFramesKey: PreferenceKey {
+    static let defaultValue: [Int: CGRect] = [:]
+
+    static func reduce(value: inout [Int: CGRect], nextValue: () -> [Int: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
     }
 }
 

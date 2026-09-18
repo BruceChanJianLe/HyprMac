@@ -2,7 +2,7 @@
 
 A keyboard-driven tiling window manager for macOS.
 
-Caps Lock becomes a **Hypr** modifier key by default, and the physical Hypr key can be changed in Settings. From there: BSP dwindle tiling, 9 virtual workspaces, directional focus and window swapping, pointer-edge target insertion, and focus-follows-mouse — all without touching System Integrity Protection.
+Caps Lock becomes a **Hypr** modifier key by default, and the physical Hypr key can be changed in Settings. From there: BSP dwindle tiling, 10 virtual workspaces, directional focus and window swapping, pointer-edge target insertion, and focus-follows-mouse — all without touching System Integrity Protection.
 
 [![HyprMac demo](docs/screenshots/demo-thumb.png)](https://github.com/user-attachments/assets/1f6f12ff-8e89-49ab-8be9-f2996025763a)
 
@@ -21,7 +21,7 @@ macOS doesn't ship with a tiling window manager. Third-party options either requ
 | | |
 |---|---|
 | 🪟 **BSP Dwindle Tiling** | Smart insertion with min-size adaptation and automatic split ratio adjustment |
-| 🗂 **9 Virtual Workspaces** | Managed in userspace — no macOS Spaces dependency, no SIP needed |
+| 🗂 **10 Virtual Workspaces** | Managed in userspace — no macOS Spaces dependency, no SIP needed |
 | 🎯 **Directional Focus & Swap** | Move focus or swap windows left/right/up/down across monitors |
 | 🖱 **Focus-Follows-Mouse** | Toggleable, with automatic suppression when menus are open |
 | 🔄 **Drag Placement** | Drag to insert, or hold Hypr while dragging to swap positions |
@@ -29,7 +29,7 @@ macOS doesn't ship with a tiling window manager. Third-party options either requ
 | 🖥 **Multi-Monitor** | Per-monitor workspace assignment with directional cross-monitor navigation |
 | ⌨️ **Fully Configurable** | Edit the Hypr key, keybinds, app launchers, gaps, and padding in-app or via JSON |
 | 📋 **Keybind Overlay** | `Hypr+K` shows all active shortcuts at a glance |
-| 🗺 **Workspace Overview** | `Hypr+O` shows workspace layouts, app search, and scratchpad apps; type 1–9 to switch |
+| 🗺 **Workspace Overview** | `Hypr+O` shows workspace layouts, app search, and scratchpad apps; two rows of five workspaces; type 1–9 or 0 to switch |
 | ◐ **Overlay Appearance** | Follow macOS light/dark mode or choose an override in Settings → General |
 
 ---
@@ -78,6 +78,8 @@ cp -r build/Build/Products/Debug/HyprMac.app /Applications/
 All keybinds are configurable in Settings (menubar icon → Settings → Keybinds).
 Toggle Float uses **Hypr+T**, without Shift. On startup and config reload, an exact legacy Hypr+Shift+T Toggle Float binding moves to Hypr+T only if the new chord is free and there is a single, unambiguous Toggle Float binding. Customized bindings and occupied chords stay unchanged. The migrated value is written on the next normal settings save. A deliberately chosen binding identical to the old default cannot be distinguished from that default.
 
+Cycle Floating now uses **Hypr+Shift+T**. After the Toggle Float migration, an unambiguous old Hypr+F Cycle Floating binding moves to Shift+T only if that chord is free and the new dedicated-workspace action has not already been configured. Hypr+F then receives the new action. Custom or conflicting bindings stay unchanged; add the new action in Settings when its default chord is occupied. Hypr+0 and Hypr+Shift+0 are added only when their actions are missing and their chords are free. Workspace 10 is always stored as 10; internal workspace 0 remains the scratchpad.
+
 The physical Hypr key is configurable in Settings → General. Options include Caps Lock, Tab, backtick, backslash, F13-F20, and left/right variants of Shift, Control, Option, and Command.
 
 ### Defaults
@@ -88,15 +90,21 @@ The physical Hypr key is configurable in Settings → General. Options include C
 | `⇪ + ⇧ + ←/→/↑/↓` | Swap window in direction |
 | `⇪ + J` | Toggle split direction |
 | `⇪ + T` | Toggle floating/tiling |
-| `⇪ + F` | Cycle focus through floating windows |
+| `⇪ + F` | Move focused window to a dedicated workspace on its display |
+| `⇪ + ⇧ + T` | Cycle focus through floating windows |
 | `⇪ + 1–9` | Switch to workspace N |
 | `⇪ + ⇧ + 1–9` | Move window to workspace N |
+| `⇪ + 0` | Switch to workspace 10 |
+| `⇪ + ⇧ + 0` | Move window to workspace 10 |
 | `⇪ + ⌃ + ←/→` | Move window to adjacent monitor |
 | `⇪ + ⌃ + ⇧ + ←/→/↑/↓` | Resize focused window in direction |
 | `⇪ + ⇥` / `⇪ + ⇧ + ⇥` | Cycle occupied workspaces on current monitor |
 | `⇪ + W` | Close window |
 | `⇪ + K` | Show keybind overlay |
-| `⇪ + O` | Show workspace overview |
+| `⇪ + O` | Show workspace overview (two rows of five) |
+| `⇪ + P` | Pause / resume tiling |
+| `⇪ + S` | Toggle scratchpad |
+| `⇪ + ⇧ + S` | Send window to scratchpad |
 | `⇪ + ↵` | Launch/focus Terminal |
 | `⇪ + \`` | Warp cursor to menu bar |
 
@@ -122,14 +130,18 @@ Focus-follows-mouse and the macOS menu bar don't always play nicely together —
 
 ## Virtual Workspaces
 
-HyprMac manages 9 workspaces entirely in userspace, bypassing macOS Spaces.
+HyprMac manages 10 workspaces entirely in userspace, bypassing macOS Spaces.
 
-- Every workspace is **statically anchored** to a monitor: `(N − 1) mod monitorCount`, left to right. With 3 monitors, workspaces 1/4/7 live on the left, 2/5/8 in the middle, 3/6/9 on the right
+- Every workspace is **statically anchored** to a monitor: `(N − 1) mod monitorCount`, left to right. With 3 monitors, workspaces 1/4/7/10 live on the left, 2/5/8 in the middle, 3/6/9 on the right
 - Switching to workspace N always lands on its home monitor — workspace identity never drifts between monitors
 - Switching to a workspace that's already visible just focuses its monitor
 - `⇪ + ⌃ + ←/→` throws the focused window to the adjacent monitor's visible workspace
 - Inactive windows are hidden off-screen (a macOS constraint — one pixel remains visible in a corner)
 - Monitor connects/disconnects preserve workspace assignments; layouts migrate to each workspace's current home
+
+**Hypr+F: dedicated workspace.** The focused window moves to the next empty workspace owned by its physical display, wrapping through that display’s workspace numbers. Floating, minimized, hidden, and reserved windows all count as occupants. If no workspace is free, the move is rejected with red feedback and the window stays put. An eligible floating window becomes tiled. The window fills the normal usable area with configured padding; this does not enter macOS native fullscreen. Later windows may join the workspace. If the focused window is already the only window assigned to its workspace, Hypr+F does nothing.
+
+The action requires an ordinary managed, visible, resizable window. It does not override excluded apps, disabled displays, native fullscreen, or an open scratchpad layer. Holding F does not repeat the move. Workspace 10 uses the **0 key**, and Hypr+O shows workspaces 1–5 above 6–10.
 
 A single macOS Space per monitor is recommended for the cleanest experience.
 

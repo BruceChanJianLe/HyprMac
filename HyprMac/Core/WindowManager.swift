@@ -244,6 +244,7 @@ class WindowManager {
         self.workspaceOrchestrator.screenUnderCursor = { [weak self] in self?.screenUnderCursor() ?? NSScreen.main! }
         self.workspaceOrchestrator.currentFocusedWindow = { [weak self] in self?.currentFocusedWindow() }
         self.workspaceOrchestrator.updateFocusBorder = { [weak self] w in self?.updateFocusBorder(for: w) }
+        self.workspaceOrchestrator.updatePositionCache = { [weak self] in self?.updatePositionCache() }
         self.workspaceOrchestrator.tileAllVisibleSpaces = { [weak self] in self?.tileAllVisibleSpaces() }
         self.workspaceOrchestrator.animatedRetile = { [weak self] prepare, completion in
             self?.animatedRetile(prepare: prepare, completion: completion)
@@ -251,6 +252,12 @@ class WindowManager {
         self.workspaceOrchestrator.onDidSwitch = { [weak self] workspace, screen in
             self?.updateMenuBarState()
             self?.workspaceOverview.showSwitchHUD(workspace: workspace, screen: screen)
+        }
+        self.workspaceOrchestrator.excludedBundleIDs = { [weak self] in
+            Set(self?.config.excludedBundleIDs ?? [])
+        }
+        self.workspaceOrchestrator.isScratchpadWindow = { [weak self] id in
+            self?.scratchpad.contains(id) ?? false
         }
         self.workspaceOverview.onSelectWorkspace = { [weak self] workspace in
             guard let self, self.config.enabled else { return }
@@ -759,7 +766,7 @@ class WindowManager {
         var homes: [Int: String] = [:]
         var trees: [Int: [CGWindowID]] = [:]
         var visible: Set<Int> = []
-        for ws in 1...workspaceManager.workspaceCount {
+        for ws in Constants.workspaceRange {
             if workspaceManager.isWorkspaceVisible(ws) { visible.insert(ws) }
             guard let home = workspaceManager.homeScreenForWorkspace(ws) else { continue }
             homes[ws] = home.localizedName
@@ -1380,7 +1387,8 @@ class WindowManager {
         // drop them for the settle window (a few seconds around wake).
         if displayTransitionPending {
             switch action {
-            case .switchWorkspace, .moveToWorkspace, .moveWindowToMonitor, .cycleWorkspace:
+            case .switchWorkspace, .moveToWorkspace, .moveWindowToMonitor, .cycleWorkspace,
+                 .moveToNextEmptyWorkspace:
                 hyprLog(.notice, .lifecycle, "workspace action dropped mid-display-transition")
                 return
             default:
@@ -1405,6 +1413,9 @@ class WindowManager {
                 }
             case .switchWorkspace, .cycleWorkspace:
                 scratchpad.hide(reason: .workspaceAction)
+            case .moveToNextEmptyWorkspace:
+                NSSound.beep()
+                return
             case .toggleFloating:
                 // Hypr+T on a summoned member toggles it tiled<->floating
                 // within the layer (membership stays sticky — only Shift+S /
@@ -1448,12 +1459,12 @@ class WindowManager {
         stateCache.floatingWindowIDs.contains { workspaceManager.isWindowVisible($0) }
     }
 
-    /// Workspaces (1–9) that hold at least one live, non-hidden window.
+    /// Regular workspaces that hold at least one live, non-hidden window.
     /// Hidden windows (minimized or closed apps still running) are excluded
     /// so the menu bar grid does not show ghost occupancy.
     func occupiedWorkspaces() -> Set<Int> {
         var result = Set<Int>()
-        for ws in 1...9 {
+        for ws in Constants.workspaceRange {
             // exclude hidden windows (minimized/closed but app still running)
             let live = workspaceManager.windowIDs(onWorkspace: ws).subtracting(stateCache.hiddenWindowIDs)
             if !live.isEmpty {
@@ -2252,6 +2263,10 @@ class WindowManager {
         let active = Set(activeWorkspaces())
         let currentWindows = Dictionary(accessibility.getAllWindows().map { ($0.windowID, $0) },
                                         uniquingKeysWith: { first, _ in first })
+        let currentWindowIDs = Set(currentWindows.keys)
+        let knownOrCachedWindowIDs = stateCache.knownWindowIDs.union(stateCache.cachedWindows.keys)
+        let hiddenWindowIDs = stateCache.hiddenWindowIDs
+        let reservedHidden = stateCache.reservedHiddenWindowIDs
         let intendedFrames = tilingEngine.intendedTileRects()
 
         func snapshot(_ id: CGWindowID, screenFrame: CGRect) -> WorkspaceWindowSnapshot {
@@ -2273,10 +2288,16 @@ class WindowManager {
                 isFloating: isFloating)
         }
 
-        let workspaces = (1...workspaceManager.workspaceCount).compactMap { workspace -> WorkspaceSnapshot? in
+        let workspaces = Constants.workspaceRange.compactMap { workspace -> WorkspaceSnapshot? in
             guard let screen = workspaceManager.homeScreenForWorkspace(workspace) else { return nil }
             let screenFrame = displayManager.cgRect(for: screen)
-            let windows = workspaceManager.windowIDs(onWorkspace: workspace).sorted().map {
+            let visibleIDs = WorkspaceOverviewPresentation.displayedWindowIDs(
+                assigned: workspaceManager.windowIDs(onWorkspace: workspace),
+                current: currentWindowIDs,
+                knownOrCached: knownOrCachedWindowIDs,
+                hidden: hiddenWindowIDs,
+                reservedHidden: reservedHidden)
+            let windows = visibleIDs.map {
                 snapshot($0, screenFrame: screenFrame)
             }
             return WorkspaceSnapshot(
@@ -2287,7 +2308,13 @@ class WindowManager {
                 windows: windows)
         }
         let scratchFrame = displayManager.screens.first.map { displayManager.cgRect(for: $0) } ?? .zero
-        let scratchWindows = scratchpad.members.sorted().map { snapshot($0, screenFrame: scratchFrame) }
+        let scratchIDs = WorkspaceOverviewPresentation.displayedWindowIDs(
+            assigned: scratchpad.members,
+            current: currentWindowIDs,
+            knownOrCached: knownOrCachedWindowIDs,
+            hidden: hiddenWindowIDs,
+            reservedHidden: reservedHidden)
+        let scratchWindows = scratchIDs.map { snapshot($0, screenFrame: scratchFrame) }
         return (workspaces, scratchWindows)
     }
 
@@ -2295,7 +2322,7 @@ class WindowManager {
     private func workspacesWithFloatingWindows() -> Set<Int> {
         var result = Set<Int>()
         let liveFloating = stateCache.floatingWindowIDs.subtracting(stateCache.hiddenWindowIDs)
-        for workspace in 1...9 {
+        for workspace in Constants.workspaceRange {
             if !workspaceManager.windowIDs(onWorkspace: workspace).isDisjoint(with: liveFloating) {
                 result.insert(workspace)
             }
@@ -2996,7 +3023,7 @@ private extension WindowManager {
                     windowIDs: localIDs, framesByID: frames, focusedWindowID: focusedID)
             )
         }
-        let reserved = Dictionary(uniqueKeysWithValues: (1...workspaceManager.workspaceCount).map { workspace in
+        let reserved = Dictionary(uniqueKeysWithValues: Constants.workspaceRange.map { workspace in
             (workspace, workspaceManager.windowIDs(onWorkspace: workspace)
                 .intersection(stateCache.reservedHiddenWindowIDs)
                 .subtracting(stateCache.floatingWindowIDs))

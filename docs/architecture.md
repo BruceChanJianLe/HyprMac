@@ -45,7 +45,7 @@ singleton except `UserConfig.shared` and `MenuBarState.shared`.
 | `AccessibilityManager` | AX bridge. Enumerates windows, resolves the focused window, picks directional neighbors. |
 | `DisplayManager` | NSScreen tracking and CG ↔ NS coordinate conversion. |
 | `SpaceManager` | macOS native Spaces enumeration via private CGS APIs (read-only). |
-| `WorkspaceManager` | HyprMac's nine virtual workspaces, screen↔workspace mapping, home-screen affinity. |
+| `WorkspaceManager` | HyprMac's ten virtual workspaces, screen↔workspace mapping, home-screen affinity. |
 | `TilingEngine` | One BSP tree per `(workspace, screen)`, verified sizing, smart insert, keyboard swap, and candidate drag commit. |
 | `FloatingWindowController` | Float / tile toggle, cycle, raise-behind, auto-float predicate. |
 | `MouseTrackingManager` | Focus-follows-mouse, refocus-under-cursor, menu-tracking suppression. |
@@ -191,7 +191,7 @@ toggle.
 
 ## Workspaces
 
-HyprMac maintains nine virtual workspaces in userspace. macOS native
+HyprMac maintains ten virtual workspaces in userspace. macOS native
 Spaces are bypassed — use one native Space per monitor. Inactive
 workspaces park their windows at a single global hide position: 1 px
 inside the bottom-right corner of the **rightmost** monitor (a 1 px
@@ -205,6 +205,31 @@ Switching to workspace N always lands on its home; workspaces cannot
 move between monitors, so workspace identity never drifts. The
 `moveWindowToMonitor` action (`Hypr+Ctrl+←/→`) moves the focused
 *window* to the adjacent monitor's visible workspace instead.
+
+`WorkspaceOrchestrator.moveToNextEmptyWorkspace` implements Hypr+F. It resolves
+the actual AX-focused standard window and its physical display, then asks
+`WorkspaceManager.nextEmptyWorkspace` for the next empty anchored workspace,
+wrapping numerically. Any assigned window reserves a workspace, including
+hidden and floating windows. The source workspace is never a candidate.
+A sole assigned window is already dedicated, so the action returns without moving it.
+Workspace 10 belongs to the same anchoring formula; keyboard 0 selects it,
+while internal workspace 0 remains the scratchpad.
+
+The transfer captures source frames, verifies a private one-window candidate,
+then verifies position-only source-window parking before publishing destination membership.
+Parking accepts the macOS titlebar clamp only when every physical display sees
+at most the normal one-pixel right-edge sliver and the window size is preserved.
+Generation, display, and membership checks guard the commit. Ordinary failures
+restore captured geometry through verified AX writes. Superseded or changed
+display state must not receive stale-coordinate restoration. The mover is
+never parked, and unrelated monitors are not retiled. Floating movers become
+tiled and retain their captured floating frame for a later Toggle Float.
+This fills the padded usable area without entering native macOS fullscreen.
+
+The overview presents ten workspaces in two rows of five. Its window list
+intersects assignment with fresh discovery, deliberate hidden reservations,
+and unhidden known/cached windows. Verified-closed hidden entries are omitted
+without deleting workspace reservations as a presentation side effect.
 
 Monitor connect/disconnect runs `WindowManager.reconcileAfterDisplayChange`:
 visible-workspace mapping refreshes (`initializeMonitors`), BSP trees
@@ -316,7 +341,7 @@ this list is the index.
   one-pixel visible corner. macOS limitation.
 - **Floating windows can sit behind tiled windows** — without SIP
   disabled, HyprMac cannot reliably set another process's window
-  level. `Hypr+F` cycles and raises floaters; `raiseBehind` runs
+  level. `Hypr+Shift+T` cycles and raises floaters; `raiseBehind` runs
   automatically on app activation and discovery reconciliation. It leaves
   floating siblings of the focused tiled app alone, because restoring focus
   within that app can put the tile back above its sibling and cause a loop.

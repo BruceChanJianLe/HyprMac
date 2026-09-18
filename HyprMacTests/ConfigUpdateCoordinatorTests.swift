@@ -510,6 +510,40 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
         XCTAssertEqual(config.keybinds, saved.keybinds)
     }
 
+    func testFloatingFocusMigrationOnStartupReloadAndSave() throws {
+        try requireIsolatedHome()
+        let arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        var isolatedArguments = arguments
+        isolatedArguments["iCloudSyncEnabled"] = false
+        UserDefaults.standard.setVolatileDomain(isolatedArguments, forName: UserDefaults.argumentDomain)
+        defer { UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain) }
+        let configBefore = try? Data(contentsOf: ConfigStore.configPath)
+        let monitorBefore = try? Data(contentsOf: ConfigStore.monitorConfigPath)
+        defer {
+            restore(configBefore, to: ConfigStore.configPath)
+            restore(monitorBefore, to: ConfigStore.monitorConfigPath)
+        }
+        let legacy = Data(#"{"keybinds":[{"keyCode":3,"modifiers":1,"action":{"focusFloating":{}}}],"gapSize":23,"outerPadding":11,"enabled":false}"#.utf8)
+        try legacy.write(to: ConfigStore.configPath)
+
+        let config = UserConfig()
+        let relocated = Keybind(keyCode: 17, modifiers: [.hypr, .shift], action: .focusFloating)
+        XCTAssertEqual(config.keybinds.filter { $0.action == .focusFloating }, [relocated])
+        XCTAssertTrue(config.keybinds.contains { $0.action == .moveToNextEmptyWorkspace })
+        XCTAssertEqual(try Data(contentsOf: ConfigStore.configPath), legacy)
+
+        config.reloadFromDisk()
+        XCTAssertEqual(config.keybinds.filter { $0.action == .focusFloating }, [relocated])
+        XCTAssertTrue(config.keybinds.contains { $0.action == .moveToNextEmptyWorkspace })
+        config.save()
+        let saved = try JSONDecoder().decode(
+            SavedConfig.self, from: Data(contentsOf: ConfigStore.configPath))
+        XCTAssertEqual(saved.keybinds.filter { $0.action == .focusFloating }, [relocated])
+        XCTAssertTrue(saved.keybinds.contains { $0.action == .moveToNextEmptyWorkspace })
+        config.reloadFromDisk()
+        XCTAssertEqual(config.keybinds, saved.keybinds)
+    }
+
     func testDiskReloadInjectsMissingPauseBinding() throws {
         try requireIsolatedHome()
         let configBefore = try? Data(contentsOf: ConfigStore.configPath)

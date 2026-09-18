@@ -119,6 +119,8 @@ final class ConfigMigrationTests: XCTestCase {
 
     private let oldFloat = Keybind(keyCode: 17, modifiers: [.hypr, .shift], action: .toggleFloating)
     private let newFloat = Keybind(keyCode: 17, modifiers: .hypr, action: .toggleFloating)
+    private let oldFloatingFocus = Keybind(keyCode: 3, modifiers: .hypr, action: .focusFloating)
+    private let newFloatingFocus = Keybind(keyCode: 17, modifiers: [.hypr, .shift], action: .focusFloating)
 
     func testLegacyFloatDecodesUnchangedThenMigratesDuringDefaultMerge() throws {
         let json = #"{"keybinds":[{"keyCode":17,"modifiers":3,"action":{"toggleFloating":{}}}],"gapSize":12,"outerPadding":9,"enabled":false}"#
@@ -171,6 +173,73 @@ final class ConfigMigrationTests: XCTestCase {
         let unrelated = Keybind(keyCode: 16, modifiers: .command, action: .toggleSplit)
         XCTAssertEqual(ConfigMigration.migrateToggleFloating(saved: [unrelated, oldFloat]), [unrelated, newFloat])
         XCTAssertEqual(ConfigMigration.migrateToggleFloating(saved: []), [])
+    }
+
+    func testFloatingFocusMigrationFreesHyprFForEmptyWorkspaceAction() {
+        let unrelated = Keybind(keyCode: 16, modifiers: .command, action: .toggleSplit)
+        let merged = UserConfig.mergeNewDefaults(saved: [unrelated, oldFloatingFocus])
+
+        XCTAssertEqual(merged.filter { $0.action == .focusFloating }, [newFloatingFocus])
+        XCTAssertTrue(merged.contains {
+            $0.keyCode == 3 && $0.modifiers == .hypr
+                && $0.action == .moveToNextEmptyWorkspace
+        })
+        XCTAssertEqual(merged.first, unrelated)
+        XCTAssertEqual(UserConfig.mergeNewDefaults(saved: merged), merged)
+    }
+
+    func testToggleMigrationRunsBeforeFloatingFocusMigration() {
+        let merged = UserConfig.mergeNewDefaults(saved: [oldFloat, oldFloatingFocus])
+
+        XCTAssertEqual(merged.filter { $0.action == .toggleFloating }, [newFloat])
+        XCTAssertEqual(merged.filter { $0.action == .focusFloating }, [newFloatingFocus])
+        XCTAssertTrue(merged.contains { $0.action == .moveToNextEmptyWorkspace })
+        XCTAssertEqual(merged.count, Set(merged.map(\.id)).count)
+    }
+
+    func testFloatingFocusMigrationPreservesCustomAndAmbiguousBindings() {
+        let custom = Keybind(keyCode: 4, modifiers: [.hypr, .option], action: .focusFloating)
+        let sameOldChord = Keybind(keyCode: 3, modifiers: .hypr, action: .showKeybinds)
+        let existingNewAction = Keybind(keyCode: 5, modifiers: .command,
+                                        action: .moveToNextEmptyWorkspace)
+        for saved in [
+            [custom],
+            [oldFloatingFocus, custom],
+            [oldFloatingFocus, oldFloatingFocus],
+            [oldFloatingFocus, sameOldChord],
+            [oldFloatingFocus, existingNewAction],
+        ] {
+            XCTAssertEqual(ConfigMigration.migrateFocusFloating(saved: saved), saved)
+        }
+    }
+
+    func testFloatingFocusMigrationLeavesOccupiedTargetAndHyprFAlone() {
+        let targetOccupant = Keybind(keyCode: 17, modifiers: [.hypr, .shift],
+                                     action: .showKeybinds)
+        let saved = [oldFloatingFocus, targetOccupant]
+
+        XCTAssertEqual(ConfigMigration.migrateFocusFloating(saved: saved), saved)
+        let merged = UserConfig.mergeNewDefaults(saved: saved)
+        XCTAssertEqual(merged.filter { $0.keyCode == 3 && $0.modifiers == .hypr },
+                       [oldFloatingFocus])
+        XCTAssertFalse(merged.contains { $0.action == .moveToNextEmptyWorkspace })
+    }
+
+    func testWorkspaceTenDefaultsPreserveOccupiedChordsAndCustomBindings() {
+        let customZero = Keybind(keyCode: 29, modifiers: .hypr, action: .showKeybinds)
+        let customShiftZero = Keybind(keyCode: 29, modifiers: [.hypr, .shift], action: .toggleSplit)
+        let occupied = UserConfig.mergeNewDefaults(saved: [customZero, customShiftZero])
+        XCTAssertTrue(occupied.contains(customZero))
+        XCTAssertTrue(occupied.contains(customShiftZero))
+        XCTAssertFalse(occupied.contains { $0.action == .switchWorkspace(10) })
+        XCTAssertFalse(occupied.contains { $0.action == .moveToWorkspace(10) })
+
+        let customSwitch = Keybind(keyCode: 12, modifiers: [.hypr, .option], action: .switchWorkspace(10))
+        let customMove = Keybind(keyCode: 12, modifiers: [.hypr, .option, .shift], action: .moveToWorkspace(10))
+        let customized = UserConfig.mergeNewDefaults(saved: [customSwitch, customMove])
+        XCTAssertEqual(customized.filter { $0.action == .switchWorkspace(10) }, [customSwitch])
+        XCTAssertEqual(customized.filter { $0.action == .moveToWorkspace(10) }, [customMove])
+        XCTAssertEqual(UserConfig.mergeNewDefaults(saved: customized), customized)
     }
 
     func testScratchpadTilesNewMembersByDefault() {

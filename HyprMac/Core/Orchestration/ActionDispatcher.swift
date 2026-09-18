@@ -225,6 +225,8 @@ final class ActionDispatcher {
             warpToMenuBar()
         case .focusFloating:
             floatingController.cycleFocus()
+        case .moveToNextEmptyWorkspace:
+            workspaceOrchestrator.moveToNextEmptyWorkspace()
         case .closeWindow:
             closeWindow()
         case .cycleWorkspace(let delta):
@@ -261,6 +263,7 @@ final class ActionDispatcher {
         case .launchApp:           return "launchApp"
         case .focusMenuBar:        return "focusMenuBar"
         case .focusFloating:       return "focusFloating"
+        case .moveToNextEmptyWorkspace: return "moveToNextEmptyWorkspace"
         case .closeWindow:         return "closeWindow"
         case .cycleWorkspace:      return "cycleWorkspace"
         case .toggleScratchpad:    return "toggleScratchpad"
@@ -307,7 +310,7 @@ final class ActionDispatcher {
         let plan = RetileAllPlanner.admit(
             windowIDs: windows.map(\.windowID),
             preferredWorkspace: preferredWorkspace,
-            eligibleWorkspaces: Array(1...workspaceManager.workspaceCount),
+            eligibleWorkspaces: Array(Constants.workspaceRange),
             existingAssignments: Self.existingAssignmentsForAdmission(
                 workspaceManager.regularWorkspaceWindowIDs(),
                 fullyForgottenIDs: fullyForgottenIDs
@@ -543,12 +546,12 @@ final class ActionDispatcher {
     private func cycleOccupiedWorkspace(delta: Int) {
         let screen = screenUnderCursor()
         let current = workspaceManager.workspaceForScreen(screen)
-        let total = workspaceManager.workspaceCount
+        let total = Constants.workspaceCount
 
         let screenSID = workspaceManager.screenID(for: screen)
 
         // collect occupied workspaces whose static home is this monitor
-        let occupied = Set((1...total).filter { ws in
+        let occupied = Set(Constants.workspaceRange.filter { ws in
             guard let home = workspaceManager.homeScreenForWorkspace(ws) else { return false }
             return workspaceManager.screenID(for: home) == screenSID &&
                 !workspaceManager.windowIDs(onWorkspace: ws).isEmpty

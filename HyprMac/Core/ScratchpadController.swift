@@ -26,7 +26,7 @@ final class ScratchpadController {
         return tileByDefault ? .tiled : .floating
     }
 
-    /// Pseudo-workspace id for scratchpad membership. Outside 1...9, so it
+    /// Pseudo-workspace id for scratchpad membership. Outside the regular workspace range, so it
     /// falls out of every switch / home-anchor / cycle path automatically.
     static let workspace = 0
     static let scrimIntensity: CGFloat = 0.45
@@ -544,7 +544,7 @@ final class ScratchpadController {
         return true
     }
 
-    /// Hypr+F while the layer is up: rotate focus across the summoned
+    /// Hypr+Shift+T while the layer is up: rotate focus across the summoned
     /// members only (stable id order — MRU is not reshuffled by cycling).
     func cycleSummoned() {
         guard isVisible else { return }

@@ -44,6 +44,23 @@ enum ConfigMigration {
         return migrated
     }
 
+    // Repurpose the old default only when it is unambiguously still the
+    // shipped binding. Customized actions and occupied chords stay untouched.
+    static func migrateFocusFloating(saved: [Keybind]) -> [Keybind] {
+        let old = Keybind(keyCode: UInt16(kVK_ANSI_F), modifiers: .hypr,
+                          action: .focusFloating)
+        let replacement = Keybind(keyCode: UInt16(kVK_ANSI_T), modifiers: [.hypr, .shift],
+                                  action: .focusFloating)
+        guard saved.filter({ $0.action == .focusFloating }) == [old],
+              saved.filter({ $0.id == old.id }).count == 1,
+              !saved.contains(where: { $0.id == replacement.id }),
+              !saved.contains(where: { $0.action == .moveToNextEmptyWorkspace }),
+              let index = saved.firstIndex(of: old) else { return saved }
+        var migrated = saved
+        migrated[index] = replacement
+        return migrated
+    }
+
     /// Resolve monitor config, preferring the local file and falling
     /// back to the monitor fields embedded in an older
     /// `SavedConfig`.

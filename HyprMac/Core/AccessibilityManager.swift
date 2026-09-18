@@ -344,6 +344,47 @@ class AccessibilityManager {
         return getAllWindows().first { CFEqual($0.element, focusedAX) }
     }
 
+    /// Resolve the keyboard-focused window without consulting discovery's
+    /// cache. Workspace transfer uses this stricter path because the cursor
+    /// and the internal focus tracker may belong to another display.
+    func getActualFocusedStandardWindow() -> HyprWindow? {
+        guard AXIsProcessTrusted(),
+              let app = NSWorkspace.shared.frontmostApplication,
+              app.activationPolicy == .regular else { return nil }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        var raw: AnyObject?
+        guard AXUIElementCopyAttributeValue(
+            appElement, kAXFocusedWindowAttribute as CFString, &raw
+        ) == .success,
+        let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
+        let element = raw as! AXUIElement
+
+        func string(_ attribute: String) -> String? {
+            var value: AnyObject?
+            guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else {
+                return nil
+            }
+            return value as? String
+        }
+        func flag(_ attribute: String) -> Bool? {
+            var value: AnyObject?
+            guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+                  let number = value as? NSNumber else { return nil }
+            return number.boolValue
+        }
+
+        guard string(kAXRoleAttribute as String) == kAXWindowRole as String,
+              string(kAXSubroleAttribute as String) == kAXStandardWindowSubrole as String,
+              flag(kAXModalAttribute as String) == false,
+              flag(kAXMinimizedAttribute as String) == false,
+              flag("AXFullScreen") == false,
+              let id = windowID(for: element), let frame = axFrame(for: element) else { return nil }
+        let window = HyprWindow(element: element, windowID: id, ownerPID: app.processIdentifier)
+        window.cachedFrame = frame
+        window.seedMinimumSize(bundleIdentifier: app.bundleIdentifier)
+        return window
+    }
+
     /// Find the nearest window in `direction` relative to `window`.
     ///
     /// Edge-based scoring: measures the axial gap between the source's

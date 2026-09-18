@@ -177,7 +177,7 @@ private struct OverlaySection: Identifiable {
 
 enum KeybindOverlayGrouping {
     static func usesCanonicalWorkspaceKey(_ bind: Keybind, number: Int) -> Bool {
-        bind.keyCodeName == String(number)
+        bind.keyCodeName == (number == Constants.workspaceCount ? "0" : String(number))
     }
 
     static func usesCanonicalDirectionKey(_ bind: Keybind, direction: Direction) -> Bool {
@@ -192,7 +192,7 @@ enum KeybindOverlayGrouping {
     }
 
     static func isCompleteWorkspaceRange(_ numbers: [Int]) -> Bool {
-        numbers.sorted() == Array(1...9)
+        numbers.sorted() == Array(Constants.workspaceRange)
     }
 }
 
@@ -256,7 +256,7 @@ private struct KeybindOverlayView: View {
                     .font(.system(size: 12, design: filter.text.isEmpty ? .default : .monospaced))
                     .foregroundStyle(filter.text.isEmpty ? Color.hudFaint : Color.hyprCyan)
             }
-            Text("HYPR = \(config.hyprKey.displayName)  ·  N = workspace number (1–9)")
+            Text("HYPR = \(config.hyprKey.displayName)  ·  N = workspace key (1–9, 0 for 10)")
                 .font(.system(size: 12))
                 .foregroundStyle(Color.hudFaint)
         }
@@ -449,7 +449,7 @@ private struct KeybindOverlayView: View {
         return OverlayRow(description: desc, chord: chord, isFloating: false)
     }
 
-    // collect the full 1-9 run of a workspace family sharing modifiers
+    // collect the full workspace run sharing modifiers
     private func workspaceRow(matching seed: Keybind, in binds: [Keybind],
                               consuming consumed: inout Set<Int>) -> OverlayRow? {
         let isSwitch: Bool

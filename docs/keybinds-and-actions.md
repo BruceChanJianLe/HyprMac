@@ -17,12 +17,17 @@ enum Action: Equatable {
     case toggleFloating
     case toggleSplit
     case showKeybinds
+    case showWorkspaceOverview
     case launchApp(bundleID: String)
     case focusMenuBar
     case focusFloating
+    case moveToNextEmptyWorkspace
     case closeWindow
     case cycleWorkspace(Int)
     case resizeDirection(Direction)
+    case toggleScratchpad
+    case moveToScratchpad
+    case toggleTiling
 }
 ```
 
@@ -35,6 +40,30 @@ only honors `.left` / `.right`. It moves the focused window to the
 adjacent monitor's visible workspace — the case was repurposed from
 the old workspace-to-monitor move, which static anchoring made a
 permanent no-op; its wire key is unchanged (see below).
+
+## Dedicated workspace and workspace 10
+
+`moveToNextEmptyWorkspace` defaults to Hypr+F and encodes as
+`{"moveToNextEmptyWorkspace":{}}`. `focusFloating` keeps its wire key and
+now defaults to Hypr+Shift+T. The new action is unavailable while paused and
+ignores keyboard autorepeat. It selects the actual AX-focused managed window,
+not the cursor's monitor, and moves it to the next empty workspace anchored to
+its physical display. See the README for eligibility and rejection behavior.
+
+Regular workspace IDs are 1–10. The physical 0 key maps to ID 10:
+Hypr+0 switches, and Hypr+Shift+0 sends. Their wire values remain
+`{"switchDesktop":{"_0":10}}` and `{"moveToDesktop":{"_0":10}}`.
+Internal workspace 0 still means scratchpad. No workspace renumbering or schema
+migration is involved.
+
+`mergeNewDefaults` first runs the legacy Shift+T Toggle Float migration, then
+the narrow F-to-Shift+T Cycle Floating migration. The latter requires one exact
+old default, an unambiguous F chord, a free Shift+T chord, and no saved dedicated
+workspace action. Default injection then fills free chords for missing actions.
+Custom and conflicting bindings survive unchanged. Startup/reload migration is
+idempotent and is persisted on the next normal settings save; no schema-version
+flag is added. An explicitly chosen binding identical to a legacy default cannot
+be distinguished from that default.
 
 ## JSON wire format
 

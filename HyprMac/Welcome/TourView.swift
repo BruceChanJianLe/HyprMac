@@ -407,11 +407,24 @@ private struct TourWindowPage: View {
     }
 
     private var floatingInstruction: String {
-        guard let chord = WelcomeContent.chord(in: config.keybinds, hyprKey: config.hyprKey, matching: {
+        let toggleChord = WelcomeContent.chord(in: config.keybinds, hyprKey: config.hyprKey, matching: {
             if case .toggleFloating = $0 { return true }
             return false
-        }) else { return "Add Toggle Floating in Settings → Keys if you want a shortcut." }
-        return "Press \(chord) to toggle the focused window between tiled and floating."
+        })
+        let cycleChord = WelcomeContent.chord(in: config.keybinds, hyprKey: config.hyprKey, matching: {
+            if case .focusFloating = $0 { return true }
+            return false
+        })
+        switch (toggleChord, cycleChord) {
+        case let (toggle?, cycle?):
+            return "Press \(toggle) to toggle tiled or floating. Press \(cycle) to cycle through floating windows."
+        case let (toggle?, nil):
+            return "Press \(toggle) to toggle the focused window between tiled and floating."
+        case let (nil, cycle?):
+            return "Press \(cycle) to cycle through floating windows."
+        default:
+            return "Add floating-window shortcuts in Settings → Keys."
+        }
     }
 }
 
@@ -503,6 +516,7 @@ private struct TourWorkspacesPage: View {
             copy: attributed,
             bullets: [
                 ("number", workspaceInstruction),
+                ("rectangle.portrait.and.arrow.forward", dedicatedWorkspaceInstruction),
                 ("menubar.rectangle", "Check the menu bar to see which workspace each monitor is showing."),
                 ("square.stack", "Your windows stay on their workspace when you switch."),
             ]
@@ -518,10 +532,22 @@ private struct TourWorkspacesPage: View {
             if case .moveToWorkspace(1) = $0 { return true }
             return false
         }
-        guard let switchChord, let sendChord else {
+        let workspaceTenChord = WelcomeContent.chord(in: config.keybinds, hyprKey: config.hyprKey) {
+            if case .switchWorkspace(10) = $0 { return true }
+            return false
+        }
+        guard let switchChord, let sendChord, let workspaceTenChord else {
             return "You can add workspace shortcuts in Settings → Keys."
         }
-        return "\(switchChord) opens workspace 1. \(sendChord) sends the focused window there. Try another number for a different workspace."
+        return "\(switchChord) opens workspace 1. \(sendChord) sends the focused window there. Workspace 10 uses \(workspaceTenChord)."
+    }
+
+    private var dedicatedWorkspaceInstruction: String {
+        guard let chord = WelcomeContent.chord(in: config.keybinds, hyprKey: config.hyprKey, matching: {
+            if case .moveToNextEmptyWorkspace = $0 { return true }
+            return false
+        }) else { return "Add Move to dedicated workspace in Settings → Keys if you want a shortcut." }
+        return "Press \(chord) to move the focused window to the next empty dedicated workspace."
     }
 
     private var attributed: Text {

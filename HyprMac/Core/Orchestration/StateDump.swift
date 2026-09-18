@@ -8,7 +8,7 @@ import Foundation
 /// Renders one on-demand state dump as a list of log lines.
 ///
 /// Order is fixed: one line per enabled screen, then each workspace
-/// 1...9 that has at least one assignment (ascending), then the
+/// 1...10 that has at least one assignment (ascending), then the
 /// scratchpad, then learned minima, then recovery state, then cache
 /// totals. Workspaces with no assignment are omitted entirely.
 ///
@@ -47,7 +47,7 @@ struct StateDumpFormatter {
     /// producer yet, the line reports what exists.
     var unverifiedGeometry: Set<CGWindowID> = []
 
-    private static let workspaceRange = 1...9
+    private static let workspaceRange = Constants.workspaceRange
 
     func lines() -> [String] {
         var out = screens.map { "screen=\($0.name) visible=ws\($0.visibleWorkspace)" }

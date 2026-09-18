@@ -217,7 +217,7 @@ Run only after Zach authorizes a test build launch and live setting changes.
    and a visible layer. Summon it and confirm tiling. Explicitly float a member,
    hide/show the layer, and verify its choice survives. Test an explicit saved
    false preference and a layer too full to accept another tile.
-4. With two enabled monitors, distribute windows across workspaces 1–9 and
+4. With two enabled monitors, distribute windows across workspaces 1–10 and
    switch to workspace 4 before Retile All. Occupied workspaces should become
    a numeric prefix from 1, using each workspace's existing home monitor and
    configured capacity. Change focus and visible workspaces and repeat; the

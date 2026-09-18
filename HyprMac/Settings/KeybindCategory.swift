@@ -20,7 +20,8 @@ enum KeybindCategory: String, CaseIterable {
         case .swapDirection, .toggleFloating, .toggleSplit, .closeWindow,
              .toggleScratchpad, .moveToScratchpad, .resizeDirection:
             return .windowManagement
-        case .switchWorkspace, .moveToWorkspace, .moveWindowToMonitor, .cycleWorkspace:
+        case .switchWorkspace, .moveToWorkspace, .moveWindowToMonitor, .cycleWorkspace,
+             .moveToNextEmptyWorkspace:
             return .workspaces
         case .launchApp:
             return .apps

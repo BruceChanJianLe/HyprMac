@@ -83,6 +83,7 @@ final class AdmissionRecoveryTests: XCTestCase {
     func testMembershipActionsCancelAPendingRetry() {
         XCTAssertTrue(WindowManager.cancelsPendingRecovery(.moveToWorkspace(3)))
         XCTAssertTrue(WindowManager.cancelsPendingRecovery(.toggleFloating))
+        XCTAssertTrue(WindowManager.cancelsPendingRecovery(.moveToNextEmptyWorkspace))
     }
 
     // MARK: - the one retry

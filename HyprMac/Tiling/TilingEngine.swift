@@ -31,6 +31,31 @@ private struct TiledDragOccluderContext: Equatable {
 ///
 /// Threading: main-thread only.
 class TilingEngine {
+    struct PreparedSoleWindowTransfer {
+        fileprivate let generation: UInt64
+        fileprivate let workspace: Int
+        fileprivate let screen: NSScreen
+        fileprivate let candidate: BSPTree
+        fileprivate let originals: [CGWindowID: CGRect]
+        fileprivate let windows: [HyprWindow]
+        fileprivate let restorationReach: CGRect
+    }
+
+    enum SoleWindowTransferResult {
+        case prepared(PreparedSoleWindowTransfer)
+        case refusedRestored(FrameSizingFailure)
+        case degraded(FrameSizingFailure)
+    }
+
+    enum SoleWindowTransferRestoration {
+        case restored
+        case degraded(FrameSizingFailure)
+    }
+
+    enum SoleWindowParkingResult {
+        case parked
+        case degraded(FrameSizingFailure)
+    }
     /// Result of applying a verified layout. Mirrors
     /// `FrameSizingTransaction.Outcome` but carries `restorationAttempted`,
     /// which says whether a rollback ran at all, and the progress of both
@@ -912,7 +937,16 @@ class TilingEngine {
 
         let candidate = tree.deepClone()
         let firstLayouts = candidate.layout(in: rect, gap: gapSize, padding: outerPadding)
-        let first = applyLayout(firstLayouts, usableFrame: rect, generation: generation)
+        let parkedWindowIDs = Set(originalFrames.compactMap { windowID, frame in
+            frame.isSubstantiallyVisible(on: rect, threshold: 0.5) ? nil : windowID
+        })
+        let first = !parkedWindowIDs.isEmpty
+            ? reconcile(readbackPoller.applyWorkspaceReveal(firstLayouts,
+                                                            parkedWindowIDs: parkedWindowIDs,
+                                                            usableFrame: rect, gap: gapSize,
+                                                            generation: generation),
+                        generation: generation)
+            : applyLayout(firstLayouts, usableFrame: rect, generation: generation)
         if case .accepted = first.verdict {
             return .accepted(actualFrames: first.actualFrames,
                              progress: FrameSizingProgressReport(candidate: first.progress))
@@ -2128,6 +2162,205 @@ class TilingEngine {
         return retryAdmission(windows, onWorkspace: workspace, screen: screen,
                               bypassingMinimaBefore: bypass,
                               restorationReach: restorationReach)
+    }
+
+    /// Verify a private one-window destination tree while leaving source and
+    /// destination membership untouched. `sourceWindows` are captured in the
+    /// same generation so a later abort can restore every frame exactly.
+    func prepareSoleWindowTransfer(_ window: HyprWindow, sourceWindows: [HyprWindow],
+                                   fromWorkspace sourceWorkspace: Int,
+                                   toWorkspace workspace: Int, screen: NSScreen,
+                                   restorationReach: CGRect)
+        -> SoleWindowTransferResult {
+        let generation = beginLayoutGeneration()
+        let captured = readbackPoller.captureFrames(sourceWindows, generation: generation)
+        guard case .accepted = captured.verdict,
+              captured.actualFrames.count == sourceWindows.count,
+              let moverOriginal = captured.actualFrames[window.windowID] else {
+            return .refusedRestored(captured.verdict.failure ?? .windowUnavailable(window.windowID))
+        }
+        let candidate = BSPTree()
+        primeMinimumSizes([window])
+        let key = TilingKey(workspace: workspace, screen: screen)
+        let outcome: LayoutApplicationOutcome? = withRevalidationBypass(
+            incoming: [window.windowID], key: key
+        ) {
+            guard smartInsertFitting(window, into: candidate, maxDepth: maxDepth(for: screen),
+                                     rect: displayManager.cgRect(for: screen)) else { return nil }
+            return applyVerifiedLayout(
+                candidate, in: displayManager.cgRect(for: screen), generation: generation,
+                originalFrames: [window.windowID: moverOriginal],
+                restorationUsableFrame: restorationReach)
+        }
+        guard let outcome else { return .refusedRestored(.noFittingSlot(window.windowID)) }
+        switch outcome {
+        case .accepted where layoutGeneration == generation:
+            return .prepared(PreparedSoleWindowTransfer(
+                generation: generation, workspace: workspace, screen: screen,
+                candidate: candidate, originals: captured.actualFrames, windows: sourceWindows,
+                restorationReach: restorationReach))
+        case let .rejectedRestored(reason, _, _):
+            return .refusedRestored(reason)
+        case let .degraded(reason, _, _, _, progress):
+            if !progress.possiblyWritten.isEmpty {
+                markWorkspaceGeometryUnverified(
+                    sourceWorkspace, screen: screen,
+                    windowIDs: Set(sourceWindows.map(\.windowID)))
+            }
+            return .degraded(reason)
+        case .accepted:
+            markWorkspaceGeometryUnverified(
+                sourceWorkspace, screen: screen,
+                windowIDs: Set(sourceWindows.map(\.windowID)))
+            return .degraded(.superseded)
+        }
+    }
+
+    func markWorkspaceGeometryUnverified(_ workspace: Int, screen: NSScreen,
+                                         windowIDs: Set<CGWindowID>) {
+        let key = TilingKey(workspace: workspace, screen: screen)
+        mark(key, windowIDs: windowIDs, insertedIDs: [], restored: false)
+    }
+
+    func commitPreparedSoleWindowTransfer(_ prepared: PreparedSoleWindowTransfer) -> Bool {
+        guard layoutGeneration == prepared.generation else { return false }
+        let key = TilingKey(workspace: prepared.workspace, screen: prepared.screen)
+        guard trees[key]?.allWindows.isEmpty ?? true else { return false }
+        trees[key] = prepared.candidate
+        admittedWindowIDs[prepared.workspace] = Set(prepared.candidate.allWindows.map(\.windowID))
+        unverified.removeValue(forKey: key)
+        return true
+    }
+
+    func parkPreparedSourceWindows(_ prepared: PreparedSoleWindowTransfer,
+                                   excluding windowID: CGWindowID, at position: CGPoint,
+                                   displayFrames: [CGRect]) -> SoleWindowParkingResult {
+        guard layoutGeneration == prepared.generation else { return .degraded(.superseded) }
+        let windows = prepared.windows.filter { $0.windowID != windowID }
+        for window in windows {
+            guard layoutGeneration == prepared.generation else { return .degraded(.superseded) }
+            let checkpoint = { [weak self] () -> FrameSizingFailure? in
+                self?.layoutGeneration == prepared.generation ? nil : .superseded
+            }
+            let token: AXFrameWriteBatch.Token
+            switch window.beginFrameWrite(timeout: 0.1, checkpoint: checkpoint) {
+            case .ready(let value): token = value
+            case .failed(let error): return .degraded(.writeFailed(window.windowID, error))
+            case .failedAfterCleanup(let error, _):
+                return .degraded(.writeFailed(window.windowID, error))
+            case .interrupted(let reason): return .degraded(reason)
+            case .interruptedAfterBegin(let value, let reason):
+                _ = AXFrameWriteBatch.accessibility.end(value, timeout: 0.1, checkpoint: checkpoint)
+                return .degraded(reason)
+            }
+            if let reason = checkpoint() {
+                _ = AXFrameWriteBatch.accessibility.end(token, timeout: 0.1, checkpoint: checkpoint)
+                return .degraded(reason)
+            }
+            let error = window.writePosition(position)
+            let cleanup = AXFrameWriteBatch.accessibility.end(token, timeout: 0.1, checkpoint: checkpoint)
+            guard error == .success else { return .degraded(.writeFailed(window.windowID, error)) }
+            guard cleanup == .restored else {
+                let cleanupError: AXError
+                switch cleanup {
+                case .restored: cleanupError = .success
+                case .failed(let error): cleanupError = error
+                case .failedTimeoutAndRestore(let timeout, _): cleanupError = timeout
+                }
+                return .degraded(.cleanupFailed(window.windowID, primary: nil, error: cleanupError))
+            }
+        }
+        let deadline = ProcessInfo.processInfo.systemUptime + 0.36
+        var stableSamples: [CGWindowID: Int] = [:]
+        var lastFrames: [CGWindowID: CGRect] = [:]
+        repeat {
+            guard layoutGeneration == prepared.generation else { return .degraded(.superseded) }
+            var pending = false
+            for window in windows {
+                guard let original = prepared.originals[window.windowID] else {
+                    return .degraded(.windowUnavailable(window.windowID))
+                }
+                let positionRead = window.readPosition()
+                let sizeRead = window.readSize()
+                guard positionRead.0 == .success, sizeRead.0 == .success,
+                      let actualPosition = positionRead.1, let actualSize = sizeRead.1 else {
+                    return .degraded(.readFailed(
+                        window.windowID,
+                        positionRead.0 != .success ? positionRead.0 : sizeRead.0))
+                }
+                let actual = CGRect(origin: actualPosition, size: actualSize)
+                lastFrames[window.windowID] = actual
+                let sizeStable = abs(actual.width - original.width) <= 1
+                    && abs(actual.height - original.height) <= 1
+                if sizeStable && Self.isHiddenParkedFrame(actual, on: displayFrames) {
+                    stableSamples[window.windowID, default: 0] += 1
+                } else {
+                    stableSamples[window.windowID] = 0
+                }
+                pending = pending || stableSamples[window.windowID, default: 0] < 2
+            }
+            if !pending {
+                guard layoutGeneration == prepared.generation else { return .degraded(.superseded) }
+                hyprLog(.debug, .workspace, "verified position-only park: ids="
+                        + "[\(windows.map(\.windowID).sorted().map(String.init).joined(separator: ", "))]"
+                        + " frames=\(lastFrames) hidden=true")
+                return .parked
+            }
+            Thread.sleep(forTimeInterval: 0.03)
+        } while ProcessInfo.processInfo.systemUptime < deadline
+        let failed = windows.first { stableSamples[$0.windowID, default: 0] < 2 }
+        hyprLog(.notice, .workspace, "position-only park rejected: frames=\(lastFrames) hidden=false")
+        return .degraded(.geometryMismatch(failed?.windowID ?? 0))
+    }
+
+    static func isHiddenParkedFrame(_ frame: CGRect, on displayFrames: [CGRect],
+                                    maximumVisibleWidth: CGFloat = 1) -> Bool {
+        guard frame.origin.x.isFinite, frame.origin.y.isFinite,
+              frame.width.isFinite, frame.height.isFinite,
+              frame.width > 0, frame.height > 0 else { return false }
+        return !displayFrames.isEmpty && displayFrames.allSatisfy { display in
+            let intersection = frame.intersection(display)
+            return intersection.isNull || intersection.isEmpty
+                || intersection.width <= maximumVisibleWidth
+        }
+    }
+
+    func capturedFrame(for windowID: CGWindowID,
+                       in prepared: PreparedSoleWindowTransfer) -> CGRect? {
+        prepared.originals[windowID]
+    }
+
+    func capturedWindowIDs(in prepared: PreparedSoleWindowTransfer) -> Set<CGWindowID> {
+        Set(prepared.windows.map(\.windowID))
+    }
+
+    func restorePreparedSoleWindowTransfer(_ prepared: PreparedSoleWindowTransfer)
+        -> SoleWindowTransferRestoration {
+        guard layoutGeneration == prepared.generation else { return .degraded(.superseded) }
+        let layouts = prepared.windows.compactMap { window in
+            prepared.originals[window.windowID].map { (window, $0) }
+        }
+        let result = readbackPoller.applyRestoration(
+            layouts, usableFrame: prepared.restorationReach,
+            gap: gapSize, generation: prepared.generation)
+        if case .accepted = result.verdict { return .restored }
+        return .degraded(result.verdict.failure ?? .attemptsExhausted)
+    }
+
+    /// Remove membership without writing frames. Used by an atomic workspace
+    /// transfer: the source is about to be hidden, so visually retiling it
+    /// would add a second layout between verification and the switch.
+    func removeWindowMembershipOnly(_ window: HyprWindow, fromWorkspace workspace: Int) {
+        admittedWindowIDs[workspace]?.remove(window.windowID)
+        for (key, tree) in trees where key.workspace == workspace && tree.contains(window) {
+            tree.remove(window)
+            tree.root.pruneEmptyNodes()
+            pendingInsertedWindowIDs[key]?.removeAll { $0 == window.windowID }
+            if tree.allWindows.isEmpty {
+                trees.removeValue(forKey: key)
+                unverified.removeValue(forKey: key)
+            }
+        }
     }
 
     /// A capacity probe other subsystems run for their own reasons — the

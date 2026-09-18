@@ -7,14 +7,15 @@ final class WelcomeContentTests: XCTestCase {
         let features = WhatsNewFeatures.current
 
         XCTAssertEqual(features.map(\.title), [
-            "Hyprland-Style Tiling",
+            "Ten Workspaces at a Glance",
             "Settings, Rebuilt",
-            "A Clearer HYPR+K Menu",
+            "A Dedicated Workspace Shortcut",
             "Safer Tiling and Recovery"
         ])
-        XCTAssertTrue(features[0].description.contains("Hold Hypr"))
-        XCTAssertTrue(features[0].description.contains("place it there"))
-        XCTAssertTrue(features[2].description.contains("HYPR+T"))
+        XCTAssertTrue(features[0].description.contains("2×5"))
+        XCTAssertTrue(features[0].description.contains("Workspace 10"))
+        XCTAssertTrue(features[2].description.contains("HYPR+F"))
+        XCTAssertTrue(features[2].description.contains("next empty workspace"))
         XCTAssertTrue(features[3].description.contains("bounded retry"))
         XCTAssertFalse(features.map(\.title).contains("Splits Survive Tab Switches"))
         XCTAssertEqual(WelcomeContent.productURL.absoluteString, "https://hyprmac.app/")
@@ -52,6 +53,22 @@ final class WelcomeContentTests: XCTestCase {
         XCTAssertNil(WelcomeContent.chord(in: [], hyprKey: .capsLock) { _ in true })
     }
 
+    func testTutorialUsesConfiguredDedicatedAndWorkspaceTenChords() {
+        let binds = [
+            Keybind(keyCode: UInt16(kVK_ANSI_F), modifiers: .hypr,
+                    action: .moveToNextEmptyWorkspace),
+            Keybind(keyCode: UInt16(kVK_ANSI_0), modifiers: [.hypr, .shift],
+                    action: .switchWorkspace(10))
+        ]
+
+        XCTAssertEqual(WelcomeContent.chord(in: binds, hyprKey: .capsLock) {
+            $0 == .moveToNextEmptyWorkspace
+        }, "HYPR F")
+        XCTAssertEqual(WelcomeContent.chord(in: binds, hyprKey: .capsLock) {
+            $0 == .switchWorkspace(10)
+        }, "HYPR ⇧ 0")
+    }
+
     func testOverlayGroupsOnlyCanonicalWorkspaceNumberKeys() {
         let canonical = Keybind(
             keyCode: UInt16(kVK_ANSI_3), modifiers: .hypr,
@@ -62,6 +79,11 @@ final class WelcomeContentTests: XCTestCase {
 
         XCTAssertTrue(KeybindOverlayGrouping.usesCanonicalWorkspaceKey(canonical, number: 3))
         XCTAssertFalse(KeybindOverlayGrouping.usesCanonicalWorkspaceKey(customized, number: 3))
+
+        let tenth = Keybind(
+            keyCode: UInt16(kVK_ANSI_0), modifiers: .hypr,
+            action: .switchWorkspace(10))
+        XCTAssertTrue(KeybindOverlayGrouping.usesCanonicalWorkspaceKey(tenth, number: 10))
     }
 
     func testOverlayGroupsOnlyMatchingArrowKeys() {
@@ -77,8 +99,8 @@ final class WelcomeContentTests: XCTestCase {
     }
 
     func testOverlaySummarizesOnlyTheCompleteWorkspaceRange() {
-        XCTAssertTrue(KeybindOverlayGrouping.isCompleteWorkspaceRange(Array(1...9)))
-        XCTAssertFalse(KeybindOverlayGrouping.isCompleteWorkspaceRange(Array(1...8)))
+        XCTAssertTrue(KeybindOverlayGrouping.isCompleteWorkspaceRange(Array(Constants.workspaceRange)))
+        XCTAssertFalse(KeybindOverlayGrouping.isCompleteWorkspaceRange(Array(1...9)))
         XCTAssertFalse(KeybindOverlayGrouping.isCompleteWorkspaceRange([1, 3]))
         XCTAssertFalse(KeybindOverlayGrouping.isCompleteWorkspaceRange([1, 1]))
     }

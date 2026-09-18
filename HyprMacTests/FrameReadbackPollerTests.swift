@@ -2,6 +2,98 @@ import XCTest
 @testable import HyprMac
 
 final class FrameReadbackPollerTests: XCTestCase {
+    func testWorkspaceRevealSettlesDestinationPositionBeforeTallResize() {
+        let window = makeWindow(id: 31)
+        let target = CGRect(x: -1072, y: -88, width: 1064, height: 1874)
+        var frame = CGRect(x: 3439, y: 1347, width: 1064, height: 900)
+        var destinationReady = false
+        var writes: [String] = []
+        var time: TimeInterval = 0
+        let io = FrameSizingIO(
+            setMessagingTimeout: { _, _ in .success },
+            writeSize: { _, size, _ in
+                writes.append("size")
+                frame.size = CGSize(width: size.width,
+                                    height: destinationReady ? size.height : min(size.height, 1528))
+                return .success
+            },
+            writePosition: { _, position, _ in writes.append("position"); frame.origin = position; return .success },
+            readPosition: { _, _ in (.success, frame.origin) },
+            readSize: { _, _ in (.success, frame.size) },
+            now: { time }, sleep: { time += $0; destinationReady = true }, currentGeneration: { 1 })
+
+        let result = FrameReadbackPoller(generation: { 1 }, ioFactory: { _, _ in io })
+            .applyWorkspaceReveal([(window, target)], parkedWindowIDs: [31], usableFrame: target,
+                                  gap: 8, generation: 1)
+
+        XCTAssertEqual(result.verdict, .accepted)
+        XCTAssertEqual(frame, target)
+        XCTAssertEqual(writes, ["position", "size", "size"])
+    }
+
+    func testWorkspaceRevealStopsWhenSupersededWhilePositionSettles() {
+        let window = makeWindow(id: 32)
+        let target = CGRect(x: -1072, y: -88, width: 1064, height: 1874)
+        var frame = CGRect(x: 3439, y: 1347, width: 1064, height: 900)
+        var generation: UInt64 = 1
+        var sizeWrites = 0
+        var time: TimeInterval = 0
+        let io = FrameSizingIO(
+            setMessagingTimeout: { _, _ in .success },
+            writeSize: { _, _, _ in sizeWrites += 1; return .success },
+            writePosition: { _, position, _ in frame.origin = position; return .success },
+            readPosition: { _, _ in (.success, frame.origin) },
+            readSize: { _, _ in (.success, frame.size) },
+            now: { time }, sleep: { time += $0; generation = 2 }, currentGeneration: { generation })
+
+        let result = FrameReadbackPoller(generation: { generation }, ioFactory: { _, _ in io })
+            .applyWorkspaceReveal([(window, target)], parkedWindowIDs: [32], usableFrame: target,
+                                  gap: 8, generation: 1)
+
+        XCTAssertEqual(result.verdict, .unknown(.superseded))
+        XCTAssertEqual(sizeWrites, 0)
+    }
+
+    func testWorkspaceRevealPropagatesPositionSettleReadFailure() {
+        let window = makeWindow(id: 33)
+        let target = CGRect(x: -1072, y: -88, width: 1064, height: 1874)
+        var sizeWrites = 0
+        let io = FrameSizingIO(
+            setMessagingTimeout: { _, _ in .success },
+            writeSize: { _, _, _ in sizeWrites += 1; return .success },
+            writePosition: { _, _, _ in .success },
+            readPosition: { _, _ in (.cannotComplete, nil) },
+            readSize: { _, _ in (.success, target.size) },
+            now: { 0 }, sleep: { _ in }, currentGeneration: { 1 })
+
+        let result = FrameReadbackPoller(generation: { 1 }, ioFactory: { _, _ in io })
+            .applyWorkspaceReveal([(window, target)], parkedWindowIDs: [33], usableFrame: target,
+                                  gap: 8, generation: 1)
+
+        XCTAssertEqual(result.verdict, .unknown(.readFailed(33, .cannotComplete)))
+        XCTAssertEqual(sizeWrites, 0)
+    }
+
+    func testOrdinaryLayoutKeepsExistingSizeFirstSequence() {
+        let window = makeWindow(id: 34)
+        let target = CGRect(x: 0, y: 0, width: 300, height: 400)
+        var frame = target
+        var writes: [String] = []
+        let io = FrameSizingIO(
+            setMessagingTimeout: { _, _ in .success },
+            writeSize: { _, size, _ in writes.append("size"); frame.size = size; return .success },
+            writePosition: { _, position, _ in writes.append("position"); frame.origin = position; return .success },
+            readPosition: { _, _ in (.success, frame.origin) },
+            readSize: { _, _ in (.success, frame.size) },
+            now: { 0 }, sleep: { _ in }, currentGeneration: { 1 })
+
+        let result = FrameReadbackPoller(generation: { 1 }, ioFactory: { _, _ in io })
+            .applyLayout([(window, target)], usableFrame: target, gap: 8, generation: 1)
+
+        XCTAssertEqual(result.verdict, .accepted)
+        XCTAssertEqual(writes, ["size", "position", "size"])
+    }
+
     func testEmptyLayoutStillHonorsSupersession() {
         let io = FrameSizingIO(
             setMessagingTimeout: { _, _ in .success },
