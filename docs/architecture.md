@@ -1,10 +1,12 @@
 # HyprMac Architecture
 
-HyprMac is a keyboard-driven tiling window manager for macOS. The Caps
-Lock key is remapped at the IOKit driver level to F18 and used as the
-"Hypr" modifier. Hotkeys feed into a thin orchestration layer that
-delegates to focused subsystems for tiling, focus, workspaces,
-floating, drag, and discovery.
+HyprMac is a keyboard-driven tiling window manager for macOS. One
+physical key acts as the "Hypr" modifier. It defaults to Caps Lock,
+which HyprMac remaps to F18 at the IOKit driver level through
+`hidutil`; every other choice is a key the event tap already sees.
+Hotkeys feed into a thin orchestration layer that delegates to focused
+subsystems for tiling, focus, workspaces, floating, drag, and
+discovery.
 
 This document is the long-form companion to `CLAUDE.md`. CLAUDE.md is
 the build / run / style guide; this is the structural narrative.
