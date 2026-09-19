@@ -66,7 +66,10 @@ resolved package directory, and must report both architectures through `lipo`.
 The pipeline re-signs Sparkle's nested code, signs the app last with the Release
 entitlements, and verifies the signature. It then creates the DMG, submits it
 to Apple, staples and validates the ticket, mounts the DMG read-only, and runs
-both `codesign` and Gatekeeper verification against the packaged app.
+both `codesign` and Gatekeeper verification against the packaged app. It then
+copies the stapled `HyprMac-<version>.dmg` to `build/HyprMac.dmg` and validates
+that copy's ticket as well. The copy lives outside `dist/` so Sparkle's
+`generate_appcast` never treats it as a second update.
 
 ### 5. Generate and validate update metadata
 
@@ -84,9 +87,15 @@ therefore contains the final project version, appcast, and cask metadata.
 
 ### 7. Create the GitHub Release
 
-The script creates the release from the already-pushed tag with `--verify-tag`,
-uploads the notarized DMG, and uses either the supplied notes file or generated
-notes.
+The script creates the release from the already-pushed tag with `--verify-tag`
+and uses either the supplied notes file or generated notes. It uploads two
+assets, both the same notarized bytes:
+
+- `HyprMac-<version>.dmg`, referenced by the Sparkle appcast and the Homebrew
+  cask.
+- `HyprMac.dmg`, which keeps
+  `https://github.com/zacharytgray/HyprMac/releases/latest/download/HyprMac.dmg`
+  working as a permanent download link.
 
 ### 8. Update the Homebrew tap
 
@@ -108,7 +117,8 @@ state first.
   do not rebuild different bytes under the same version.
 - **After the tag was pushed but before the GitHub Release:** verify that the
   tag points to the release commit, then create the GitHub Release from that
-  existing tag and upload the exact notarized DMG.
+  existing tag and upload both assets from the exact notarized DMG, the
+  versioned name and `HyprMac.dmg`.
 - **After the GitHub Release but before the tap push:** verify the published
   DMG hash, then update the tap with the already-validated cask.
 

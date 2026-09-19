@@ -16,6 +16,9 @@ NEW_VERSION="${1:?Usage: ./scripts/release.sh <version> [release-notes-file]}"
 RELEASE_NOTES_FILE="${2:-}"
 DMG_NAME="$APP_NAME-$NEW_VERSION.dmg"
 DMG_PATH="$DIST_DIR/$DMG_NAME"
+# stable-named copy for the /releases/latest/download link. it lives in
+# BUILD_DIR, not DIST_DIR, so generate_appcast never sees it.
+STABLE_DMG_PATH="$BUILD_DIR/$APP_NAME.dmg"
 SOURCE_COMMIT="$(git rev-parse HEAD)"
 
 if [[ -z "${DEVELOPMENT_TEAM:-}" ]]; then
@@ -157,6 +160,9 @@ hdiutil attach -readonly -nobrowse -mountpoint "$VERIFY_MOUNT" "$DMG_PATH"
 codesign --verify --deep --strict --verbose=2 "$VERIFY_MOUNT/$APP_NAME.app"
 spctl -a -vv -t exec "$VERIFY_MOUNT/$APP_NAME.app"
 hdiutil detach "$VERIFY_MOUNT"
+rm -f "$STABLE_DMG_PATH"
+cp "$DMG_PATH" "$STABLE_DMG_PATH"
+xcrun stapler validate "$STABLE_DMG_PATH"
 echo "       Signed, notarized, and stapled"
 
 echo "[5/8] Generating and validating Sparkle appcast and cask"
@@ -197,10 +203,10 @@ test "$(git rev-list -n 1 "v$NEW_VERSION")" = "$RELEASE_COMMIT"
 
 echo "[7/8] Creating GitHub Release v$NEW_VERSION"
 if [[ -n "$RELEASE_NOTES_FILE" ]]; then
-    gh release create "v$NEW_VERSION" "$DMG_PATH" --repo "$REPO" \
+    gh release create "v$NEW_VERSION" "$DMG_PATH" "$STABLE_DMG_PATH" --repo "$REPO" \
         --title "HyprMac v$NEW_VERSION" --notes-file "$RELEASE_NOTES_FILE" --verify-tag
 else
-    gh release create "v$NEW_VERSION" "$DMG_PATH" --repo "$REPO" \
+    gh release create "v$NEW_VERSION" "$DMG_PATH" "$STABLE_DMG_PATH" --repo "$REPO" \
         --title "HyprMac v$NEW_VERSION" --generate-notes --verify-tag
 fi
 
