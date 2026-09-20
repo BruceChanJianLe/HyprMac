@@ -317,7 +317,37 @@ matching `NSScreen.localizedName`, excluded from tiling entirely),
 the layer instead of floating; no-fit windows float regardless),
 `scratchpadRegionInset` (per-edge inset fraction of the scratchpad's
 tiled region, 0–0.15; 0.06 default keeps the scrimmed border visible,
-0 is edge-to-edge).
+0 is edge-to-edge), `windowRules` (per-app workspace pins, below).
 
 Find any app's bundle ID:
 `mdls -name kMDItemCFBundleIdentifier /Applications/AppName.app`
+
+## Window rules
+
+`windowRules` pins an app's new windows to a workspace instead of
+letting them land on whichever workspace is visible on the display they
+opened on. Edit them in Settings → General → "Pin apps to workspaces",
+or by hand:
+
+```json
+"windowRules": [
+  { "bundleID": "com.spotify.client", "workspace": 9 },
+  { "bundleID": "com.apple.MobileSMS", "workspace": 4 }
+]
+```
+
+Rules are keyed by bundle id and hold one workspace each; a duplicate
+bundle id in a hand-edited file resolves to the first entry. The pin is
+consulted once, in `ActionDispatcher.pinnedWorkspace`, when a window is
+admitted — it is not a tether, so a window you move afterwards stays
+where you moved it.
+
+A rule is skipped, and the window placed normally, when its workspace
+falls outside 1–10 or when that workspace's home display is
+disconnected or excluded from tiling. Apps in `excludedBundleIDs` never
+tile, so a pin on one has no effect.
+
+The array decodes with the same per-element tolerance as `keybinds`: a
+malformed rule is logged and dropped, and every other setting in the
+file survives it. Configs written before this field existed decode as
+no rules.

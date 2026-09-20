@@ -40,6 +40,26 @@ final class ActionDispatcher {
         floatingWindowIDs.union(hiddenWindowIDs.subtracting(reservedHiddenWindowIDs))
     }
 
+    /// Workspace the app owning this window is pinned to, or `nil` when
+    /// no rule claims it. Rules are keyed by bundle id and hold at most one
+    /// workspace each.
+    ///
+    /// `isEligible` rejects a workspace whose home display is absent or
+    /// disabled: a rule aimed at a display that is not tiling right now
+    /// falls back to ordinary screen-based placement, rather than stranding
+    /// the window on a workspace nothing can show.
+    static func pinnedWorkspace(
+        forBundleID bundleID: String?,
+        rules: [WindowRule],
+        isEligible: (Int) -> Bool
+    ) -> Int? {
+        guard let bundleID, !rules.isEmpty,
+              let rule = rules.first(where: { $0.bundleID == bundleID }),
+              Constants.workspaceRange.contains(rule.workspace),
+              isEligible(rule.workspace) else { return nil }
+        return rule.workspace
+    }
+
     static func newWindowIDsForAdmission(
         _ windowIDs: [CGWindowID],
         workspaceFor: (CGWindowID) -> Int?
@@ -283,36 +303,59 @@ final class ActionDispatcher {
 
     // MARK: - apply-loop helpers
 
-    /// Assign a newly-discovered window to a workspace based on where it
-    /// physically opened.
+    /// Assign a newly-discovered window to a workspace: its app's window
+    /// rule when one claims it, otherwise where it physically opened.
     ///
-    /// Prefers the window's own screen — that is where macOS placed it —
-    /// and falls back to the cursor's screen only when the window has no
-    /// usable frame yet. Always overwrites any prior assignment: a
+    /// Without a rule, prefers the window's own screen — that is where
+    /// macOS placed it — and falls back to the cursor's screen only when
+    /// the window has no usable frame yet. Always overwrites any prior assignment: a
     /// recycled `CGWindowID` could carry a leftover entry pointing at a
     /// workspace the user has not touched in days.
     private func assignNewWindows(_ windows: [HyprWindow], fullyForgottenIDs: Set<CGWindowID>) {
         let admittedIDs = Set(Self.newWindowIDsForAdmission(
             windows.map(\.windowID), workspaceFor: workspaceManager.workspaceFor
         ))
-        var groups: [(screen: NSScreen, windows: [HyprWindow])] = []
+        // grouped by destination workspace rather than by screen: a pinned
+        // app's window is bound for its rule's workspace whichever display it
+        // opened on, so screen is only the fallback answer to the same question.
+        var groups: [(workspace: Int, windows: [HyprWindow])] = []
         for window in windows where admittedIDs.contains(window.windowID) {
             let screen = displayManager.screen(for: window) ?? screenUnderCursor()
-            if let index = groups.firstIndex(where: { $0.screen == screen }) {
+            guard !workspaceManager.isMonitorDisabled(screen) else { continue }
+            let workspace = pinnedWorkspace(for: window)
+                ?? workspaceManager.workspaceForScreen(screen)
+            if let index = groups.firstIndex(where: { $0.workspace == workspace }) {
                 groups[index].windows.append(window)
             } else {
-                groups.append((screen, [window]))
+                groups.append((workspace, [window]))
             }
         }
         for group in groups {
-            assignNewWindows(group.windows, on: group.screen, fullyForgottenIDs: fullyForgottenIDs)
+            assignNewWindows(group.windows, preferredWorkspace: group.workspace,
+                             fullyForgottenIDs: fullyForgottenIDs)
         }
     }
 
-    private func assignNewWindows(_ windows: [HyprWindow], on screen: NSScreen,
+    /// Resolve this window's pin against the live rule list, logging the hit
+    /// so an unexpected placement is traceable to the rule that caused it.
+    private func pinnedWorkspace(for window: HyprWindow) -> Int? {
+        let workspace = Self.pinnedWorkspace(
+            forBundleID: window.bundleID,
+            rules: config.windowRules,
+            isEligible: { [self] candidate in
+                guard let home = workspaceManager.homeScreenForWorkspace(candidate) else { return false }
+                return !workspaceManager.isMonitorDisabled(home)
+            }
+        )
+        if let workspace {
+            hyprLog(.notice, .orchestration,
+                    "window rule: \(window.bundleID ?? "?") (\(window.windowID)) pinned to ws\(workspace)")
+        }
+        return workspace
+    }
+
+    private func assignNewWindows(_ windows: [HyprWindow], preferredWorkspace: Int,
                                   fullyForgottenIDs: Set<CGWindowID>) {
-        guard !workspaceManager.isMonitorDisabled(screen) else { return }
-        let preferredWorkspace = workspaceManager.workspaceForScreen(screen)
         let byID = Dictionary(windows.map { ($0.windowID, $0) },
                               uniquingKeysWith: { first, _ in first })
         let plan = RetileAllPlanner.admit(

@@ -239,6 +239,7 @@ struct SavedConfig: Codable {
     let windowCornerRadius: CGFloat?
     let scratchpadTileByDefault: Bool?
     let scratchpadRegionInset: CGFloat?
+    let windowRules: [WindowRule]?
 }
 
 // MARK: - per-keybind decode tolerance
@@ -265,6 +266,7 @@ extension SavedConfig {
         case dimInactiveWindows, dimIntensity, mouseHoverPollHz
         case chromeFadeDurationSec, windowCornerRadius
         case scratchpadTileByDefault, scratchpadRegionInset
+        case windowRules
     }
 
     init(from decoder: Decoder) throws {
@@ -328,12 +330,30 @@ extension SavedConfig {
         self.windowCornerRadius = try c.decodeIfPresent(CGFloat.self, forKey: .windowCornerRadius)
         self.scratchpadTileByDefault = try c.decodeIfPresent(Bool.self, forKey: .scratchpadTileByDefault)
         self.scratchpadRegionInset = try c.decodeIfPresent(CGFloat.self, forKey: .scratchpadRegionInset)
+        // same per-element tolerance as keybinds: this array is hand-editable
+        // and travels between builds over iCloud, so one bad rule must not
+        // cost the user every other setting in the file.
+        self.windowRules = try c.decodeIfPresent([FailableWindowRule].self, forKey: .windowRules)
+            .map { $0.compactMap(\.rule) }
     }
 }
 
 // one keybind, or nil when it doesn't decode. catching the error in here is
 // the whole trick: the array's decode() call succeeds, so the unkeyed
 // container moves past the bad element instead of throwing out of the array.
+private struct FailableWindowRule: Decodable {
+    let rule: WindowRule?
+
+    init(from decoder: Decoder) throws {
+        do {
+            rule = try WindowRule(from: decoder)
+        } catch {
+            rule = nil
+            hyprLog(.warning, .config, "skipping malformed window rule")
+        }
+    }
+}
+
 private struct FailableKeybind: Decodable {
     let keybind: Keybind?
 

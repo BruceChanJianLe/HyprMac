@@ -26,6 +26,7 @@ macOS doesn't ship with a tiling window manager. Third-party options either requ
 | 🖱 **Focus-Follows-Mouse** | Toggleable, with automatic suppression when menus are open |
 | 🔄 **Drag Placement** | Drag to insert, or hold Hypr while dragging to swap positions |
 | 🔲 **Floating Toggle** | Pop windows in and out of the tiling layout on demand |
+| 📌 **Pin Apps to Workspaces** | Per-app rules send an app's new windows straight to a chosen workspace |
 | 🖥 **Multi-Monitor** | Per-monitor workspace assignment with directional cross-monitor navigation |
 | ⌨️ **Fully Configurable** | Edit the Hypr key, keybinds, app launchers, gaps, and padding in-app or via JSON |
 | 📋 **Keybind Overlay** | `Hypr+K` shows all active shortcuts at a glance |
@@ -144,6 +145,8 @@ HyprMac manages 10 workspaces entirely in userspace, bypassing macOS Spaces.
 **Hypr+F: dedicated workspace.** The focused window moves to the next empty workspace owned by its physical display, wrapping through that display’s workspace numbers. Floating, minimized, hidden, and reserved windows all count as occupants. If no workspace is free, the move is rejected with red feedback and the window stays put. An eligible floating window becomes tiled. The window fills the normal usable area with configured padding; this does not enter macOS native fullscreen. Later windows may join the workspace. If the focused window is already the only window assigned to its workspace, Hypr+F does nothing.
 
 The action requires an ordinary managed, visible, resizable window. It does not override excluded apps, disabled displays, native fullscreen, or an open scratchpad layer. Holding F does not repeat the move. Workspace 10 uses the **0 key**, and Hypr+O shows workspaces 1–5 above 6–10.
+
+**Pinning apps to a workspace.** Settings → General → "Pin apps to workspaces" maps an app to a workspace by bundle id. Every new window from that app opens there, wherever it would otherwise have landed - Spotify on 9, messages on 4. Windows already on screen stay where they are; a pin only decides where new ones go, so moving a window afterwards sticks. A pin whose workspace lives on a disconnected or untiled display is ignored and the window places normally, and apps under "Never tile" are unaffected since they never enter the layout. The rules live in `config.json` under `windowRules` and can be hand-edited - see [`docs/keybinds-and-actions.md`](docs/keybinds-and-actions.md).
 
 A single macOS Space per monitor is recommended for the cleanest experience.
 

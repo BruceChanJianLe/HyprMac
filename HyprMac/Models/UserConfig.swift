@@ -128,6 +128,10 @@ class UserConfig: ObservableObject {
     @Published var scratchpadRegionInset: CGFloat {
         didSet { persistRuntimeChange() }
     }
+    // per-app workspace pins, consulted when a new window is admitted
+    @Published var windowRules: [WindowRule] {
+        didSet { persistRuntimeChange() }
+    }
 
     // iCloud sync state — stored in UserDefaults, not config.json
     @Published var iCloudSyncEnabled: Bool {
@@ -192,6 +196,7 @@ class UserConfig: ObservableObject {
             self.windowCornerRadiusOverride = saved.windowCornerRadius
             self.scratchpadTileByDefault = saved.scratchpadTileByDefault ?? UserConfigDefaults.scratchpadTileByDefault
             self.scratchpadRegionInset = saved.scratchpadRegionInset ?? UserConfigDefaults.scratchpadRegionInset
+            self.windowRules = saved.windowRules ?? []
         } else {
             self.keybinds = Keybind.defaults
             self.gapSize = UserConfigDefaults.gapSize
@@ -217,6 +222,7 @@ class UserConfig: ObservableObject {
             self.windowCornerRadiusOverride = nil
             self.scratchpadTileByDefault = UserConfigDefaults.scratchpadTileByDefault
             self.scratchpadRegionInset = UserConfigDefaults.scratchpadRegionInset
+            self.windowRules = []
         }
 
         // monitor settings: prefer the local file; fall back to (and migrate
@@ -316,7 +322,8 @@ class UserConfig: ObservableObject {
             chromeFadeDurationSec: chromeFadeDurationSec,
             windowCornerRadius: windowCornerRadiusOverride,
             scratchpadTileByDefault: scratchpadTileByDefault,
-            scratchpadRegionInset: scratchpadRegionInset)
+            scratchpadRegionInset: scratchpadRegionInset,
+            windowRules: windowRules)
     }
 
     func resetToDefaults() {
@@ -346,6 +353,7 @@ class UserConfig: ObservableObject {
         windowCornerRadiusOverride = nil
         scratchpadTileByDefault = UserConfigDefaults.scratchpadTileByDefault
         scratchpadRegionInset = UserConfigDefaults.scratchpadRegionInset
+        windowRules = []
     }
 
     /// Restore the controls in Focus Chrome without changing layout,
@@ -423,6 +431,7 @@ class UserConfig: ObservableObject {
         windowCornerRadiusOverride = saved.windowCornerRadius
         scratchpadTileByDefault = saved.scratchpadTileByDefault ?? UserConfigDefaults.scratchpadTileByDefault
         scratchpadRegionInset = saved.scratchpadRegionInset ?? UserConfigDefaults.scratchpadRegionInset
+        windowRules = saved.windowRules ?? []
 
         // monitor settings come from the local file, not the synced config
         if let mc = store.loadSavedMonitorConfig() {
@@ -468,7 +477,8 @@ extension SavedConfig {
             chromeFadeDurationSec: UserConfigDefaults.chromeFadeDurationSec,
             windowCornerRadius: nil,
             scratchpadTileByDefault: UserConfigDefaults.scratchpadTileByDefault,
-            scratchpadRegionInset: UserConfigDefaults.scratchpadRegionInset)
+            scratchpadRegionInset: UserConfigDefaults.scratchpadRegionInset,
+            windowRules: nil)
     }
 }
 
