@@ -576,6 +576,61 @@ final class WorkspaceOrchestrator {
         return true
     }
 
+    /// Move `windows` to `workspace` in one pass and retile once.
+    ///
+    /// The bulk counterpart of `moveToWorkspace` for a caller that has
+    /// already decided the destination has room (the window-rule pass). No
+    /// per-window fit check, no focus follow, no feedback: tiled windows
+    /// leave their source tree without a frame write and take their place
+    /// from the retile that follows; floaters are carried to the
+    /// destination's display when it is visible, or have their frame saved
+    /// and are parked when it is hidden. If the focused window left the
+    /// screen, focus re-anchors on what remains under the cursor.
+    func moveWindows(_ windows: [HyprWindow], toWorkspace number: Int) {
+        guard !windows.isEmpty,
+              let targetScreen = workspaceManager.homeScreenForWorkspace(number) else { return }
+        // as in moveToWorkspace: a poll mid-transition would read a moved
+        // window at its old rect and drift it straight back
+        suppressions.suppress("workspace-transition", for: 1.5)
+        tilingEngine.primeMinimumSizes(windows)
+        let targetVisible = workspaceManager.screenForWorkspace(number) != nil
+        let focusedID = currentFocusedWindow()?.windowID
+        let cursorScreen = screenUnderCursor()
+        var focusedLeftScreen = false
+
+        animatedRetile({ [self] in
+            for window in windows {
+                let id = window.windowID
+                guard let source = workspaceManager.workspaceFor(id), source != number else { continue }
+                revalidation.cancel(id, reason: "moved by window rule")
+                let isFloating = stateCache.floatingWindowIDs.contains(id)
+                window.isFloating = isFloating
+                if !isFloating {
+                    // membership only: the source may be a hidden workspace,
+                    // and retiling that would unpark its tenants
+                    tilingEngine.removeWindowMembershipOnly(window, fromWorkspace: source)
+                }
+                workspaceManager.moveWindow(id, toWorkspace: number)
+                if targetVisible {
+                    if isFloating { carryFloaterToScreen(window, targetScreen) }
+                } else {
+                    if isFloating { workspaceManager.saveFloatingFrame(window) }
+                    workspaceManager.hideInCorner(window, on: targetScreen)
+                    if id == focusedID { focusedLeftScreen = true }
+                }
+                hyprLog(.notice, .workspace,
+                        "moveWindows(\(number)): '\(window.title ?? "?")' (\(id)) ws\(source) → ws\(number)"
+                        + " floating=\(isFloating) targetVisible=\(targetVisible)")
+            }
+        }, { [self] in
+            if focusedLeftScreen, let focusedID {
+                refocusAfterMove(on: cursorScreen, excluding: focusedID)
+            }
+            updatePositionCache()
+            NotificationCenter.default.post(name: .hyprMacWorkspaceChanged, object: nil)
+        })
+    }
+
     /// Place a floating window onto `screen`, preserving its size and its
     /// relative position. No-op when the floater is already substantially
     /// visible on the target screen.

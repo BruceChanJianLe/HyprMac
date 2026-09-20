@@ -7,10 +7,11 @@ import Foundation
 /// One app-to-workspace pin. Keyed by bundle id, so an app holds at most
 /// one rule - `id` is the bundle id for exactly that reason.
 ///
-/// Rules apply at admission time only (see
-/// `ActionDispatcher.pinnedWorkspace`). Windows already placed are left
-/// where they are: a rule is a statement about where new windows go, not
-/// a tether that keeps dragging a window back.
+/// A rule is consulted when a window is placed: at admission
+/// (`ActionDispatcher.pinnedWorkspace`), when startup or Retile All
+/// redistributes every window, and on demand through
+/// `Action.applyWindowRules`. Between those moments it is not a tether:
+/// move a pinned window elsewhere and it stays there until the next pass.
 struct WindowRule: Codable, Equatable, Identifiable {
     var id: String { bundleID }
 

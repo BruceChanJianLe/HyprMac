@@ -21,7 +21,7 @@ enum KeybindCategory: String, CaseIterable {
              .toggleScratchpad, .moveToScratchpad, .resizeDirection:
             return .windowManagement
         case .switchWorkspace, .moveToWorkspace, .moveWindowToMonitor, .cycleWorkspace,
-             .moveToNextEmptyWorkspace:
+             .moveToNextEmptyWorkspace, .applyWindowRules:
             return .workspaces
         case .launchApp, .runCommand:
             return .apps

@@ -60,6 +60,55 @@ final class ActionDispatcher {
         return rule.workspace
     }
 
+    /// Which open windows a manual pin pass moves, grouped by destination,
+    /// and which it has to leave behind.
+    ///
+    /// A window moves when its app holds a rule, it sits on a regular
+    /// workspace other than the rule's, and the destination still has room
+    /// for it. Room is counted the way admission counts it: ids in
+    /// `excludedWindowIDs` (floaters, minimized, Cmd-H'd) hold no tile slot,
+    /// so they neither consume capacity nor get refused for lack of it.
+    /// Tiled windows the destination cannot fit are `refused` and stay
+    /// where they are - the user named one workspace, so spilling onto the
+    /// next free one, as admission does for a brand-new window, would
+    /// scatter windows nobody asked to move.
+    static func windowRuleMoves(
+        windows: [(windowID: CGWindowID, bundleID: String?)],
+        currentWorkspaceFor: (CGWindowID) -> Int?,
+        pinnedWorkspaceFor: (String?) -> Int?,
+        existingAssignments: [Int: Set<CGWindowID>],
+        excludedWindowIDs: Set<CGWindowID>,
+        capacityForWorkspace: (Int) -> Int
+    ) -> (moves: [Int: [CGWindowID]], refused: [CGWindowID]) {
+        var byDestination: [Int: [CGWindowID]] = [:]
+        for window in windows {
+            guard let destination = pinnedWorkspaceFor(window.bundleID),
+                  let current = currentWorkspaceFor(window.windowID),
+                  Constants.workspaceRange.contains(current),
+                  current != destination else { continue }
+            byDestination[destination, default: []].append(window.windowID)
+        }
+        var moves: [Int: [CGWindowID]] = [:]
+        var refused: [CGWindowID] = []
+        for (destination, ids) in byDestination.sorted(by: { $0.key < $1.key }) {
+            // one eligible workspace: the plan either seats a window there or
+            // reports it as overflow, never somewhere else
+            let plan = RetileAllPlanner.admit(
+                windowIDs: ids,
+                preferredWorkspace: destination,
+                eligibleWorkspaces: [destination],
+                existingAssignments: existingAssignments,
+                excludedWindowIDs: excludedWindowIDs,
+                capacityForWorkspace: capacityForWorkspace
+            )
+            let overflow = Set(plan.overflow)
+            let seated = (plan.assignments[destination] ?? []).filter { !overflow.contains($0) }
+            if !seated.isEmpty { moves[destination] = seated }
+            refused.append(contentsOf: plan.overflow)
+        }
+        return (moves, refused.sorted())
+    }
+
     static func newWindowIDsForAdmission(
         _ windowIDs: [CGWindowID],
         workspaceFor: (CGWindowID) -> Int?
@@ -262,6 +311,8 @@ final class ActionDispatcher {
             resizeInDirection(dir)
         case .toggleTiling:
             break // handled by WindowManager so it remains available while paused
+        case .applyWindowRules:
+            applyWindowRules()
         case .runCommand(_, let command):
             commandRunner.run(command: command)
         }
@@ -297,6 +348,7 @@ final class ActionDispatcher {
         case .moveToScratchpad:    return "moveToScratchpad"
         case .resizeDirection:     return "resizeDirection"
         case .toggleTiling:        return "toggleTiling"
+        case .applyWindowRules:    return "applyWindowRules"
         case .runCommand:          return "runCommand"
         }
     }
@@ -338,20 +390,83 @@ final class ActionDispatcher {
 
     /// Resolve this window's pin against the live rule list, logging the hit
     /// so an unexpected placement is traceable to the rule that caused it.
-    private func pinnedWorkspace(for window: HyprWindow) -> Int? {
+    /// Shared with `WindowManager`'s startup redistribution so a pin means
+    /// the same thing whichever pass reads it.
+    func pinnedWorkspace(for window: HyprWindow) -> Int? {
         let workspace = Self.pinnedWorkspace(
-            forBundleID: window.bundleID,
-            rules: config.windowRules,
-            isEligible: { [self] candidate in
-                guard let home = workspaceManager.homeScreenForWorkspace(candidate) else { return false }
-                return !workspaceManager.isMonitorDisabled(home)
-            }
-        )
+            forBundleID: window.bundleID, rules: config.windowRules, isEligible: isPinnedWorkspaceEligible)
         if let workspace {
             hyprLog(.notice, .orchestration,
                     "window rule: \(window.bundleID ?? "?") (\(window.windowID)) pinned to ws\(workspace)")
         }
         return workspace
+    }
+
+    /// A pin can be honoured only while its workspace's home display is
+    /// connected and tiling.
+    private func isPinnedWorkspaceEligible(_ workspace: Int) -> Bool {
+        guard let home = workspaceManager.homeScreenForWorkspace(workspace) else { return false }
+        return !workspaceManager.isMonitorDisabled(home)
+    }
+
+    /// Tile slots a workspace offers, from its home display's split depth;
+    /// zero for a workspace whose home is gone.
+    private func workspaceCapacity(_ workspace: Int) -> Int {
+        guard let home = workspaceManager.homeScreenForWorkspace(workspace) else { return 0 }
+        return RetileAllPlanner.workspaceCapacity(maxDepth: tilingEngine.maxDepth(for: home))
+    }
+
+    // MARK: - window rules on demand
+
+    /// Move every open window of a pinned app onto its rule's workspace.
+    ///
+    /// The manual counterpart to admission, for windows that were already
+    /// open when a rule was written or that the user moved away and wants
+    /// back. Same eligibility as admission (the rule's home display must be
+    /// tiling) and the same capacity accounting; a full destination leaves
+    /// its windows where they are, with one beep for the pass. Scratchpad
+    /// members, minimized and Cmd-H'd windows, and windows in native
+    /// fullscreen are never touched: none of them is on a workspace the
+    /// user can see the move happen on.
+    private func applyWindowRules() {
+        let ruledBundleIDs = Set(config.windowRules.map(\.bundleID))
+        guard !ruledBundleIDs.isEmpty else {
+            hyprLog(.notice, .orchestration, "apply window rules: no rules configured")
+            NSSound.beep()
+            return
+        }
+        let windows = accessibility.getAllWindows()
+        let candidates = windows.filter { window in
+            guard let bundleID = window.bundleID, ruledBundleIDs.contains(bundleID) else { return false }
+            return !stateCache.hiddenWindowIDs.contains(window.windowID) && !window.isFullscreen
+        }
+        let (moves, refused) = Self.windowRuleMoves(
+            windows: candidates.map { (windowID: $0.windowID, bundleID: $0.bundleID) },
+            currentWorkspaceFor: workspaceManager.workspaceFor,
+            pinnedWorkspaceFor: { [self] bundleID in
+                Self.pinnedWorkspace(forBundleID: bundleID, rules: config.windowRules,
+                                     isEligible: isPinnedWorkspaceEligible)
+            },
+            existingAssignments: workspaceManager.regularWorkspaceWindowIDs(),
+            excludedWindowIDs: Self.admissionExclusions(
+                floatingWindowIDs: stateCache.floatingWindowIDs,
+                hiddenWindowIDs: stateCache.hiddenWindowIDs,
+                reservedHiddenWindowIDs: stateCache.reservedHiddenWindowIDs
+            ),
+            capacityForWorkspace: workspaceCapacity
+        )
+        let byID = Dictionary(candidates.map { ($0.windowID, $0) }, uniquingKeysWith: { first, _ in first })
+        for (workspace, ids) in moves.sorted(by: { $0.key < $1.key }) {
+            hyprLog(.notice, .orchestration, "apply window rules: \(ids.sorted()) → ws\(workspace)")
+            workspaceOrchestrator.moveWindows(ids.compactMap { byID[$0] }, toWorkspace: workspace)
+        }
+        if !refused.isEmpty {
+            hyprLog(.notice, .orchestration,
+                    "apply window rules: no room for \(refused) on their pinned workspaces - left in place")
+            NSSound.beep()
+        } else if moves.isEmpty {
+            hyprLog(.debug, .orchestration, "apply window rules: every pinned window already in place")
+        }
     }
 
     private func assignNewWindows(_ windows: [HyprWindow], preferredWorkspace: Int,
@@ -371,10 +486,7 @@ final class ActionDispatcher {
                 hiddenWindowIDs: stateCache.hiddenWindowIDs,
                 reservedHiddenWindowIDs: stateCache.reservedHiddenWindowIDs
             ),
-            capacityForWorkspace: { [self] workspace in
-                guard let home = workspaceManager.homeScreenForWorkspace(workspace) else { return 0 }
-                return RetileAllPlanner.workspaceCapacity(maxDepth: tilingEngine.maxDepth(for: home))
-            }
+            capacityForWorkspace: workspaceCapacity
         )
         RetileAllPlanner.applyAdmission(
             plan,

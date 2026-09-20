@@ -101,6 +101,10 @@ extension Keybind {
         binds.append(Keybind(keyCode: UInt16(kVK_ANSI_S), modifiers: [.hypr, .shift],
                              action: .moveToScratchpad))
 
+        // hypr + shift + r: move pinned apps' open windows to their workspaces
+        binds.append(Keybind(keyCode: UInt16(kVK_ANSI_R), modifiers: [.hypr, .shift],
+                             action: .applyWindowRules))
+
         // hypr + w: close window
         binds.append(Keybind(keyCode: UInt16(kVK_ANSI_W), modifiers: .hypr,
                              action: .closeWindow))

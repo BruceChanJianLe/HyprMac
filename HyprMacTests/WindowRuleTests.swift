@@ -2,10 +2,12 @@ import XCTest
 @testable import HyprMac
 
 // WindowRuleTests cover per-app workspace pins: the placement decision
-// itself (ActionDispatcher.pinnedWorkspace) and the wire format that
-// carries the rules between builds through config.json.
+// itself (ActionDispatcher.pinnedWorkspace), the plan behind the manual
+// "apply pins" pass (ActionDispatcher.windowRuleMoves), the startup batches
+// that seat pinned windows first, and the wire format that carries rules
+// and the action between builds through config.json.
 //
-// the decision is a static over plain values, so no AX, no live screens,
+// every decision is a static over plain values, so no AX, no live screens,
 // and no dispatcher instance are involved.
 
 final class WindowRuleTests: XCTestCase {
@@ -103,7 +105,145 @@ final class WindowRuleTests: XCTestCase {
             9)
     }
 
+    // MARK: - the manual pass
+
+    private typealias Candidate = (windowID: CGWindowID, bundleID: String?)
+
+    private func moves(
+        _ windows: [Candidate],
+        current: [CGWindowID: Int],
+        pins: [String: Int],
+        assignments: [Int: Set<CGWindowID>] = [:],
+        excluded: Set<CGWindowID> = [],
+        capacity: Int = 8
+    ) -> (moves: [Int: [CGWindowID]], refused: [CGWindowID]) {
+        ActionDispatcher.windowRuleMoves(
+            windows: windows,
+            currentWorkspaceFor: { current[$0] },
+            pinnedWorkspaceFor: { $0.flatMap { pins[$0] } },
+            existingAssignments: assignments,
+            excludedWindowIDs: excluded,
+            capacityForWorkspace: { _ in capacity })
+    }
+
+    func testPinnedWindowsElsewhereMoveToTheirWorkspace() {
+        let plan = moves(
+            [(1, "com.spotify.client"), (2, "com.spotify.client"), (3, "com.apple.Safari")],
+            current: [1: 2, 2: 5, 3: 2],
+            pins: ["com.spotify.client": 9])
+        XCTAssertEqual(plan.moves, [9: [1, 2]])
+        XCTAssertTrue(plan.refused.isEmpty)
+    }
+
+    func testWindowsAlreadyOnTheirWorkspaceStay() {
+        let plan = moves(
+            [(1, "com.spotify.client"), (2, "com.spotify.client")],
+            current: [1: 9, 2: 3],
+            pins: ["com.spotify.client": 9])
+        XCTAssertEqual(plan.moves, [9: [2]])
+    }
+
+    // an untracked window has nothing to move from; a scratchpad member
+    // lives on workspace 0 and belongs to that layer, not to any pin
+    func testUntrackedAndScratchpadWindowsAreLeftAlone() {
+        let plan = moves(
+            [(1, "com.spotify.client"), (2, "com.spotify.client")],
+            current: [2: ScratchpadController.workspace],
+            pins: ["com.spotify.client": 9])
+        XCTAssertTrue(plan.moves.isEmpty)
+        XCTAssertTrue(plan.refused.isEmpty)
+    }
+
+    func testEachAppGoesToItsOwnWorkspace() {
+        let plan = moves(
+            [(1, "com.spotify.client"), (2, "com.apple.MobileSMS"), (3, nil)],
+            current: [1: 1, 2: 1, 3: 1],
+            pins: ["com.spotify.client": 9, "com.apple.MobileSMS": 4])
+        XCTAssertEqual(plan.moves, [4: [2], 9: [1]])
+    }
+
+    // the user named one workspace. a full destination refuses rather than
+    // scattering windows onto the next free workspace, as admission would
+    // for a window that has to land somewhere
+    func testFullDestinationRefusesTheOverflowInsteadOfSpilling() {
+        let plan = moves(
+            [(1, "com.spotify.client"), (2, "com.spotify.client"), (3, "com.spotify.client")],
+            current: [1: 2, 2: 2, 3: 2],
+            pins: ["com.spotify.client": 9],
+            assignments: [9: [90, 91]],
+            capacity: 4)
+        XCTAssertEqual(plan.moves, [9: [1, 2]])
+        XCTAssertEqual(plan.refused, [3])
+    }
+
+    // floaters and hidden windows hold no tile slot, the same accounting
+    // admission uses: they neither fill the destination nor get refused
+    func testExcludedWindowsNeitherConsumeNorAreRefusedCapacity() {
+        let plan = moves(
+            [(1, "com.spotify.client"), (2, "com.spotify.client"), (3, "com.spotify.client")],
+            current: [1: 2, 2: 2, 3: 2],
+            pins: ["com.spotify.client": 9],
+            assignments: [9: [90, 91]],
+            excluded: [1, 91],
+            capacity: 3)
+        XCTAssertEqual(plan.moves, [9: [1, 2, 3]], "one tenant floats, so two tiled slots remain")
+        XCTAssertTrue(plan.refused.isEmpty)
+    }
+
+    func testIneligiblePinMovesNothing() {
+        let plan = ActionDispatcher.windowRuleMoves(
+            windows: [(1, "com.spotify.client")],
+            currentWorkspaceFor: { _ in 2 },
+            pinnedWorkspaceFor: { _ in nil },
+            existingAssignments: [:],
+            excludedWindowIDs: [],
+            capacityForWorkspace: { _ in 8 })
+        XCTAssertTrue(plan.moves.isEmpty)
+    }
+
+    // MARK: - startup placement
+
+    func testStartupSeatsPinnedWindowsBeforeScreenPlacementFillsTheirWorkspace() {
+        let pins: [CGWindowID: Int] = [7: 1, 8: 3]
+        let split = RetileAllPlanner.pinnedStartupBatches(
+            windowIDs: [5, 6, 7, 8],
+            pinnedWorkspaceFor: { pins[$0] },
+            order: { $0.sorted(by: >) })
+        XCTAssertEqual(split.batches.map(\.preferredWorkspace), [1, 3])
+        XCTAssertEqual(split.batches.map(\.windowIDs), [[7], [8]])
+        XCTAssertEqual(split.unpinned, [5, 6])
+
+        // the screen batch wants workspace 1 too; the pinned batch, listed
+        // first, takes the seat and the screen's excess spills onward
+        let plan = RetileAllPlanner.admitStartupBatches(
+            split.batches + [RetileAllBatch(preferredWorkspace: 1, windowIDs: split.unpinned)],
+            workspaceCount: 4,
+            reservedAssignments: [:],
+            capacityForWorkspace: { $0 == 1 ? 2 : 4 })
+        XCTAssertEqual(plan.assignments[1], [7, 5])
+        XCTAssertEqual(plan.assignments[2], [6])
+        XCTAssertEqual(plan.assignments[3], [8])
+        XCTAssertTrue(plan.overflow.isEmpty)
+    }
+
+    func testStartupBatchOrderIsAppliedPerPinnedWorkspace() {
+        var ordered: [[CGWindowID]] = []
+        let split = RetileAllPlanner.pinnedStartupBatches(
+            windowIDs: [3, 1, 2],
+            pinnedWorkspaceFor: { _ in 9 },
+            order: { ordered.append($0); return $0.sorted() })
+        XCTAssertEqual(ordered, [[3, 1, 2]])
+        XCTAssertEqual(split.batches.map(\.windowIDs), [[1, 2, 3]])
+        XCTAssertTrue(split.unpinned.isEmpty)
+    }
+
     // MARK: - wire format
+
+    func testApplyWindowRulesActionRoundTrips() throws {
+        let data = try JSONEncoder().encode(Action.applyWindowRules)
+        XCTAssertEqual(String(decoding: data, as: UTF8.self), #"{"applyWindowRules":{}}"#)
+        XCTAssertEqual(try JSONDecoder().decode(Action.self, from: data), .applyWindowRules)
+    }
 
     func testRulesRoundTripThroughSavedConfig() throws {
         let json = """

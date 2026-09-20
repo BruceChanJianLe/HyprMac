@@ -709,6 +709,10 @@ class WindowManager {
             name: .hyprMacRetileAll, object: nil
         )
         NotificationCenter.default.addObserver(
+            self, selector: #selector(applyWindowRulesRequested),
+            name: .hyprMacApplyWindowRules, object: nil
+        )
+        NotificationCenter.default.addObserver(
             self, selector: #selector(screenParametersChanged),
             name: NSApplication.didChangeScreenParametersNotification, object: nil
         )
@@ -1388,7 +1392,7 @@ class WindowManager {
         if displayTransitionPending {
             switch action {
             case .switchWorkspace, .moveToWorkspace, .moveWindowToMonitor, .cycleWorkspace,
-                 .moveToNextEmptyWorkspace:
+                 .moveToNextEmptyWorkspace, .applyWindowRules:
                 hyprLog(.notice, .lifecycle, "workspace action dropped mid-display-transition")
                 return
             default:
@@ -1411,7 +1415,7 @@ class WindowManager {
                 if !scratchpad.ejectFocusedWindow() {
                     scratchpad.hide(reason: .workspaceAction)
                 }
-            case .switchWorkspace, .cycleWorkspace:
+            case .switchWorkspace, .cycleWorkspace, .applyWindowRules:
                 scratchpad.hide(reason: .workspaceAction)
             case .moveToNextEmptyWorkspace:
                 NSSound.beep()
@@ -2740,6 +2744,17 @@ class WindowManager {
         scratchpad.hide(reason: .workspaceAction)
         snapshotAndTile()
     }
+
+    /// Handler for the `.hyprMacApplyWindowRules` notification posted from
+    /// the settings panel's "Apply now" button. Same path as the keybind,
+    /// so the scratchpad and display-transition rules apply equally.
+    @objc private func applyWindowRulesRequested() {
+        guard isRunning else {
+            hyprLog(.notice, .lifecycle, "apply window rules requested while not running - ignored")
+            return
+        }
+        handleAction(.applyWindowRules)
+    }
 }
 
 private extension WindowManager {
@@ -3012,18 +3027,28 @@ private extension WindowManager {
             window.frame.map { (window.windowID, $0) }
         })
         let focusedID = accessibility.getFocusedWindow()?.windowID
-        let batches = screens.map { screen in
-            let localIDs = windowIDs.filter { id in
+        let order = { (ids: [CGWindowID]) in
+            RetileAllPlanner.startupWindowOrder(windowIDs: ids, framesByID: frames, focusedWindowID: focusedID)
+        }
+        // a pinned app's windows go to the rule's workspace, whichever
+        // display they sit on now, and claim its capacity before the
+        // screen-based batches fill it - a window that opened before HyprMac
+        // did is placed exactly as one that opens after
+        let pinned = RetileAllPlanner.pinnedStartupBatches(
+            windowIDs: windowIDs,
+            pinnedWorkspaceFor: { [self] id in byID[id].flatMap { actionDispatcher.pinnedWorkspace(for: $0) } },
+            order: order
+        )
+        let screenBatches = screens.map { screen in
+            let localIDs = pinned.unpinned.filter { id in
                 let assignedHome = workspaceManager.workspaceFor(id).flatMap(workspaceManager.homeScreenForWorkspace)
                 let home = assignedHome ?? byID[id].flatMap(displayManager.screen(for:)) ?? screens[0]
                 return home == screen
             }
             return RetileAllBatch(
-                preferredWorkspace: workspaceManager.workspaceForScreen(screen),
-                windowIDs: RetileAllPlanner.startupWindowOrder(
-                    windowIDs: localIDs, framesByID: frames, focusedWindowID: focusedID)
-            )
+                preferredWorkspace: workspaceManager.workspaceForScreen(screen), windowIDs: order(localIDs))
         }
+        let batches = pinned.batches + screenBatches
         let reserved = Dictionary(uniqueKeysWithValues: Constants.workspaceRange.map { workspace in
             (workspace, workspaceManager.windowIDs(onWorkspace: workspace)
                 .intersection(stateCache.reservedHiddenWindowIDs)

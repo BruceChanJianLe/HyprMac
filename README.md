@@ -108,6 +108,7 @@ The physical Hypr key is configurable in Settings → General. Options include C
 | `⇪ + P` | Pause / resume tiling |
 | `⇪ + S` | Toggle scratchpad |
 | `⇪ + ⇧ + S` | Send window to scratchpad |
+| `⇪ + ⇧ + R` | Move pinned apps' open windows to their workspaces |
 | `⇪ + ↵` | Launch/focus Terminal |
 | `⇪ + \`` | Warp cursor to menu bar |
 
@@ -146,7 +147,7 @@ HyprMac manages 10 workspaces entirely in userspace, bypassing macOS Spaces.
 
 The action requires an ordinary managed, visible, resizable window. It does not override excluded apps, disabled displays, native fullscreen, or an open scratchpad layer. Holding F does not repeat the move. Workspace 10 uses the **0 key**, and Hypr+O shows workspaces 1–5 above 6–10.
 
-**Pinning apps to a workspace.** Settings → General → "Pin apps to workspaces" maps an app to a workspace by bundle id. Every new window from that app opens there, wherever it would otherwise have landed - Spotify on 9, messages on 4. Windows already on screen stay where they are; a pin only decides where new ones go, so moving a window afterwards sticks. A pin whose workspace lives on a disconnected or untiled display is ignored and the window places normally, and apps under "Never tile" are unaffected since they never enter the layout. The rules live in `config.json` under `windowRules` and can be hand-edited - see [`docs/keybinds-and-actions.md`](docs/keybinds-and-actions.md).
+**Pinning apps to a workspace.** Settings → General → "Pin apps to workspaces" maps an app to a workspace by bundle id. Every new window from that app opens there, wherever it would otherwise have landed - Spotify on 9, messages on 4. Windows that are already open are moved too when HyprMac starts, when you choose "Retile all spaces" from the menu bar, or on demand with **Hypr+Shift+R** (Apply Workspace Pins, also the "Apply" button in the same panel). Between those passes a pin is not a tether: move a pinned window elsewhere and it stays there. The manual pass moves tiled and floating windows alike, leaves scratchpad members, minimized, hidden, and native-fullscreen windows alone, and never spills onto another workspace - if the pinned workspace has no room, the window stays put and HyprMac beeps once. A pin whose workspace lives on a disconnected or untiled display is ignored and the window places normally, and apps under "Never tile" are unaffected since they never enter the layout. The rules live in `config.json` under `windowRules` and can be hand-edited - see [`docs/keybinds-and-actions.md`](docs/keybinds-and-actions.md).
 
 A single macOS Space per monitor is recommended for the cleanest experience.
 

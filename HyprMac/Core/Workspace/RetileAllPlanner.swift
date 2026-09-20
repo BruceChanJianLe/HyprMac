@@ -57,6 +57,33 @@ enum RetileAllPlanner {
         return ordered
     }
 
+    /// Split a startup population into the windows a rule pins, one batch
+    /// per pinned workspace in ascending order, and the rest.
+    ///
+    /// Callers put the pinned batches ahead of the per-screen batches, so
+    /// `admitStartupBatches` seats a pinned window on its rule's workspace
+    /// before screen-based placement can fill that workspace. `order`
+    /// sorts each batch the way the screen batches are sorted.
+    static func pinnedStartupBatches(
+        windowIDs: [CGWindowID],
+        pinnedWorkspaceFor: (CGWindowID) -> Int?,
+        order: ([CGWindowID]) -> [CGWindowID]
+    ) -> (batches: [RetileAllBatch], unpinned: [CGWindowID]) {
+        var pinned: [Int: [CGWindowID]] = [:]
+        var unpinned: [CGWindowID] = []
+        for windowID in windowIDs {
+            if let workspace = pinnedWorkspaceFor(windowID) {
+                pinned[workspace, default: []].append(windowID)
+            } else {
+                unpinned.append(windowID)
+            }
+        }
+        let batches = pinned.keys.sorted().map { workspace in
+            RetileAllBatch(preferredWorkspace: workspace, windowIDs: order(pinned[workspace] ?? []))
+        }
+        return (batches, unpinned)
+    }
+
     /// Fill every batch's visible home first, then route only its excess
     /// through the global cyclic workspace order.
     static func admitStartupBatches(

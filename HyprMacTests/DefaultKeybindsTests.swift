@@ -158,6 +158,24 @@ final class DefaultKeybindsTests: XCTestCase {
         XCTAssertEqual(bind.modifiers, .hypr)
     }
 
+    func testApplyWorkspacePinsUsesHyprShiftR() throws {
+        let bind = try XCTUnwrap(Keybind.defaults.first { $0.action == .applyWindowRules })
+        XCTAssertEqual(bind.keyCode, UInt16(kVK_ANSI_R))
+        XCTAssertEqual(bind.modifiers, [.hypr, .shift])
+        XCTAssertEqual(bind.actionDescription, "Apply Workspace Pins")
+        XCTAssertEqual(KeybindCategory.from(.applyWindowRules), .workspaces)
+    }
+
+    // a bulk move must not repeat while the chord is held, and it needs a
+    // running engine to move anything
+    func testApplyWorkspacePinsIgnoresKeyRepeatAndNeedsTiling() {
+        XCTAssertTrue(HotkeyManager.shouldDispatchAction(
+            .applyWindowRules, tilingEnabled: true, isRepeat: false))
+        XCTAssertFalse(HotkeyManager.shouldDispatchAction(
+            .applyWindowRules, tilingEnabled: true, isRepeat: true))
+        XCTAssertFalse(HotkeyManager.actionIsAvailable(.applyWindowRules, tilingEnabled: false))
+    }
+
     func testWorkspaceOverviewUsesHyprO() throws {
         let bind = try XCTUnwrap(Keybind.defaults.first { $0.action == .showWorkspaceOverview })
         XCTAssertEqual(bind.keyCode, UInt16(kVK_ANSI_O))

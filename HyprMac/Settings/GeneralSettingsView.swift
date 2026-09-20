@@ -230,10 +230,7 @@ struct GeneralSettingsView: View {
     // MARK: pin to workspace
 
     private var windowRulesPanel: some View {
-        HyprPanel("Pin apps to workspaces",
-                  footer: "New windows from these apps open on the workspace you choose, "
-                        + "wherever they would otherwise have landed. Windows already "
-                        + "placed stay put, and apps in Never tile are unaffected.") {
+        HyprPanel("Pin apps to workspaces", footer: windowRulesFooter) {
             if config.windowRules.isEmpty {
                 HyprRow("No pinned apps", icon: "pin.slash",
                         subtitle: "New windows follow the display they open on",
@@ -247,11 +244,36 @@ struct GeneralSettingsView: View {
                     windowRuleRow(rule: rule, isLast: idx == sorted.count - 1)
                 }
             }
-            HyprRow("Add app", icon: "plus", divider: false) {
+            HyprRow("Add app", icon: "plus", divider: !config.windowRules.isEmpty) {
                 Button("Choose…") { pickPinnedApp() }
                     .controlSize(.small)
             }
+            if !config.windowRules.isEmpty {
+                HyprRow("Move open windows now", icon: "pin",
+                        subtitle: applyPinsSubtitle, divider: false) {
+                    Button("Apply") {
+                        NotificationCenter.default.post(name: .hyprMacApplyWindowRules, object: nil)
+                    }
+                    .controlSize(.small)
+                }
+            }
         }
+    }
+
+    private var windowRulesFooter: String {
+        "New windows from these apps open on the workspace you choose, wherever "
+            + "they would otherwise have landed. Windows already open are moved when "
+            + "HyprMac starts, on Retile All, or when you apply the pins by hand. "
+            + "Apps in Never tile are unaffected."
+    }
+
+    /// Names the keybind for the same pass, when one is bound, so the button
+    /// doubles as the place to learn the shortcut.
+    private var applyPinsSubtitle: String {
+        guard let chord = WelcomeContent.chord(in: config.keybinds, hyprKey: config.hyprKey, matching: {
+            $0 == .applyWindowRules
+        }) else { return "Also available as the Apply Workspace Pins keybind" }
+        return "Same as pressing \(chord)"
     }
 
     private func windowRuleRow(rule: WindowRule, isLast: Bool) -> some View {

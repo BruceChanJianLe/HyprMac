@@ -28,6 +28,7 @@ enum Action: Equatable {
     case toggleScratchpad
     case moveToScratchpad
     case toggleTiling
+    case applyWindowRules
     case runCommand(label: String, command: String)
 }
 ```
@@ -50,6 +51,11 @@ now defaults to Hypr+Shift+T. The new action is unavailable while paused and
 ignores keyboard autorepeat. It selects the actual AX-focused managed window,
 not the cursor's monitor, and moves it to the next empty workspace anchored to
 its physical display. See the README for eligibility and rejection behavior.
+
+`applyWindowRules` defaults to Hypr+Shift+R and encodes as
+`{"applyWindowRules":{}}`. It moves every open window of a pinned app onto
+its rule's workspace (see "Window rules" below), is unavailable while
+paused, and ignores keyboard autorepeat.
 
 Regular workspace IDs are 1–10. The physical 0 key maps to ID 10:
 Hypr+0 switches, and Hypr+Shift+0 sends. Their wire values remain
@@ -338,9 +344,31 @@ or by hand:
 
 Rules are keyed by bundle id and hold one workspace each; a duplicate
 bundle id in a hand-edited file resolves to the first entry. The pin is
-consulted once, in `ActionDispatcher.pinnedWorkspace`, when a window is
-admitted - it is not a tether, so a window you move afterwards stays
-where you moved it.
+read by `ActionDispatcher.pinnedWorkspace` at three moments:
+
+- when a new window is admitted;
+- when startup or Retile All redistributes every window
+  (`WindowManager.startupPlacement`), where pinned windows form their
+  own batches ahead of the per-screen ones so they claim their
+  workspace's capacity first;
+- on demand, through `Action.applyWindowRules` (Hypr+Shift+R, or the
+  "Apply" button in the settings panel).
+
+Between those passes a pin is not a tether: a window you move afterwards
+stays where you moved it.
+
+The manual pass (`ActionDispatcher.windowRuleMoves`) considers every
+open window whose app holds a rule and sits on a different regular
+workspace. Scratchpad members, minimized and Cmd-H'd windows, and
+windows in native fullscreen are skipped. Capacity is counted as
+admission counts it - floaters and hidden windows hold no tile slot -
+but a full destination refuses the excess instead of spilling it onto
+the next free workspace: the user named one workspace, so the refused
+windows stay put and the pass beeps once. Moves go through
+`WorkspaceOrchestrator.moveWindows`, which relocates the whole group and
+retiles once; tiled windows take their frame from that retile, floaters
+are carried to the destination's display or parked with their frame
+saved when it is hidden.
 
 A rule is skipped, and the window placed normally, when its workspace
 falls outside 1–10 or when that workspace's home display is

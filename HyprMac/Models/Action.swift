@@ -52,6 +52,10 @@ enum Action: Equatable {
     case resizeDirection(Direction)
     /// Pause or resume tiling while keeping this recovery shortcut active.
     case toggleTiling
+    /// Move every open window of a pinned app onto its rule's workspace.
+    /// The manual counterpart to the placement pins apply at admission,
+    /// for windows that were already open when the rule was written.
+    case applyWindowRules
     /// Run a user-supplied command line directly (never through a shell).
     /// `label` is the display name shown in the keybind list and overlay;
     /// an empty label falls back to the program's basename.
@@ -96,6 +100,7 @@ extension Action: Codable {
         case moveToScratchpad
         case resizeDirection
         case toggleTiling
+        case applyWindowRules
         case runCommand
     }
 
@@ -160,6 +165,7 @@ extension Action: Codable {
         case .toggleScratchpad: self = .toggleScratchpad
         case .moveToScratchpad: self = .moveToScratchpad
         case .toggleTiling: self = .toggleTiling
+        case .applyWindowRules: self = .applyWindowRules
         case .runCommand:
             // command is required (same as launchApp's bundleID); a missing
             // label is tolerated and decodes empty.
@@ -232,6 +238,8 @@ extension Action: Codable {
             try p.encode(d.rawValue, forKey: ._0)
         case .toggleTiling:
             _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .toggleTiling)
+        case .applyWindowRules:
+            _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .applyWindowRules)
         case .runCommand(let label, let command):
             var p = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .runCommand)
             try p.encode(label, forKey: .label)
