@@ -57,6 +57,7 @@ singleton except `UserConfig.shared` and `MenuBarState.shared`.
 | `DimmingOverlay` | Dim mask over non-focused tiled windows; one panel per display at `.floating - 1`. |
 | `CursorManager` | Cursor warp via `CGWarpMouseCursorPosition` + reassociate dance. |
 | `AppLauncherManager` | Launch-or-focus path for the `launchApp` action. |
+| `CommandRunner` | Runs the `runCommand` action's command line directly through `Process` — tokenize, resolve the program, launch. Never a shell. |
 | `KeybindOverlayController` | HUD panel listing every active keybind (`Hypr+K`). |
 
 ## Orchestration layer (Core/Orchestration + Core/State + Core/Discovery)

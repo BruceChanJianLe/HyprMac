@@ -28,6 +28,7 @@ enum Action: Equatable {
     case toggleScratchpad
     case moveToScratchpad
     case toggleTiling
+    case runCommand(label: String, command: String)
 }
 ```
 
@@ -76,6 +77,7 @@ the value:
 { "switchDesktop": { "_0": 3 } }
 { "focusDirection": { "_0": "left" } }
 { "launchApp": { "bundleID": "com.apple.Terminal" } }
+{ "runCommand": { "label": "Screenshot", "command": "/usr/sbin/screencapture -i ~/Desktop/shot.png" } }
 { "toggleFloating": {} }
 ```
 
@@ -222,6 +224,46 @@ saved configs at load time, so users who upgrade pick up new
 keybinds without resetting their customizations. New default
 actions go in `DefaultKeybinds.swift`; the merge handles the rest.
 
+## Run a command
+
+`runCommand(label:command:)` binds a chord to a program of the
+user's choosing. The payload is two strings: `command` is the
+command line, and `label` is the name shown in the settings list and
+the `Hypr+K` overlay. An empty label falls back to `Run <program
+basename>`. `command` is required — a keybind without it is skipped
+by the per-element tolerance in `SavedConfig`. A missing `label`
+decodes as `""`.
+
+**No shell.** `CommandRunner` tokenizes the line in-process and hands
+`Process` an executable URL plus an argument array. Nothing is passed
+to `/bin/sh`, so pipes, `;`, `&&`, redirects, globs and `$VAR` are
+inert — they arrive at the program as ordinary arguments. Point the
+keybind at a script when you need any of those.
+
+**Quoting.** Whitespace (including a non-breaking space) separates
+arguments. `"..."` and `'...'` group an argument that contains spaces.
+A backslash escapes the next character outside single quotes, so a
+line cannot end in one. A leading `~` or `~/` expands to the home
+directory, only at the start of an argument and only when unquoted.
+
+**Program lookup.** A token containing `/` is used as the path; a
+relative one is taken from the home directory, which is also the
+child's working directory. A bare name is searched for in the app's own `PATH` first, then in
+`/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`,
+`/usr/sbin`, `/sbin` — the fallbacks matter because a GUI-launched
+app inherits a minimal `PATH`. The match must be a regular
+executable file.
+
+**Runtime.** The child starts asynchronously from the home directory
+with the app's environment; stdout, stderr and stdin go to
+`/dev/null`. Nothing about the command — its text, arguments, paths
+or output — is written to the log. A non-zero exit logs only the
+status number (`runCommand exited with status 3`).
+
+There is no default binding. The action ignores key autorepeat, so
+holding the chord runs the program once, and — like Launch App — it
+is unavailable while tiling is paused.
+
 ## Hex color storage
 
 `UserConfig.focusBorderColorHex` and `floatingBorderColorHex` are
@@ -245,6 +287,12 @@ Restart HyprMac after editing. Example — bind Hypr+B to launch Safari:
 
 ```json
 { "keyCode": 11, "modifiers": { "rawValue": 1 }, "action": { "launchApp": { "bundleID": "com.apple.Safari" } } }
+```
+
+Example — bind Hypr+5 to an interactive screenshot:
+
+```json
+{ "keyCode": 23, "modifiers": { "rawValue": 1 }, "action": { "runCommand": { "label": "Screenshot", "command": "/usr/sbin/screencapture -i ~/Desktop/shot.png" } } }
 ```
 
 **Modifier rawValues** (bitwise OR to combine — see

@@ -79,13 +79,25 @@ class HotkeyManager {
             || action == .showWorkspaceOverview
     }
 
+    /// Actions that fire once per physical press. Holding the chord down
+    /// must not repeat them — a repeated pause toggle flaps, and a
+    /// repeated command spawns a process per autorepeat tick.
+    static func ignoresAutorepeat(_ action: Action) -> Bool {
+        switch action {
+        case .toggleTiling, .moveToNextEmptyWorkspace, .runCommand:
+            return true
+        default:
+            return false
+        }
+    }
+
     static func shouldDispatchAction(
         _ action: Action,
         tilingEnabled: Bool,
         isRepeat: Bool
     ) -> Bool {
         actionIsAvailable(action, tilingEnabled: tilingEnabled)
-            && !((action == .toggleTiling || action == .moveToNextEmptyWorkspace) && isRepeat)
+            && !(ignoresAutorepeat(action) && isRepeat)
     }
 
     /// Switch the physical key acting as the Hypr modifier. Resets any
@@ -291,7 +303,10 @@ class HotkeyManager {
                 action, tilingEnabled: tilingEnabled, isRepeat: isRepeat) else {
                 return nil
             }
-            hyprLog(.debug, .lifecycle, "matched: \(action)")
+            // case tag only — interpolating the Action would put payload
+            // text (a runCommand command line) in the file log.
+            hyprLog(.debug, .lifecycle,
+                    "matched: \(ActionDispatcher.discriminator(for: action))")
             DispatchQueue.main.async { [weak self] in
                 self?.onAction?(action)
             }

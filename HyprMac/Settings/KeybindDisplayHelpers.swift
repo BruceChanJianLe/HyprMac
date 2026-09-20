@@ -76,6 +76,8 @@ extension Keybind {
             return "arrow.up.left.and.arrow.down.right"
         case .toggleTiling:
             return "pause.circle"
+        case .runCommand:
+            return "terminal"
         }
     }
 
@@ -110,6 +112,18 @@ extension Keybind {
         case .moveToScratchpad:             return "Send to Scratchpad"
         case .resizeDirection(let d):       return "Resize \(d.rawValue.capitalized)"
         case .toggleTiling:                 return "Pause / Resume Tiling"
+        case .runCommand(let label, let cmd): return Keybind.commandDescription(label: label, command: cmd)
         }
+    }
+
+    /// Row title for a `runCommand` bind: the user's label when they gave
+    /// one, else the program's basename.
+    static func commandDescription(label: String, command: String) -> String {
+        let trimmed = label.trimmingCharacters(in: .whitespaces)
+        if !trimmed.isEmpty { return trimmed }
+        guard let program = (try? CommandLineParser.tokenize(command))?.first else {
+            return "Run command"
+        }
+        return "Run \((program as NSString).lastPathComponent)"
     }
 }

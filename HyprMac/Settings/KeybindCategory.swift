@@ -23,7 +23,7 @@ enum KeybindCategory: String, CaseIterable {
         case .switchWorkspace, .moveToWorkspace, .moveWindowToMonitor, .cycleWorkspace,
              .moveToNextEmptyWorkspace:
             return .workspaces
-        case .launchApp:
+        case .launchApp, .runCommand:
             return .apps
         case .showKeybinds, .showWorkspaceOverview, .toggleTiling:
             return .system

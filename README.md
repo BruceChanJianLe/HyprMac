@@ -80,6 +80,8 @@ Toggle Float uses **Hypr+T**, without Shift. On startup and config reload, an ex
 
 Cycle Floating now uses **Hypr+Shift+T**. After the Toggle Float migration, an unambiguous old Hypr+F Cycle Floating binding moves to Shift+T only if that chord is free and the new dedicated-workspace action has not already been configured. Hypr+F then receives the new action. Custom or conflicting bindings stay unchanged; add the new action in Settings when its default chord is occupied. Hypr+0 and Hypr+Shift+0 are added only when their actions are missing and their chords are free. Workspace 10 is always stored as 10; internal workspace 0 remains the scratchpad.
 
+Settings → Keys → Add → Command… binds a chord to any program or script. It runs directly, not through a shell, so pipes and redirects are passed along as plain arguments — put those in a script and point the keybind at it.
+
 The physical Hypr key is configurable in Settings → General. Options include Caps Lock, Tab, backtick, backslash, F13-F20, and left/right variants of Shift, Control, Option, and Command.
 
 ### Defaults

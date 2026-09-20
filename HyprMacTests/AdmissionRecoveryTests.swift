@@ -75,7 +75,8 @@ final class AdmissionRecoveryTests: XCTestCase {
 
     func testFocusAndOverlayActionsKeepPendingRecovery() {
         for action: Action in [.focusDirection(.left), .focusFloating, .focusMenuBar,
-                               .showKeybinds, .launchApp(bundleID: "com.apple.Safari")] {
+                               .showKeybinds, .launchApp(bundleID: "com.apple.Safari"),
+                               .runCommand(label: "x", command: "/usr/bin/true")] {
             XCTAssertFalse(WindowManager.cancelsPendingRecovery(action), "\(action)")
         }
     }

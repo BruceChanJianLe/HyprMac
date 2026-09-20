@@ -2021,7 +2021,8 @@ class WindowManager {
     static func cancelsPendingRecovery(_ action: Action) -> Bool {
         switch action {
         case .switchWorkspace, .cycleWorkspace, .focusDirection, .focusFloating,
-             .focusMenuBar, .showKeybinds, .showWorkspaceOverview, .launchApp:
+             .focusMenuBar, .showKeybinds, .showWorkspaceOverview, .launchApp,
+             .runCommand:
             return false
         default: return true
         }

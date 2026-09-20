@@ -52,6 +52,10 @@ enum Action: Equatable {
     case resizeDirection(Direction)
     /// Pause or resume tiling while keeping this recovery shortcut active.
     case toggleTiling
+    /// Run a user-supplied command line directly (never through a shell).
+    /// `label` is the display name shown in the keybind list and overlay;
+    /// an empty label falls back to the program's basename.
+    case runCommand(label: String, command: String)
 }
 
 // MARK: - Codable
@@ -92,6 +96,7 @@ extension Action: Codable {
         case moveToScratchpad
         case resizeDirection
         case toggleTiling
+        case runCommand
     }
 
     /// Accepted-but-not-emitted aliases. Lets a hand-edited config
@@ -106,6 +111,8 @@ extension Action: Codable {
     private enum PayloadKey: String, CodingKey {
         case _0
         case bundleID
+        case label
+        case command
     }
 
     init(from decoder: Decoder) throws {
@@ -153,6 +160,12 @@ extension Action: Codable {
         case .toggleScratchpad: self = .toggleScratchpad
         case .moveToScratchpad: self = .moveToScratchpad
         case .toggleTiling: self = .toggleTiling
+        case .runCommand:
+            // command is required (same as launchApp's bundleID); a missing
+            // label is tolerated and decodes empty.
+            self = .runCommand(
+                label: try inner.decodeIfPresent(String.self, forKey: .label) ?? "",
+                command: try inner.decode(String.self, forKey: .command))
         case .resizeDirection:
             self = .resizeDirection(try Self.decodeDirection(inner, field: "resizeDirection"))
         }
@@ -219,6 +232,10 @@ extension Action: Codable {
             try p.encode(d.rawValue, forKey: ._0)
         case .toggleTiling:
             _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .toggleTiling)
+        case .runCommand(let label, let command):
+            var p = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .runCommand)
+            try p.encode(label, forKey: .label)
+            try p.encode(command, forKey: .command)
         }
     }
 }

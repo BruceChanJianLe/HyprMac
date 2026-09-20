@@ -68,6 +68,9 @@ final class ActionDispatcher {
     private let workspaceOrchestrator: WorkspaceOrchestrator
     private let floatingController: FloatingWindowController
     private let config: UserConfig
+    // owned outright: stateless, and keeping it off the init keeps every
+    // existing construction site untouched.
+    private let commandRunner = CommandRunner()
 
     // closure handles for WM-side helpers
     var currentFocusedWindow: () -> HyprWindow? = { nil }
@@ -239,6 +242,8 @@ final class ActionDispatcher {
             resizeInDirection(dir)
         case .toggleTiling:
             break // handled by WindowManager so it remains available while paused
+        case .runCommand(_, let command):
+            commandRunner.run(command: command)
         }
 
         // let the Tour try-it hint (and any future observers) react. cheap —
@@ -248,8 +253,10 @@ final class ActionDispatcher {
             userInfo: ["action": Self.discriminator(for: action)])
     }
 
-    /// Stable string tag for an `Action` case, used as notification payload.
-    private static func discriminator(for action: Action) -> String {
+    /// Stable string tag for an `Action` case. Used as the notification
+    /// payload and as the log-safe name for an action — it never carries
+    /// an associated value, so free-text payloads cannot leak into a log.
+    static func discriminator(for action: Action) -> String {
         switch action {
         case .focusDirection:      return "focusDirection"
         case .swapDirection:       return "swapDirection"
@@ -270,6 +277,7 @@ final class ActionDispatcher {
         case .moveToScratchpad:    return "moveToScratchpad"
         case .resizeDirection:     return "resizeDirection"
         case .toggleTiling:        return "toggleTiling"
+        case .runCommand:          return "runCommand"
         }
     }
 

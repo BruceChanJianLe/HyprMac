@@ -13,6 +13,8 @@ final class KeybindEditorViewModel: ObservableObject {
     @Published var directionParam: Direction = .left
     @Published var workspaceParam = 1
     @Published var bundleIDParam = "com.apple.Terminal"
+    @Published var commandLabelParam = ""
+    @Published var commandParam = ""
 
     @Published var recordedKeyCode: UInt16 = 0
     @Published var useHypr = true
@@ -41,9 +43,17 @@ final class KeybindEditorViewModel: ObservableObject {
         case moveToScratchpad       = "Send to Scratchpad"
         case resizeDirection        = "Resize Direction"
         case toggleTiling           = "Pause / Resume Tiling"
+        case runCommand             = "Run a command"
     }
 
-    var canSave: Bool { recordedKeyCode != 0 }
+    /// nil unless the command action is selected and its line is unusable
+    var commandValidationError: CommandRunner.ValidationError? {
+        selectedAction == .runCommand ? CommandRunner.validate(commandParam) : nil
+    }
+
+    var commandValidationMessage: String? { commandValidationError?.message }
+
+    var canSave: Bool { recordedKeyCode != 0 && commandValidationError == nil }
 
     func load(_ bind: Keybind?) {
         guard let bind else { return }
@@ -73,6 +83,10 @@ final class KeybindEditorViewModel: ObservableObject {
         case .moveToScratchpad:              selectedAction = .moveToScratchpad
         case .resizeDirection(let d):        selectedAction = .resizeDirection;       directionParam = d
         case .toggleTiling:                  selectedAction = .toggleTiling
+        case .runCommand(let label, let cmd):
+            selectedAction = .runCommand
+            commandLabelParam = label
+            commandParam = cmd
         }
     }
 
@@ -102,6 +116,10 @@ final class KeybindEditorViewModel: ObservableObject {
         case .moveToScratchpad:       action = .moveToScratchpad
         case .resizeDirection:        action = .resizeDirection(directionParam)
         case .toggleTiling:           action = .toggleTiling
+        case .runCommand:
+            action = .runCommand(
+                label: commandLabelParam.trimmingCharacters(in: .whitespaces),
+                command: commandParam.trimmingCharacters(in: .whitespaces))
         }
         return Keybind(keyCode: recordedKeyCode, modifiers: mods, action: action)
     }

@@ -188,6 +188,30 @@ final class DefaultKeybindsTests: XCTestCase {
             .moveToNextEmptyWorkspace, tilingEnabled: false, isRepeat: false))
     }
 
+    func testRunCommandIgnoresKeyRepeatAndFollowsTilingAvailability() {
+        let run = Action.runCommand(label: "x", command: "/usr/bin/true")
+        XCTAssertFalse(HotkeyManager.shouldDispatchAction(
+            run, tilingEnabled: true, isRepeat: true))
+        XCTAssertTrue(HotkeyManager.shouldDispatchAction(
+            run, tilingEnabled: true, isRepeat: false))
+        // same rule as launchApp: paused tiling parks it too
+        XCTAssertFalse(HotkeyManager.actionIsAvailable(run, tilingEnabled: false))
+        XCTAssertTrue(HotkeyManager.ignoresAutorepeat(run))
+        XCTAssertFalse(HotkeyManager.ignoresAutorepeat(.closeWindow))
+    }
+
+    func testRunCommandCaseTagCarriesNoCommandText() {
+        let tag = ActionDispatcher.discriminator(
+            for: .runCommand(label: "Secret", command: "/usr/bin/true --token abc"))
+        XCTAssertEqual(tag, "runCommand")
+        XCTAssertFalse(tag.contains("abc"))
+        XCTAssertFalse(tag.contains("Secret"))
+    }
+
+    func testNoDefaultKeybindRunsACommand() {
+        XCTAssertFalse(Keybind.defaults.contains { if case .runCommand = $0.action { return true }; return false })
+    }
+
     func testPausedEventPathPassesOrdinaryChordAndDispatchesPauseAndHelp() {
         let manager = HotkeyManager()
         manager.updateKeybinds(Keybind.defaults)

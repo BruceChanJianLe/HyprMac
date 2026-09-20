@@ -65,6 +65,57 @@ final class KeybindDecoderToleranceTests: XCTestCase {
         XCTAssertEqual(kb.action, .toggleSplit)
     }
 
+    func testRunCommandWireFormatDecodes() throws {
+        let json = #"{"action":{"runCommand":{"label":"Screenshot","command":"/usr/sbin/screencapture -i ~/Desktop/shot.png"}},"keyCode":1,"modifiers":1}"#
+        let kb = try JSONDecoder().decode(Keybind.self, from: Data(json.utf8))
+        XCTAssertEqual(kb.action, .runCommand(label: "Screenshot",
+                                              command: "/usr/sbin/screencapture -i ~/Desktop/shot.png"))
+        XCTAssertEqual(kb.keyCode, 1)
+    }
+
+    func testRunCommandMissingLabelDecodesAsEmpty() throws {
+        // a hand-edited config may omit the label; that is not an error
+        let json = #"{"action":{"runCommand":{"command":"/usr/bin/true"}},"keyCode":1,"modifiers":1}"#
+        let kb = try JSONDecoder().decode(Keybind.self, from: Data(json.utf8))
+        XCTAssertEqual(kb.action, .runCommand(label: "", command: "/usr/bin/true"))
+    }
+
+    func testRunCommandMissingCommandThrows() {
+        // no command means no action — same treatment launchApp gives a
+        // missing bundleID
+        let json = #"{"action":{"runCommand":{"label":"Screenshot"}},"keyCode":1,"modifiers":1}"#
+        XCTAssertThrowsError(try JSONDecoder().decode(Keybind.self, from: Data(json.utf8)))
+    }
+
+    func testRunCommandEncodesLabelAndCommandKeys() throws {
+        let kb = Keybind(keyCode: 1, modifiers: .hypr,
+                         action: .runCommand(label: "Screenshot", command: "/usr/bin/true -x"))
+        let s = String(data: try JSONEncoder().encode(kb), encoding: .utf8)!
+        XCTAssertTrue(s.contains(#""runCommand":{"#), "expected runCommand key in: \(s)")
+        XCTAssertTrue(s.contains(#""label":"Screenshot""#), "expected label key in: \(s)")
+        XCTAssertTrue(s.contains(#""command":"\/usr\/bin\/true -x""#)
+                      || s.contains(#""command":"/usr/bin/true -x""#),
+                      "expected command key in: \(s)")
+    }
+
+    func testRunCommandRoundTripsThroughSavedConfig() throws {
+        let kb = Keybind(keyCode: 1, modifiers: [.hypr, .shift],
+                         action: .runCommand(label: "", command: #"/usr/bin/true "two words""#))
+        let json = """
+        {"keybinds":[\(String(data: try JSONEncoder().encode(kb), encoding: .utf8)!)],
+         "gapSize":8,"outerPadding":8,"enabled":true}
+        """
+        let saved = try JSONDecoder().decode(SavedConfig.self, from: Data(json.utf8))
+        XCTAssertEqual(saved.keybinds.count, 1)
+        // re-encode the whole config and read it back — the shape has to be
+        // stable across a save/load cycle, not just one decode
+        let reloaded = try JSONDecoder().decode(
+            SavedConfig.self, from: try JSONEncoder().encode(saved))
+        XCTAssertEqual(reloaded.keybinds.first?.action, kb.action)
+        XCTAssertEqual(reloaded.keybinds.first?.keyCode, kb.keyCode)
+        XCTAssertEqual(reloaded.keybinds.first?.modifiers, kb.modifiers)
+    }
+
     func testLaunchAppWireFormatDecodes() throws {
         let json = #"{"action":{"launchApp":{"bundleID":"com.apple.Safari"}},"keyCode":11,"modifiers":1}"#
         let kb = try JSONDecoder().decode(Keybind.self, from: Data(json.utf8))
