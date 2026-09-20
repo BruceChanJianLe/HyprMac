@@ -239,7 +239,9 @@ struct SavedConfig: Codable {
     let windowCornerRadius: CGFloat?
     let scratchpadTileByDefault: Bool?
     let scratchpadRegionInset: CGFloat?
-    let windowRules: [WindowRule]?
+    // defaulted like overlayAppearance and focusBracketLength above, so
+    // adding the field leaves existing memberwise call sites compiling
+    var windowRules: [WindowRule]? = nil
 }
 
 // MARK: - per-keybind decode tolerance
