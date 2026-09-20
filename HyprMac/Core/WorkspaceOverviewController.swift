@@ -97,6 +97,12 @@ enum WorkspaceOverviewPresentation {
         let scratchpad: CGFloat = scratchpadCount > 0 ? 62 : 0
         return min(maximum, max(320, grid + headerAndInsets + scratchpad))
     }
+
+    /// Everything the workspace-switch HUD says. Caption and number only —
+    /// the monitor name belongs to the overview, not to the switch flash.
+    static func switchHUDText(workspace: Int) -> (caption: String, number: String) {
+        ("WORKSPACE", "\(workspace)")
+    }
 }
 
 struct WorkspaceHUDGeneration {
@@ -137,7 +143,7 @@ final class WorkspaceOverviewController {
     func showSwitchHUD(workspace: Int, screen: NSScreen) {
         let generation = hudGeneration.next()
         hudPanel?.close()
-        let view = WorkspaceSwitchHUD(workspace: workspace, monitor: screen.localizedName)
+        let view = WorkspaceSwitchHUD(workspace: workspace)
         let hosting = OverviewHostingView(rootView: view)
         let size = hosting.fittingSize
         let frame = NSRect(x: screen.visibleFrame.midX - size.width / 2,
@@ -253,15 +259,15 @@ private struct WorkspaceSwitchHUD: View {
     @Environment(\.colorScheme) private var colorScheme
     private var palette: OverlayPalette { OverlayPalette(scheme: colorScheme) }
     let workspace: Int
-    let monitor: String
+    private var text: (caption: String, number: String) {
+        WorkspaceOverviewPresentation.switchHUDText(workspace: workspace)
+    }
     var body: some View {
         VStack(spacing: 5) {
-            Text("WORKSPACE").font(.system(size: 10, weight: .semibold, design: .monospaced))
+            Text(text.caption).font(.system(size: 10, weight: .semibold, design: .monospaced))
                 .tracking(2).foregroundStyle(Color.hyprMagenta)
-            Text("\(workspace)").font(.system(size: 40, weight: .bold, design: .rounded))
+            Text(text.number).font(.system(size: 40, weight: .bold, design: .rounded))
                 .foregroundStyle(.primary)
-            Text(monitor).font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.secondary).lineLimit(1)
         }
         .padding(.horizontal, 26).padding(.vertical, 15)
         .background(RoundedRectangle(cornerRadius: 15).fill(palette.background))
