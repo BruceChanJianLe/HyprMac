@@ -306,8 +306,8 @@ final class ActionDispatcher {
     /// Assign a newly-discovered window to a workspace: its app's window
     /// rule when one claims it, otherwise where it physically opened.
     ///
-    /// Without a rule, prefers the window's own screen — that is where
-    /// macOS placed it — and falls back to the cursor's screen only when
+    /// Without a rule, prefers the window's own screen - that is where
+    /// macOS placed it - and falls back to the cursor's screen only when
     /// the window has no usable frame yet. Always overwrites any prior assignment: a
     /// recycled `CGWindowID` could carry a leftover entry pointing at a
     /// workspace the user has not touched in days.

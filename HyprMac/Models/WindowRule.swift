@@ -5,7 +5,7 @@
 import Foundation
 
 /// One app-to-workspace pin. Keyed by bundle id, so an app holds at most
-/// one rule — `id` is the bundle id for exactly that reason.
+/// one rule - `id` is the bundle id for exactly that reason.
 ///
 /// Rules apply at admission time only (see
 /// `ActionDispatcher.pinnedWorkspace`). Windows already placed are left

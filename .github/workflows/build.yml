@@ -64,18 +64,11 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      - name: Generate Xcode project
-        run: xcodegen generate
-
+      # The repo's own headless path, not a hand-rolled `xcodebuild test`:
+      # it builds the sources as an isolated dynamic library (no app bundle,
+      # no Sparkle, no signing), then runs the bundle through `xcrun xctest`
+      # with HYPRMAC_HEADLESS_TESTS=1 - which is how the display-dependent
+      # cases know to skip themselves where there is no GUI session.
+      # It generates its own project, so no `xcodegen generate` step here.
       - name: Test
-        run: |
-          xcodebuild \
-            -project HyprMac.xcodeproj \
-            -scheme HyprMac \
-            -configuration Debug \
-            -derivedDataPath build-test \
-            -destination 'platform=macOS' \
-            CODE_SIGN_IDENTITY="-" \
-            CODE_SIGN_STYLE=Manual \
-            DEVELOPMENT_TEAM="" \
-            test
+        run: scripts/test-isolated.sh --debug-variant

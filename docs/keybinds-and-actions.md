@@ -339,7 +339,7 @@ or by hand:
 Rules are keyed by bundle id and hold one workspace each; a duplicate
 bundle id in a hand-edited file resolves to the first entry. The pin is
 consulted once, in `ActionDispatcher.pinnedWorkspace`, when a window is
-admitted — it is not a tether, so a window you move afterwards stays
+admitted - it is not a tether, so a window you move afterwards stays
 where you moved it.
 
 A rule is skipped, and the window placed normally, when its workspace

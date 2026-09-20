@@ -42,7 +42,7 @@ final class WindowRuleTests: XCTestCase {
                 isEligible: everyWorkspaceEligible))
     }
 
-    // discovery cannot always name the owning app — a window whose bundle id
+    // discovery cannot always name the owning app - a window whose bundle id
     // is still nil must place normally rather than matching some rule by luck
     func testUnknownBundleIDPinsNothing() {
         XCTAssertNil(
@@ -93,7 +93,7 @@ final class WindowRuleTests: XCTestCase {
     }
 
     // the settings UI keeps one rule per app, but a hand-edited file can
-    // hold two. first wins — deterministically, not by dictionary order.
+    // hold two. first wins - deterministically, not by dictionary order.
     func testDuplicateBundleIDTakesTheFirstRule() {
         XCTAssertEqual(
             ActionDispatcher.pinnedWorkspace(
