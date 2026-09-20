@@ -152,16 +152,16 @@ final class WorkspaceOverviewController {
         let panel = makePanel(frame: frame, canKey: false)
         hosting.frame = NSRect(origin: .zero, size: size)
         panel.contentView = hosting
-        let animate = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        panel.alphaValue = animate ? 0 : 1
+        // the caller is about to block the main thread in AX work, so the
+        // panel has to be on screen before this returns. no fade-in: an
+        // animation needs run-loop turns we are not going to get. draw the
+        // layout, then push the frame to the window server by hand.
+        hosting.layoutSubtreeIfNeeded()
+        panel.alphaValue = 1
         panel.orderFrontRegardless()
         hudPanel = panel
-        if animate {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.12
-                panel.animator().alphaValue = 1
-            }
-        }
+        panel.displayIfNeeded()
+        CATransaction.flush()
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self, weak panel] in
             guard let self, self.hudGeneration.shouldHide(generation) else { return }

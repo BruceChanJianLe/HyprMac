@@ -45,6 +45,14 @@ final class WorkspaceOrchestrator {
     /// no desktop to read them off.
     var allWindows: () -> [HyprWindow] = { [] }
     var animatedRetile: (_ prepare: (() -> Void)?, _ completion: (() -> Void)?) -> Void = { _, _ in }
+    /// Fired as soon as the destination workspace and its screen are known,
+    /// before any AX read or write. The switch HUD hangs off this so it can
+    /// paint while the main thread is still busy hiding and retiling — off
+    /// `onDidSwitch` the panel could not reach the screen for most of a
+    /// second. Same (workspace, screen) pair `onDidSwitch` will report.
+    var onWillSwitch: (_ workspace: Int, _ screen: NSScreen) -> Void = { _, _ in }
+    /// Fired once the switch has landed, with the windows moved and focus
+    /// settled. State that has to reflect the finished switch lives here.
     var onDidSwitch: (_ workspace: Int, _ screen: NSScreen) -> Void = { _, _ in }
     var excludedBundleIDs: () -> Set<String> = { [] }
     var isScratchpadWindow: (CGWindowID) -> Bool = { _ in false }
@@ -254,6 +262,10 @@ final class WorkspaceOrchestrator {
         workspaceManager.moveWindow(focused.windowID, toWorkspace: destination)
         _ = workspaceManager.switchWorkspace(destination, cursorScreen: physicalScreen)
 
+        // earliest point the switch is certain here — every guard above can
+        // still reject the move, and a rejected move must not flash the HUD.
+        onWillSwitch(destination, physicalScreen)
+
         focusTransferredWindow(focused)
         warpToWindow(focused)
         focusController.recordFocus(focused.windowID, reason: "moveToNextEmptyWorkspace")
@@ -297,6 +309,18 @@ final class WorkspaceOrchestrator {
         suppressions.suppress("mouse-focus", for: 0.15)
 
         let currentScreen = screenUnderCursor()
+
+        // announce the switch before the AX sweep below. homeScreenForWorkspace
+        // is a pure function of the workspace and the live screen layout, so
+        // the destination screen is already settled here, and it is the same
+        // screen every onDidSwitch below reports: the home screen when there
+        // is one, the cursor's screen otherwise (bad workspace number, or no
+        // enabled screens at all).
+        //
+        // this fires on the already-visible path too. pressing Hypr+3 while 3
+        // is up is a no-op for windows but still flashes the HUD, the way it
+        // always has — the flash is the answer to "which workspace am I on".
+        onWillSwitch(number, workspaceManager.homeScreenForWorkspace(number) ?? currentScreen)
 
         let allWindows = accessibility.getAllWindows()
         let result = workspaceManager.switchWorkspace(number, cursorScreen: currentScreen)
