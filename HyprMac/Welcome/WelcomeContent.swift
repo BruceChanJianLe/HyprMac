@@ -26,25 +26,9 @@ enum WhatsNewFeatures {
     // update this before each release — see CLAUDE.md instructions
     static let current: [WhatsNewFeature] = [
         WhatsNewFeature(
-            icon: "rectangle.split.2x1",
-            title: "Ten Workspaces at a Glance",
-            description: "Workspace 10 now has its own 0-key shortcut, and the overview presents all ten workspaces in a clear 2×5 grid."
-        ),
-        WhatsNewFeature(
-            icon: "slider.horizontal.3",
-            title: "Settings, Rebuilt",
-            description: "The redesigned Settings app makes displays, workspaces, appearance, apps, and keybinds easier to understand and customize. Window corners now support a suggested radius or your own override."
-        ),
-        WhatsNewFeature(
-            icon: "keyboard",
-            title: "A Dedicated Workspace Shortcut",
-            description: "HYPR+F moves the focused window to the next empty workspace, so a new task can get a dedicated space immediately."
-        ),
-        WhatsNewFeature(
-            icon: "checkmark.shield",
-            title: "Safer Tiling and Recovery",
-            description: "Frame changes are verified before a layout is committed. HyprMac can recover portrait startup layouts by choosing a fitting split direction, and it makes one bounded retry after a timed-out Accessibility call, only after restoring the original frames.",
-            tint: .magenta
+            icon: "terminal",
+            title: "Run a Command",
+            description: "Bind a shortcut to your own program or script. Settings → Keys → Add → Command… takes a label for the Hypr+K overlay and a command line, which runs directly rather than through a shell."
         ),
     ]
 }
