@@ -99,7 +99,7 @@ The physical Hypr key is configurable in Settings → General. Options include C
 | `⇪ + ⇧ + 1–9` | Move window to workspace N |
 | `⇪ + 0` | Switch to workspace 10 |
 | `⇪ + ⇧ + 0` | Move window to workspace 10 |
-| `⇪ + ⌃ + ←/→` | Move window to adjacent monitor |
+| `⇪ + ⌃ + ←/→/↑/↓` | Move window to the adjacent monitor in that direction |
 | `⇪ + ⌃ + ⇧ + ←/→/↑/↓` | Resize focused window in direction |
 | `⇪ + ⇥` / `⇪ + ⇧ + ⇥` | Cycle occupied workspaces on current monitor |
 | `⇪ + W` | Close window |
@@ -139,7 +139,7 @@ HyprMac manages 10 workspaces entirely in userspace, bypassing macOS Spaces.
 - Every workspace is **statically anchored** to a monitor: `(N − 1) mod monitorCount`, left to right. With 3 monitors, workspaces 1/4/7/10 live on the left, 2/5/8 in the middle, 3/6/9 on the right
 - Switching to workspace N always lands on its home monitor — workspace identity never drifts between monitors
 - Switching to a workspace that's already visible just focuses its monitor
-- `⇪ + ⌃ + ←/→` throws the focused window to the adjacent monitor's visible workspace
+- `⇪ + ⌃ + ←/→/↑/↓` throws the focused window to the visible workspace of the nearest monitor in that direction, so stacked displays work as well as side-by-side ones
 - Inactive windows are hidden off-screen (a macOS constraint — one pixel remains visible in a corner)
 - Monitor connects/disconnects preserve workspace assignments; layouts migrate to each workspace's current home
 

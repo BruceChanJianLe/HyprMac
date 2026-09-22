@@ -36,12 +36,16 @@ enum Action: Equatable {
 `Direction` is `enum Direction: String, Codable { left, right, up, down }`.
 
 `cycleWorkspace(Int)` takes `+1` (next occupied workspace on the
-current monitor) or `-1` (previous). `moveWindowToMonitor` accepts
-the full four-way `Direction` for symmetry, but the orchestrator
-only honors `.left` / `.right`. It moves the focused window to the
-adjacent monitor's visible workspace — the case was repurposed from
-the old workspace-to-monitor move, which static anchoring made a
-permanent no-op; its wire key is unchanged (see below).
+current monitor) or `-1` (previous). `moveWindowToMonitor` honors all
+four directions: it moves the focused window to the visible workspace of
+the nearest enabled monitor that lies wholly in that direction, left and
+right for side-by-side arrangements, up and down for stacked ones. The
+pick is `WorkspaceOrchestrator.nearestScreenIndex`, a pure function over
+`NSScreen.frame` rectangles: nearest along the axis wins, a tie goes to
+the monitor sharing the most extent with the source on the cross axis.
+Nothing that way beeps and flashes. Defaults are Hypr+Ctrl+arrow. The
+case was repurposed from the old workspace-to-monitor move, which static
+anchoring made a permanent no-op; its wire key is unchanged (see below).
 
 ## Dedicated workspace and workspace 10
 

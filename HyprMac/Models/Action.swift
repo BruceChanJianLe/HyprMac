@@ -21,8 +21,9 @@ enum Action: Equatable {
     case swapDirection(Direction)
     case switchWorkspace(Int)
     case moveToWorkspace(Int)
-    /// Move the focused window to the adjacent monitor's visible
-    /// workspace. Only `.left` / `.right` are meaningful. Encodes
+    /// Move the focused window to the nearest monitor in that direction,
+    /// onto its visible workspace. Left and right serve side-by-side
+    /// arrangements, up and down stacked ones. Encodes
     /// under the legacy `"moveWorkspaceToMonitor"` wire key — the
     /// action was repurposed when static workspace anchoring made
     /// workspace-to-monitor moves a permanent no-op.

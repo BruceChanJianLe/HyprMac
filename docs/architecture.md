@@ -204,8 +204,9 @@ Every workspace is **statically anchored** to a home screen:
 `enabledScreens[(N - 1) % enabledScreens.count]`, left to right.
 Switching to workspace N always lands on its home; workspaces cannot
 move between monitors, so workspace identity never drifts. The
-`moveWindowToMonitor` action (`Hypr+Ctrl+←/→`) moves the focused
-*window* to the adjacent monitor's visible workspace instead.
+`moveWindowToMonitor` action (`Hypr+Ctrl+arrow`) moves the focused
+*window* to the visible workspace of the nearest monitor in that
+direction instead.
 
 `WorkspaceOrchestrator.moveToNextEmptyWorkspace` implements Hypr+F. It resolves
 the actual AX-focused standard window and its physical display, then asks
