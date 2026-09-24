@@ -249,9 +249,12 @@ class WindowManager {
         self.workspaceOrchestrator.animatedRetile = { [weak self] prepare, completion in
             self?.animatedRetile(prepare: prepare, completion: completion)
         }
-        self.workspaceOrchestrator.onDidSwitch = { [weak self] workspace, screen in
-            self?.updateMenuBarState()
+        // the HUD goes up before the hide/retile/focus pass, not after it
+        self.workspaceOrchestrator.onWillSwitch = { [weak self] workspace, screen in
             self?.workspaceOverview.showSwitchHUD(workspace: workspace, screen: screen)
+        }
+        self.workspaceOrchestrator.onDidSwitch = { [weak self] _, _ in
+            self?.updateMenuBarState()
         }
         self.workspaceOrchestrator.excludedBundleIDs = { [weak self] in
             Set(self?.config.excludedBundleIDs ?? [])

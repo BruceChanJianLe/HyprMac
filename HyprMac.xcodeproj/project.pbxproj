@@ -35,6 +35,7 @@
 		19AA6221B0B55BFAC6065DE0 /* CommandRunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D180FDED47AD57DF35C3858C /* CommandRunnerTests.swift */; };
 		1AB9B2043A23A0FB662ECB30 /* RuntimeVariant.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE740E91A8A260E9F899EB51 /* RuntimeVariant.swift */; };
 		1B637997E721C7D6BF0FC307 /* DirectionPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 301C7EDAAD234FC3DDCBAADC /* DirectionPicker.swift */; };
+		1C09D1112018B2B6DDA753F3 /* WorkspaceSwitchAnnouncementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3DB9C9425DBA2D12D58CAF7 /* WorkspaceSwitchAnnouncementTests.swift */; };
 		1CE8BFDB73C690ADABECD3C3 /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23220FDBA7BCF857E8EBC0F0 /* MenuBarView.swift */; };
 		1D5547D2D6368BB0D2355F0E /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61E1DEE768A398E963AAB1CA /* DesignSystem.swift */; };
 		1DEA79CA749DC72D381082D3 /* LayoutEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9927DB9594D281BB5179CA3 /* LayoutEngine.swift */; };
@@ -415,6 +416,7 @@
 		F24369A83C38C9C3757A23FB /* KeyRemapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyRemapper.swift; sourceTree = "<group>"; };
 		F356D39971D5A80B38494D15 /* DwindleLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DwindleLayout.swift; sourceTree = "<group>"; };
 		F397ECC53628484AA2EBD5A2 /* KeyRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyRecorderView.swift; sourceTree = "<group>"; };
+		F3DB9C9425DBA2D12D58CAF7 /* WorkspaceSwitchAnnouncementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSwitchAnnouncementTests.swift; sourceTree = "<group>"; };
 		F441CA0A6C21E8CB97A3EB0D /* AXNotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AXNotificationService.swift; sourceTree = "<group>"; };
 		F548FEECDD35DFF1120E2553 /* ConfigMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigMigrationTests.swift; sourceTree = "<group>"; };
 		F7D9E5B48B44818B3F7D68A7 /* MenuBarPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarPresentationTests.swift; sourceTree = "<group>"; };
@@ -683,6 +685,7 @@
 				901F153AA3906FE161498E58 /* WindowStateCacheTests.swift */,
 				10CDCBC69C5DFDC3E907A02B /* WorkspaceOrchestratorMoveTests.swift */,
 				6E6472ACE23C8EB1DC35E7F2 /* WorkspaceOverviewPresentationTests.swift */,
+				F3DB9C9425DBA2D12D58CAF7 /* WorkspaceSwitchAnnouncementTests.swift */,
 			);
 			path = HyprMacTests;
 			sourceTree = "<group>";
@@ -1126,6 +1129,7 @@
 				EA8FC0F77CB146BAD8B35CBE /* WindowStateCacheTests.swift in Sources */,
 				7FB5DB945BA887353289ACB1 /* WorkspaceOrchestratorMoveTests.swift in Sources */,
 				A1945FBB6F6C5307CC809EA4 /* WorkspaceOverviewPresentationTests.swift in Sources */,
+				1C09D1112018B2B6DDA753F3 /* WorkspaceSwitchAnnouncementTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1235,7 +1239,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.14.1;
+				MARKETING_VERSION = 0.14.2;
 				OTHER_LDFLAGS = (
 					"-F/System/Library/PrivateFrameworks",
 					"-framework",
@@ -1342,7 +1346,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 86;
+				CURRENT_PROJECT_VERSION = 87;
 				DEVELOPMENT_TEAM = "$(DEVELOPMENT_TEAM)";
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = HyprMac/Info.plist;
@@ -1350,7 +1354,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.14.1;
+				MARKETING_VERSION = 0.14.2;
 				OTHER_LDFLAGS = (
 					"-F/System/Library/PrivateFrameworks",
 					"-framework",
@@ -1378,7 +1382,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.14.1;
+				MARKETING_VERSION = 0.14.2;
 				OTHER_LDFLAGS = (
 					"-F/System/Library/PrivateFrameworks",
 					"-framework",
@@ -1400,7 +1404,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 86;
+				CURRENT_PROJECT_VERSION = 87;
 				DEVELOPMENT_TEAM = "$(DEVELOPMENT_TEAM)";
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = HyprMac/Info.plist;
@@ -1408,7 +1412,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.14.1;
+				MARKETING_VERSION = 0.14.2;
 				OTHER_LDFLAGS = (
 					"-F/System/Library/PrivateFrameworks",
 					"-framework",

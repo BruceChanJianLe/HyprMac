@@ -112,6 +112,18 @@ final class WorkspaceOverviewPresentationTests: XCTestCase {
         XCTAssertLessThanOrEqual(overflowing.maxY, 1)
     }
 
+    func testSwitchHUDNamesTheWorkspaceAndNothingElse() {
+        let text = WorkspaceOverviewPresentation.switchHUDText(workspace: 7)
+        XCTAssertEqual(text.caption, "WORKSPACE")
+        XCTAssertEqual(text.number, "7")
+        XCTAssertEqual(WorkspaceOverviewPresentation.switchHUDText(workspace: 10).number, "10")
+        // no monitor name on the switch HUD in any topology — monitor names
+        // stay in the overview grid and its type-to-filter.
+        let fields = Mirror(reflecting: text).children.map { $0.label ?? "" }
+        XCTAssertEqual(fields, ["caption", "number"])
+        XCTAssertFalse(fields.contains { $0.localizedCaseInsensitiveContains("monitor") })
+    }
+
     func testOnlyLatestHUDGenerationMayHide() {
         var generations = WorkspaceHUDGeneration()
         let first = generations.next()

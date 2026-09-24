@@ -26,9 +26,14 @@ enum WhatsNewFeatures {
     // update this before each release — see CLAUDE.md instructions
     static let current: [WhatsNewFeature] = [
         WhatsNewFeature(
-            icon: "terminal",
-            title: "Run a Command",
-            description: "Bind a shortcut to your own program or script. Settings → Keys → Add → Command… takes a label for the Hypr+K overlay and a command line, which runs directly rather than through a shell."
+            icon: "bolt",
+            title: "An Instant Workspace Indicator",
+            description: "The workspace flash now appears the moment you press the shortcut, before HyprMac rearranges any windows, instead of trailing the switch."
+        ),
+        WhatsNewFeature(
+            icon: "rectangle.and.text.magnifyingglass",
+            title: "A Cleaner Workspace Flash",
+            description: "The indicator shows just the workspace number. The display name no longer appears under it on any monitor setup."
         ),
     ]
 }

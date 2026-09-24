@@ -97,6 +97,12 @@ enum WorkspaceOverviewPresentation {
         let scratchpad: CGFloat = scratchpadCount > 0 ? 62 : 0
         return min(maximum, max(320, grid + headerAndInsets + scratchpad))
     }
+
+    /// Everything the workspace-switch HUD says. Caption and number only —
+    /// the monitor name belongs to the overview, not to the switch flash.
+    static func switchHUDText(workspace: Int) -> (caption: String, number: String) {
+        ("WORKSPACE", "\(workspace)")
+    }
 }
 
 struct WorkspaceHUDGeneration {
@@ -137,7 +143,7 @@ final class WorkspaceOverviewController {
     func showSwitchHUD(workspace: Int, screen: NSScreen) {
         let generation = hudGeneration.next()
         hudPanel?.close()
-        let view = WorkspaceSwitchHUD(workspace: workspace, monitor: screen.localizedName)
+        let view = WorkspaceSwitchHUD(workspace: workspace)
         let hosting = OverviewHostingView(rootView: view)
         let size = hosting.fittingSize
         let frame = NSRect(x: screen.visibleFrame.midX - size.width / 2,
@@ -146,16 +152,16 @@ final class WorkspaceOverviewController {
         let panel = makePanel(frame: frame, canKey: false)
         hosting.frame = NSRect(origin: .zero, size: size)
         panel.contentView = hosting
-        let animate = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        panel.alphaValue = animate ? 0 : 1
+        // the caller is about to block the main thread in AX work, so the
+        // panel has to be on screen before this returns. no fade-in: an
+        // animation needs run-loop turns we are not going to get. draw the
+        // layout, then push the frame to the window server by hand.
+        hosting.layoutSubtreeIfNeeded()
+        panel.alphaValue = 1
         panel.orderFrontRegardless()
         hudPanel = panel
-        if animate {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.12
-                panel.animator().alphaValue = 1
-            }
-        }
+        panel.displayIfNeeded()
+        CATransaction.flush()
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self, weak panel] in
             guard let self, self.hudGeneration.shouldHide(generation) else { return }
@@ -253,15 +259,15 @@ private struct WorkspaceSwitchHUD: View {
     @Environment(\.colorScheme) private var colorScheme
     private var palette: OverlayPalette { OverlayPalette(scheme: colorScheme) }
     let workspace: Int
-    let monitor: String
+    private var text: (caption: String, number: String) {
+        WorkspaceOverviewPresentation.switchHUDText(workspace: workspace)
+    }
     var body: some View {
         VStack(spacing: 5) {
-            Text("WORKSPACE").font(.system(size: 10, weight: .semibold, design: .monospaced))
+            Text(text.caption).font(.system(size: 10, weight: .semibold, design: .monospaced))
                 .tracking(2).foregroundStyle(Color.hyprMagenta)
-            Text("\(workspace)").font(.system(size: 40, weight: .bold, design: .rounded))
+            Text(text.number).font(.system(size: 40, weight: .bold, design: .rounded))
                 .foregroundStyle(.primary)
-            Text(monitor).font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.secondary).lineLimit(1)
         }
         .padding(.horizontal, 26).padding(.vertical, 15)
         .background(RoundedRectangle(cornerRadius: 15).fill(palette.background))
