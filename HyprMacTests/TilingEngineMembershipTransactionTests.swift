@@ -1157,7 +1157,10 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
     }
 
     private func fixture() throws -> (engine: TilingEngine, tree: BSPTree, windows: [HyprWindow], screen: NSScreen, trace: MembershipTrace) {
-        let screen = NSScreen.main ?? NSScreen.screens.first ?? MembershipHomeScreen()
+        // a fixed 1920x1080, not the machine's display: on a smaller one (a CI
+        // runner's virtual screen) the third slot drops under minSlotDimension,
+        // 903 is refused, and tests that expect all three windows written fail
+        let screen = MembershipHomeScreen()
         let windows = (901...903).map { id in
             HyprWindow(element: AXUIElementCreateApplication(99999), windowID: CGWindowID(id), ownerPID: 99999)
         }
